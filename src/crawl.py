@@ -11,12 +11,13 @@ from bs4 import BeautifulSoup
 
 from urllib.parse import urlparse, urljoin
 
-# Function that returns hrefs in a URL
-def get_links(url):
-    response = requests.get(url)
-    soup = BeautifulSoup(response.content, 'html.parser')
+# Function that returns hrefs in a website
+def get_links(url, content):
+    soup = BeautifulSoup(content, 'html.parser')
+
     links = []
-    # Get all anchor tag
+
+    # Get all anchor tags
     for link in soup.find_all('a'):
         # Get URL in anchor tag and validate it
         href = link.get('href')
@@ -32,8 +33,8 @@ def get_links(url):
 
 # Function to crawl through a URL and get links
 def crawl(url, depth=10000):
-    # Set of unique URLs
-    visited_urls = set()
+    # Dictionary of URLs
+    visited_urls = {}
     urls_to_visit = [(url, 0)]  # Tuple of URL and depth
 
     # While there are more URLs to visit
@@ -43,9 +44,15 @@ def crawl(url, depth=10000):
         if current_url in visited_urls or current_depth >= depth:
             continue
         
-        # Crawl through URL
-        visited_urls.add(current_url)
-        links = get_links(current_url)
+        # Get website response
+        response = requests.get(current_url)
+        visited_urls[current_url] = {
+            'content': response.content,
+            'headers': {key.lower(): value for key, value in response.headers.items()}
+        }
+
+        # Crawl through website
+        links = get_links(current_url, visited_urls[current_url]['content'])
 
         # Add found links into URLs to visit list with depth incremented by 1
         for link in links:
