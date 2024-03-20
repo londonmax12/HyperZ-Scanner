@@ -19,6 +19,8 @@ python main.py -u <url> -d <depth>
 ### Features Added
 - URL Crawling
     - Simple URL crawling that retrieves all href anchor tags from a specified link
+- Header Security Analysis
+    - Ability to scan through request headers for potential vulnerabilities, ensuring they are properly configured to prevent common attacks
 ### Features To Be Added
 These features are currently **NOT** added
 - Proxy support
@@ -41,8 +43,6 @@ These features are currently **NOT** added
     - Cross-Site Request Forgery Testing
     - Clickjacking testing
     - Open Redirect Testing
-- Security Header Analysis
-    - Check that appropriate security headers are present in HTTP response
 - SSL/TLS Testing
     - Verify configuration of SSL/TLS certificates
 - API Security Testing
