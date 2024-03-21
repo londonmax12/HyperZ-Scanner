@@ -27,6 +27,9 @@ import sys
 from gathering.crawl import crawl
 from gathering.proxy import get_proxies
 from scanning.header_scanning import get_insecure_headers
+from reporting.report import Report, Vulnerability, Severity
+
+VERSION = "0.1.3"
 
 def print_header():
     print("""
@@ -43,7 +46,7 @@ def print_header():
   ░  ░  ░░ ░                 ░  ░   ░       ░ ░      
          ░ ░                              ░""")
     print("HyperZ Web Application Scanner")
-    print("  - Version: 0.1.2")
+    print(f"  - Version: {VERSION}")
     print("  - Developed by Mercury Dev")
     print("=====================================================\n")
 
@@ -67,6 +70,8 @@ def main():
 
     logging.info(f"Scanning URL: {args.url}")
 
+    report = Report(args.url, VERSION)
+
     # Load proxies if provided
     proxies = []
     if args.proxy_list:
@@ -74,6 +79,7 @@ def main():
           proxies = [line.strip() for line in file]
       logging.info(f"Loaded proxy file with {len(proxies)} proxies")
 
+    # Fetch proxy list if specified to
     if args.get_proxies:
         logging.info(f"Gathering proxies")
         got = get_proxies()
@@ -82,7 +88,7 @@ def main():
           sys.exit(1)
         logging.info(f"Got {len(got)} proxies")
         proxies.extend(got)
-
+        
     # Crawl the URL
     logging.info(f"Crawling {args.url}")
     links = crawl(args.url, args.depth, proxies, args.timeout, args.verbose)
@@ -90,34 +96,18 @@ def main():
         logging.info(f"Found {len(links)} link{'s' if len(links) != 1 else ''} from crawling")
 
     logging.info(f"Analysing request headers for potential vulnerabilities")
-    total_severe = 0
-    total_moderate = 0
-    total_mild = 0
+
     # Iterate over links and responses
     for link, item in links.items():
         # Scan request headers
-        insecure_headers = get_insecure_headers(item["headers"])
-        links[link]["insecure_headers"] = insecure_headers
+        insecure_headers = get_insecure_headers(link, item["headers"])
 
-        # Tally header vulnerabilities
-        total_severe += len(insecure_headers["Severe"])
-        total_moderate += len(insecure_headers["Moderate"])
-        total_mild += len(insecure_headers["Mild"])
-    
-    # Total scanned potential vulnerabilities
-    total = total_mild + total_moderate + total_severe
-    logging.info(f"Found {total} potential header vulnerabilities across {len(links)} link{'s' if len(links) != 1 else ''}")
-    
-    if total and args.verbose:
-        logging.info(f"  - Severe:   {total_severe}")
-        logging.info(f"  - Moderate: {total_moderate}")
-        logging.info(f"  - Mild:     {total_mild}")
+        for header in insecure_headers:
+          report.add_vulnerability(header)
 
     # Save report
     logging.info(f"Finished scanning, saving report detail to {args.output_file}")
-    links_dict = {link: {"request_headers": links[link]['headers'], "insecure_headers": links[link]["insecure_headers"]} for link in links}
-    with open(args.output_file, "w") as f:
-        json.dump(links_dict, f, indent=4)
+    report.generate_report(len(links), args.output_file)
 
 # Run main application
 if __name__ == "__main__":
