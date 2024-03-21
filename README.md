@@ -9,7 +9,7 @@ git clone https://github.com/londonmax12/hyperz-scanner
 ```
 pip install -r requirements.txt
 ```
-## Usage
+## 📝 Usage
 1. Run the scanner using the following command
 ```
 python hyperz.py -u <url> [-d <depth>] [-v] [-p <proxy_list>] [-g] [-t <timeout>] [-o <output_file>]
@@ -20,17 +20,17 @@ python hyperz.py -u <url> [-d <depth>] [-v] [-p <proxy_list>] [-g] [-t <timeout>
 - -u, --url <url>: URL to scan (required).
 - -d, --depth <depth>: Depth limit for crawling (default: 5).
 - -v, --verbose: Enable verbose output.
-- --p, --proxy_list <proxy_list>: File that contains a list of proxies to use.
+- -p, --proxy_list <proxy_list>: File that contains a list of proxies to use.
 - -g, --get_proxies: Get proxies to use from: https://www.sslproxies.org/.
 - -t, --timeout <timeout>: Timeout on website requests (default: 5).
 - -o, --output_file <output_file>: Specify the output file for the report (default: report.json).
-### Example
+### 🌐 Example
 Scan example.com with a depth limit of 3 and save the report to "output.json":
 ```
 python hyperz.py -u http://example.com -d 3 -o output.json
 ```
-## Development Roadmap
-### Features Added
+## 🛠️ Development Roadmap
+### ✅ Features Added
 - URL Crawling
     - Simple URL crawling that retrieves all href anchor tags from a specified link
 - Proxy support
@@ -41,7 +41,7 @@ python hyperz.py -u http://example.com -d 3 -o output.json
 - Report Generation
     - Report specifications
     - Vulnerabilities found and effect URLs
-### Features To Be Added
+### 🚧 Features To Be Added
 The following features are currently **NOT** added. This simply serves as a roadmap
 - Input Validation Testing
     - Other input payload attacks
@@ -68,7 +68,7 @@ The following features are currently **NOT** added. This simply serves as a road
     - API Fuzzing
 - Out-of-date Software testing
     - Identify software versions that may contain known vulnerabilities
-## Contributing
-Contributions are welcome and appreciated! Please fork the repository and submit a pull request with your changes.
-## License
+## 🤝 Contributing
+Contributions are welcome and appreciated! Please fork the repository and submit a pull request with your changes. <3
+## 📄 License
 This project is licensed under the MIT License
