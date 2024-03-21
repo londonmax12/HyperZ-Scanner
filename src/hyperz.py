@@ -6,6 +6,7 @@ Author: Mercury Dev
 Date: 19/03/24
 
 Functions:
+- print_header(): Prints application header
 - main(): Runs main command line application
 
 Usage:
@@ -24,6 +25,7 @@ import json
 import sys
 
 from gathering.crawl import crawl
+from gathering.proxy import get_proxies
 from scanning.header_scanning import get_insecure_headers
 
 def print_header():
@@ -57,13 +59,14 @@ def main():
     arg_parser.add_argument("-u", "--url", required=True, help="URL to scan")
     arg_parser.add_argument("-d", "--depth", type=int, default=5, help="Depth limit for crawling (default: 5)")
     arg_parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output")
-    arg_parser.add_argument("-p", "--proxy_list", help="File list of proxies to use")
-    arg_parser.add_argument("-t", "--timout", type=int, default=5, help="Timeout on website requests (default: 5)")
+    arg_parser.add_argument("-p", "--proxy_list", help="File list of proxies to use, if get_proxies is specified the proxies in proxy list will be added on")
+    arg_parser.add_argument("-g", "--get_proxies", action="store_true", help="Get proxies to use from: https://www.sslproxies.org/")
+    arg_parser.add_argument("-t", "--timeout", type=int, default=5, help="Timeout on website requests (default: 5)")
     arg_parser.add_argument("-o", "--output_file", default="report.json")
     args = arg_parser.parse_args()
 
     logging.info(f"Scanning URL: {args.url}")
-    
+
     # Load proxies if provided
     proxies = []
     if args.proxy_list:
@@ -71,9 +74,18 @@ def main():
           proxies = [line.strip() for line in file]
       logging.info(f"Loaded proxy file with {len(proxies)} proxies")
 
+    if args.get_proxies:
+        logging.info(f"Gathering proxies")
+        got = get_proxies()
+        if len(got) == 0:
+          logging.info(f"Failed to get proxies")
+          sys.exit(1)
+        logging.info(f"Got {len(got)} proxies")
+        proxies.extend(got)
+
     # Crawl the URL
     logging.info(f"Crawling {args.url}")
-    links = crawl(args.url, args.depth, proxies)
+    links = crawl(args.url, args.depth, proxies, args.timeout, args.verbose)
     if (args.verbose):
         logging.info(f"Found {len(links)} link{'s' if len(links) != 1 else ''} from crawling")
 

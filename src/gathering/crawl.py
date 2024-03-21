@@ -53,7 +53,7 @@ def get_links(url: str, content: bytes) -> set[str]:
     return links
 
 # Function to crawl through a URL and get links
-def crawl(url: str, depth: int=10000, proxies: list=[], timeout: int=5) -> dict[str, dict]:
+def crawl(url: str, depth: int=10000, proxies: list=[], timeout: int=5, verbose: bool=False) -> dict[str, dict]:
     """
     Crawls a website starting from a given URL up to a specified depth, collecting all internal links found.
 
@@ -63,7 +63,7 @@ def crawl(url: str, depth: int=10000, proxies: list=[], timeout: int=5) -> dict[
         to prevent excessive crawling if not necessary
     - proxies (list): A list of proxy URLs to use
     - timeout (int): Timeout for requests
-
+    - verbose (bool): Whether or not to print verbose messages
 
     Returns:
     - dict: A dictionary of all internal URLs visited during the crawl and their responses.
@@ -100,6 +100,7 @@ def crawl(url: str, depth: int=10000, proxies: list=[], timeout: int=5) -> dict[
                 except Exception as e:
                     logging.warning(f"Proxy {proxy} failed: {e}")
                     proxy = None  # Retry with another proxy
+
         # If no proxies in use
         else:
             response = requests.get(current_url, headers={"User-Agent": random_user_agent()}, timeout=timeout)
@@ -112,17 +113,20 @@ def crawl(url: str, depth: int=10000, proxies: list=[], timeout: int=5) -> dict[
             }
             continue
         
-        visited_urls[current_url] = {
-            'content': response.content,
-            'headers': {key.lower(): value for key, value in response.headers.items()}
-        }
+        if current_url not in visited_urls:
+            if (verbose):
+                logging.info(f"New link discovered at depth {current_depth}: {current_url}")
+            visited_urls[current_url] = {
+                'content': response.content,
+                'headers': {key.lower(): value for key, value in response.headers.items()}
+            }
 
-        # Crawl through website
-        links = get_links(current_url, visited_urls[current_url]['content'])
+            # Crawl through website
+            links = get_links(current_url, visited_urls[current_url]['content'])
 
-        # Add found links into URLs to visit list with depth incremented by 1
-        for link in links:
-            if link not in visited_urls:
-                urls_to_visit.append((link, current_depth + 1))
-            
+            # Add found links into URLs to visit list with depth incremented by 1
+            for link in links:
+                if link not in visited_urls:
+                    urls_to_visit.append((link, current_depth + 1))
+                
     return visited_urls

@@ -12,6 +12,12 @@ Functions:
 import random
 
 def random_user_agent() -> str:
+    """
+    Generates randomized user agent
+    
+    Returns:
+    - str: A randomized user agent
+    """
     # List of posible browsers
     browsers = [
         "Chrome",

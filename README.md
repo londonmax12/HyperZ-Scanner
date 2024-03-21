@@ -19,11 +19,13 @@ python main.py -u <url> -d <depth>
 ### Features Added
 - URL Crawling
     - Simple URL crawling that retrieves all href anchor tags from a specified link
+- Proxy support
+    - Dynamic proxy fetching
+    - Proxy file
 - Header Security Analysis
     - Ability to scan through request headers for potential vulnerabilities, ensuring they are properly configured to prevent common attacks
 ### Features To Be Added
 These features are currently **NOT** added
-- Proxy support
 - Input Validation Testing
     - Other input payload attacks
 - Authentication Testing
