@@ -153,3 +153,4 @@ cython_debug/
 src/links.json
 /.vscode
 links.json
+report.json
