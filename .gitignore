@@ -154,3 +154,5 @@ src/links.json
 /.vscode
 links.json
 report.json
+src/.vscode/launch.json
+src/proxies.txt
