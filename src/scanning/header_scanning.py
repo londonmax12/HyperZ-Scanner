@@ -1,13 +1,27 @@
 """
+header_scanning.py
+
+This script provides functions for scanning through request headers
+
 Author: Mercury Dev
 Date: 21/03/24
-Description: Contains functions to scan through request headers
-    References: https://cheatsheetseries.owasp.org/cheatsheets/HTTP_Headers_Cheat_Sheet.html
+References Used: https://cheatsheetseries.owasp.org/cheatsheets/HTTP_Headers_Cheat_Sheet.html
+
+Functions:
+- get_insecure_headers(headers): Scan for insecure headers in a dictionary of headers
 """
 
-# Function that takes in request headers and returns dict of potential vulnerabilities
-def get_insecure_headers(headers):
-    # Dictionary to store severities
+def get_insecure_headers(headers: dict[str, str]) -> dict[str, str]:
+    """
+    Gets all within dictionary, and checks for bad practices and potential vulnerabilities
+
+    Args:
+    - headers (dict[str, str]): The headers provided by visit request.
+
+    Returns:
+    - dict[str, str]: A dictionary of severities and possible vulnerabilities.
+    """
+    # Dictionary to store vulnerabilities
     severities = {
         "Severe": [],
         "Moderate": [],

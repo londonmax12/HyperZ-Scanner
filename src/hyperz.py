@@ -1,7 +1,20 @@
 """
+hyperz.py
+Contains main implementation of HyperZ scanner
+
 Author: Mercury Dev
 Date: 19/03/24
-Description: Contains main implementation of HyperZ scanner
+
+Functions:
+- main(): Runs main command line application
+
+Usage:
+  python hyperz.py -u <url> [-d <depth>] [-v]
+
+Options:
+  -u, --url <url>       URL to scan (required)
+  -d, --depth <depth>   Depth limit for crawling (default: 5)
+  -v, --verbose         Enable verbose output
 """
 
 import argparse
@@ -9,8 +22,8 @@ import logging
 import json
 import sys
 
-from crawl import crawl
-from header_security import get_insecure_headers
+from gathering.crawl import crawl
+from scanning.header_scanning import get_insecure_headers
 
 def print_header():
     print("""
@@ -25,8 +38,7 @@ def print_header():
   ▒ ░▒░ ░▓██ ░▒░ ░▒ ░      ░ ░  ░  ░▒ ░ ▒░░░▒ ▒ ░ ▒  
   ░  ░░ ░▒ ▒ ░░  ░░          ░     ░░   ░ ░ ░ ░ ░ ░  
   ░  ░  ░░ ░                 ░  ░   ░       ░ ░      
-         ░ ░                              ░          
-                                                     """)
+         ░ ░                              ░""")
     print("HyperZ Web Application Scanner")
     print("  - Version: 0.1.2")
     print("  - Developed by Mercury Dev")
@@ -39,7 +51,7 @@ def main():
     
     arg_parser = argparse.ArgumentParser(description="HyperZ Web Application Scanner")
     arg_parser.add_argument("-u", "--url", required=True, help="URL to scan")
-    arg_parser.add_argument("-d", "--depth", type=int, default=10000, help="Depth limit for crawling (default: 10000)")
+    arg_parser.add_argument("-d", "--depth", type=int, default=5, help="Depth limit for crawling (default: 10000)")
     arg_parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output")
     args = arg_parser.parse_args()
 
