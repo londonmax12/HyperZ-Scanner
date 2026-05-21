@@ -7,11 +7,13 @@ import (
 
 	"github.com/londonball/hyperz/internal/checks"
 	"github.com/londonball/hyperz/internal/httpclient"
+	"github.com/londonball/hyperz/internal/scope"
 )
 
 type Scanner struct {
 	client      *httpclient.Client
 	checks      []checks.Check
+	scope       *scope.Scope
 	concurrency int
 	onError     func(target, check string, err error)
 }
@@ -28,6 +30,13 @@ func WithConcurrency(n int) Option {
 
 func WithErrorHandler(fn func(target, check string, err error)) Option {
 	return func(s *Scanner) { s.onError = fn }
+}
+
+// WithScope sets the scan scope handed to each check. A nil scope (the
+// default) means checks run unconstrained — fine for ad-hoc single-target
+// scans, not for active probes against untrusted infrastructure.
+func WithScope(sc *scope.Scope) Option {
+	return func(s *Scanner) { s.scope = sc }
 }
 
 func New(client *httpclient.Client, c []checks.Check, opts ...Option) *Scanner {
@@ -74,7 +83,7 @@ func (s *Scanner) scanOne(ctx context.Context, target string, out chan<- checks.
 		wg.Add(1)
 		go func(c checks.Check) {
 			defer wg.Done()
-			found, err := c.Run(ctx, s.client, target)
+			found, err := c.Run(ctx, s.client, s.scope, target)
 			if err != nil {
 				if s.onError != nil {
 					s.onError(target, c.Name(), err)

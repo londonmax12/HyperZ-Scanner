@@ -12,16 +12,19 @@ import (
 	"sync/atomic"
 
 	"github.com/londonball/hyperz/internal/httpclient"
+	"github.com/londonball/hyperz/internal/scope"
 )
 
 const defaultMaxBodyBytes = 5 << 20 // 5 MiB
 
+// Config controls how the crawler walks links. The host allowlist and depth
+// cap live on the Scope, not here — pass the same Scope to the scanner so
+// crawl boundaries and check boundaries can't drift apart.
 type Config struct {
-	Workers      int   // concurrent fetchers; 0 → 8
-	MaxDepth     int   // pages at exactly this depth are emitted but not parsed
-	MaxPages     int   // 0 → unlimited
-	SameHost     bool  // restrict discovery to seed hosts
-	MaxBodyBytes int64 // per-page body cap; 0 → 5 MiB
+	Workers      int          // concurrent fetchers; 0 → 8
+	MaxPages     int          // 0 → unlimited
+	MaxBodyBytes int64        // per-page body cap; 0 → 5 MiB
+	Scope        *scope.Scope // nil → no host/port/path/depth gating
 }
 
 type Crawler struct {
@@ -55,25 +58,18 @@ type item struct {
 	depth int
 }
 
-// Crawl visits seeds and any reachable links up to MaxDepth, emitting every
-// unique URL it queues onto out. out is closed when crawling completes or ctx
-// is canceled.
+// Crawl visits seeds and any reachable links permitted by the configured
+// Scope, emitting every unique URL it queues onto out. out is closed when
+// crawling completes or ctx is canceled.
 func (c *Crawler) Crawl(ctx context.Context, seeds []string, out chan<- string) error {
 	defer close(out)
 
-	allowedHosts := map[string]struct{}{}
-	for _, s := range seeds {
-		if u, err := url.Parse(s); err == nil && u.Host != "" {
-			allowedHosts[strings.ToLower(u.Host)] = struct{}{}
-		}
-	}
-
 	work := make(chan item, c.cfg.Workers*2)
 	var (
-		pending  atomic.Int64
-		queued   atomic.Int64
+		pending   atomic.Int64
+		queued    atomic.Int64
 		closeOnce sync.Once
-		visited  sync.Map
+		visited   sync.Map
 	)
 
 	closeWork := func() { closeOnce.Do(func() { close(work) }) }
@@ -88,17 +84,15 @@ func (c *Crawler) Crawl(ctx context.Context, seeds []string, out chan<- string) 
 
 	var submit func(rawurl string, depth int)
 	submit = func(rawurl string, depth int) {
-		if c.cfg.MaxDepth >= 0 && depth > c.cfg.MaxDepth {
+		if !c.cfg.Scope.AllowsDepth(depth) {
 			return
 		}
 		u, err := url.Parse(rawurl)
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
 			return
 		}
-		if c.cfg.SameHost && len(allowedHosts) > 0 {
-			if _, ok := allowedHosts[strings.ToLower(u.Host)]; !ok {
-				return
-			}
+		if !c.cfg.Scope.Allows(u) {
+			return
 		}
 		u.Fragment = ""
 		canonical := u.String()
@@ -151,7 +145,7 @@ func (c *Crawler) process(ctx context.Context, it item, out chan<- string, submi
 	case out <- it.url:
 	}
 
-	if it.depth >= c.cfg.MaxDepth {
+	if !c.cfg.Scope.AllowsDepth(it.depth + 1) {
 		return
 	}
 

@@ -42,6 +42,20 @@ func collectSeeds(urls []string, urlsFile string) ([]string, error) {
 	return out, nil
 }
 
+// feedSeeds streams a pre-collected seed list onto out, honoring ctx
+// cancellation. Used by the no-crawl path now that the scope builder needs
+// the seed list up front.
+func feedSeeds(ctx context.Context, out chan<- string, seeds []string) error {
+	for _, u := range seeds {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case out <- u:
+		}
+	}
+	return nil
+}
+
 func feed(ctx context.Context, out chan<- string, urls []string, urlsFile string) error {
 	push := func(u string) bool {
 		u = strings.TrimSpace(u)

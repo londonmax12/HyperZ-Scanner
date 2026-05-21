@@ -6,6 +6,7 @@ import (
 	"sort"
 
 	"github.com/londonball/hyperz/internal/httpclient"
+	"github.com/londonball/hyperz/internal/scope"
 )
 
 type SecurityHeaders struct{}
@@ -61,7 +62,7 @@ var headerRules = map[string]headerRule{
 	},
 }
 
-func (c SecurityHeaders) Run(ctx context.Context, client *httpclient.Client, target string) ([]Finding, error) {
+func (c SecurityHeaders) Run(ctx context.Context, client *httpclient.Client, _ *scope.Scope, target string) ([]Finding, error) {
 	resp, err := client.Get(ctx, target)
 	if err != nil {
 		return nil, err

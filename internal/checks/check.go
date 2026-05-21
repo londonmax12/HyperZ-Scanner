@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/londonball/hyperz/internal/httpclient"
+	"github.com/londonball/hyperz/internal/scope"
 )
 
 type Severity string
@@ -153,7 +154,16 @@ func BuildEvidence(method, reqURL string, status int, headers map[string][]strin
 type Check interface {
 	Name() string
 	Mode() Mode
-	Run(ctx context.Context, client *httpclient.Client, target string) ([]Finding, error)
+	// Run inspects target and returns findings.
+	//
+	// scope is the user-authorized boundary of the scan. Passive checks may
+	// ignore it (they only look at target, which is already in scope by the
+	// time the scanner dispatches). Active checks MUST consult scope before
+	// probing sub-resources discovered on the page — a form on /admin is
+	// only safe to fuzz if /admin is itself in scope.
+	//
+	// A nil scope means "no restrictions"; treat it as permissive.
+	Run(ctx context.Context, client *httpclient.Client, scope *scope.Scope, target string) ([]Finding, error)
 }
 
 // Filter returns the subset of checks that should run for the given mode.

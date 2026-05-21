@@ -10,6 +10,7 @@ import (
 
 	"github.com/londonball/hyperz/internal/checks"
 	"github.com/londonball/hyperz/internal/httpclient"
+	"github.com/londonball/hyperz/internal/scope"
 )
 
 // stubCheck records every Run invocation and returns a configurable result.
@@ -23,7 +24,7 @@ type stubCheck struct {
 
 func (s *stubCheck) Name() string      { return s.name }
 func (s *stubCheck) Mode() checks.Mode { return checks.ModePassive }
-func (s *stubCheck) Run(ctx context.Context, _ *httpclient.Client, target string) ([]checks.Finding, error) {
+func (s *stubCheck) Run(ctx context.Context, _ *httpclient.Client, _ *scope.Scope, target string) ([]checks.Finding, error) {
 	s.hits.Add(1)
 	if s.delay > 0 {
 		select {

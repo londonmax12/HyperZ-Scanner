@@ -18,6 +18,7 @@ import (
 	"github.com/londonball/hyperz/internal/proxy"
 	"github.com/londonball/hyperz/internal/report"
 	"github.com/londonball/hyperz/internal/scanner"
+	"github.com/londonball/hyperz/internal/scope"
 )
 
 type scanConfig struct {
@@ -32,11 +33,16 @@ type scanConfig struct {
 	burst       int
 	outputPath  string
 
-	crawl         bool
-	crawlDepth    int
-	crawlPages    int
-	crawlWorkers  int
-	crawlSameHost bool
+	crawl        bool
+	crawlPages   int
+	crawlWorkers int
+
+	scopeHosts       []string
+	scopeAnyHost     bool
+	scopePorts       string
+	scopePathInclude []string
+	scopePathExclude []string
+	scopeMaxDepth    int
 
 	proxies        []string
 	proxiesFile    string
@@ -104,10 +110,21 @@ Modes:
 	f.StringVarP(&cfg.outputPath, "output", "o", "-", "output path ('-' for stdout)")
 
 	f.BoolVar(&cfg.crawl, "crawl", false, "discover scan targets by crawling from each seed URL")
-	f.IntVar(&cfg.crawlDepth, "max-depth", 2, "max crawl depth (0 = only seeds, no link extraction)")
 	f.IntVar(&cfg.crawlPages, "max-pages", 100, "max unique pages to enqueue while crawling (0 = unlimited)")
 	f.IntVar(&cfg.crawlWorkers, "crawl-workers", 8, "number of parallel crawl fetchers")
-	f.BoolVar(&cfg.crawlSameHost, "crawl-same-host", true, "only follow links on seed hosts")
+
+	f.StringSliceVar(&cfg.scopeHosts, "scope-host", nil,
+		"hostname allowed in scope (repeatable; defaults to the seed hosts when empty)")
+	f.BoolVar(&cfg.scopeAnyHost, "scope-any-host", false,
+		"disable host filtering (let the crawler follow links to any host)")
+	f.StringVar(&cfg.scopePorts, "scope-ports", "",
+		"port or port range allowed in scope, e.g. 443 or 8000-8999 (empty = any)")
+	f.StringSliceVar(&cfg.scopePathInclude, "scope-path-include", nil,
+		"regex a URL path must match to be in scope (repeatable; ANY match passes)")
+	f.StringSliceVar(&cfg.scopePathExclude, "scope-path-exclude", nil,
+		"regex a URL path must NOT match (repeatable; ANY match excludes)")
+	f.IntVar(&cfg.scopeMaxDepth, "scope-max-depth", 2,
+		"max crawl depth from any seed (0 = seeds only; -1 = unlimited)")
 
 	f.StringSliceVar(&cfg.proxies, "proxy", nil,
 		"proxy URL to route requests through, e.g. http://host:port or socks5://host:port (repeatable)")
@@ -154,6 +171,24 @@ func runScan(ctx context.Context, cfg *scanConfig, mode checks.Mode) int {
 	}
 	client := httpclient.New(clientCfg)
 
+	seeds, err := collectSeeds(cfg.urls, cfg.urlsFile)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "input error:", err)
+		return exitFailure
+	}
+
+	sc, err := buildScope(cfg, seeds)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "scope error:", err)
+		return exitFailure
+	}
+	if hosts := sc.Hosts(); len(hosts) > 0 {
+		fmt.Fprintf(os.Stderr, "[scope] hosts=%s depth=%d\n",
+			strings.Join(hosts, ","), sc.MaxDepth())
+	} else {
+		fmt.Fprintf(os.Stderr, "[scope] hosts=* depth=%d\n", sc.MaxDepth())
+	}
+
 	all := registry()
 	enabled := checks.Filter(all, mode)
 	fmt.Fprintf(os.Stderr, "[scan] mode=%s, %d/%d check(s) enabled\n",
@@ -163,6 +198,7 @@ func runScan(ctx context.Context, cfg *scanConfig, mode checks.Mode) int {
 	s := scanner.New(client,
 		enabled,
 		scanner.WithConcurrency(cfg.concurrency),
+		scanner.WithScope(sc),
 		scanner.WithErrorHandler(func(target, check string, err error) {
 			checkErrors.Add(1)
 			fmt.Fprintf(os.Stderr, "[error] %s/%s: %v\n", check, target, err)
@@ -174,16 +210,10 @@ func runScan(ctx context.Context, cfg *scanConfig, mode checks.Mode) int {
 
 	feedErr := make(chan error, 1)
 	if cfg.crawl {
-		seeds, err := collectSeeds(cfg.urls, cfg.urlsFile)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "input error:", err)
-			return exitFailure
-		}
 		cr := crawler.New(client, crawler.Config{
 			Workers:  cfg.crawlWorkers,
-			MaxDepth: cfg.crawlDepth,
 			MaxPages: cfg.crawlPages,
-			SameHost: cfg.crawlSameHost,
+			Scope:    sc,
 		}, crawler.WithErrorHandler(func(target string, err error) {
 			fmt.Fprintf(os.Stderr, "[crawl] %s: %v\n", target, err)
 		}))
@@ -191,7 +221,7 @@ func runScan(ctx context.Context, cfg *scanConfig, mode checks.Mode) int {
 	} else {
 		go func() {
 			defer close(targets)
-			feedErr <- feed(ctx, targets, cfg.urls, cfg.urlsFile)
+			feedErr <- feedSeeds(ctx, targets, seeds)
 		}()
 	}
 
@@ -229,6 +259,38 @@ func runScan(ctx context.Context, cfg *scanConfig, mode checks.Mode) int {
 		printProxyStats(os.Stderr, pool, cfg.proxyStatsTopN)
 	}
 	return exit
+}
+
+// buildScope assembles the scan scope from CLI flags. When --scope-host is
+// empty (and --scope-any-host is not set), the seed hosts are added as the
+// allowlist so default behavior matches the old "same-host" crawler default.
+func buildScope(cfg *scanConfig, seeds []string) (*scope.Scope, error) {
+	sc, err := scope.New(scope.Config{
+		Hosts:       cfg.scopeHosts,
+		Ports:       cfg.scopePorts,
+		PathInclude: cfg.scopePathInclude,
+		PathExclude: cfg.scopePathExclude,
+		MaxDepth:    cfg.scopeMaxDepth,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if cfg.scopeAnyHost {
+		// User opted out of host filtering entirely. Honor --scope-host if
+		// they also provided it (treat as a soft restriction); otherwise the
+		// scope's host set stays empty (any host allowed).
+		return sc, nil
+	}
+	if len(cfg.scopeHosts) == 0 {
+		for _, s := range seeds {
+			u, err := url.Parse(s)
+			if err != nil {
+				continue
+			}
+			sc.AllowHost(u.Hostname())
+		}
+	}
+	return sc, nil
 }
 
 // loadProxies combines inline + file + scraped sources into a single deduped

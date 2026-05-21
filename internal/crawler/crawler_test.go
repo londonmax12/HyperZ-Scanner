@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"sort"
 	"strings"
@@ -12,7 +13,31 @@ import (
 	"time"
 
 	"github.com/londonball/hyperz/internal/httpclient"
+	"github.com/londonball/hyperz/internal/scope"
 )
+
+// mustScope builds a Scope from Config, panicking on error. Tests only.
+func mustScope(t *testing.T, cfg scope.Config) *scope.Scope {
+	t.Helper()
+	s, err := scope.New(cfg)
+	if err != nil {
+		t.Fatalf("scope.New: %v", err)
+	}
+	return s
+}
+
+// seedScope is the common "same-host as seeds, depth N" scope used by most
+// of the older tests after Scope replaced Config.SameHost/MaxDepth.
+func seedScope(t *testing.T, maxDepth int, seeds ...string) *scope.Scope {
+	t.Helper()
+	s := mustScope(t, scope.Config{MaxDepth: maxDepth})
+	for _, seed := range seeds {
+		if u, err := url.Parse(seed); err == nil && u.Hostname() != "" {
+			s.AllowHost(u.Hostname())
+		}
+	}
+	return s
+}
 
 // linkedSite stands up a tree of HTML pages linked by relative paths:
 //
@@ -79,7 +104,7 @@ func TestCrawlDepthZeroOnlyEmitsSeeds(t *testing.T) {
 	srv := linkedSite(t)
 	defer srv.Close()
 
-	c := New(newCrawlerClient(), Config{MaxDepth: 0})
+	c := New(newCrawlerClient(), Config{Scope: seedScope(t, 0, srv.URL)})
 	out := make(chan string, 16)
 	if err := c.Crawl(context.Background(), []string{srv.URL + "/"}, out); err != nil {
 		t.Fatalf("Crawl: %v", err)
@@ -94,7 +119,7 @@ func TestCrawlReachesAllLinkedPages(t *testing.T) {
 	srv := linkedSite(t)
 	defer srv.Close()
 
-	c := New(newCrawlerClient(), Config{MaxDepth: 5})
+	c := New(newCrawlerClient(), Config{Scope: seedScope(t, 5, srv.URL)})
 	out := make(chan string, 32)
 	if err := c.Crawl(context.Background(), []string{srv.URL + "/"}, out); err != nil {
 		t.Fatalf("Crawl: %v", err)
@@ -110,7 +135,7 @@ func TestCrawlMaxPagesCaps(t *testing.T) {
 	srv := linkedSite(t)
 	defer srv.Close()
 
-	c := New(newCrawlerClient(), Config{MaxDepth: 5, MaxPages: 3})
+	c := New(newCrawlerClient(), Config{Scope: seedScope(t, 5, srv.URL), MaxPages: 3})
 	out := make(chan string, 16)
 	if err := c.Crawl(context.Background(), []string{srv.URL + "/"}, out); err != nil {
 		t.Fatalf("Crawl: %v", err)
@@ -134,7 +159,13 @@ func TestCrawlSameHostRestrictsToSeeds(t *testing.T) {
 	}))
 	defer internal.Close()
 
-	c := New(newCrawlerClient(), Config{MaxDepth: 3, SameHost: true})
+	// Both servers run on 127.0.0.1; differentiate by binding the scope to
+	// the internal server's port so the offsite link is rejected on port,
+	// not hostname.
+	intURL, _ := url.Parse(internal.URL)
+	sc := mustScope(t, scope.Config{MaxDepth: 3, Ports: intURL.Port()})
+	sc.AllowHost(intURL.Hostname())
+	c := New(newCrawlerClient(), Config{Scope: sc})
 	out := make(chan string, 16)
 	if err := c.Crawl(context.Background(), []string{internal.URL + "/"}, out); err != nil {
 		t.Fatalf("Crawl: %v", err)
@@ -156,7 +187,7 @@ func TestCrawlSkipsNonHTMLContent(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	c := New(newCrawlerClient(), Config{MaxDepth: 3})
+	c := New(newCrawlerClient(), Config{Scope: seedScope(t, 3, srv.URL)})
 	out := make(chan string, 8)
 	if err := c.Crawl(context.Background(), []string{srv.URL + "/"}, out); err != nil {
 		t.Fatalf("Crawl: %v", err)
@@ -188,7 +219,7 @@ func TestCrawlInvokesErrorHandlerOnFetchFailure(t *testing.T) {
 	defer srv.Close()
 
 	var errs int
-	c := New(newCrawlerClient(), Config{MaxDepth: 3},
+	c := New(newCrawlerClient(), Config{Scope: seedScope(t, 3, srv.URL)},
 		WithErrorHandler(func(target string, err error) { errs++ }))
 	out := make(chan string, 8)
 	if err := c.Crawl(context.Background(), []string{srv.URL + "/"}, out); err != nil {
@@ -232,7 +263,7 @@ func TestCrawlDedupesAcrossFragments(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	c := New(newCrawlerClient(), Config{MaxDepth: 5})
+	c := New(newCrawlerClient(), Config{Scope: seedScope(t, 5, srv.URL)})
 	out := make(chan string, 16)
 	if err := c.Crawl(context.Background(), []string{srv.URL + "/"}, out); err != nil {
 		t.Fatalf("Crawl: %v", err)
