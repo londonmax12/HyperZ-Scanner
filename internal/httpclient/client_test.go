@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -129,29 +130,85 @@ type roundTripperFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
-func TestHostOf(t *testing.T) {
-	cases := []struct {
-		in, want string
-		wantErr  bool
-	}{
-		{"http://a.example:81/path", "a.example:81", false},
-		{"https://b.example/", "b.example", false},
-		{"://bad", "", true},
+func TestClientDoPostWithCustomHeadersAndBody(t *testing.T) {
+	var (
+		gotMethod, gotCT, gotXReq, gotUA string
+		gotBody                          []byte
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotCT = r.Header.Get("Content-Type")
+		gotXReq = r.Header.Get("X-Requested-With")
+		gotUA = r.Header.Get("User-Agent")
+		gotBody, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	c := New(Config{Timeout: 5 * time.Second, UserAgent: "default-ua"})
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/login", strings.NewReader("user=a&pass=b"))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
 	}
-	for _, c := range cases {
-		got, err := hostOf(c.in)
-		if c.wantErr {
-			if err == nil {
-				t.Errorf("%q: expected error", c.in)
-			}
-			continue
-		}
-		if err != nil {
-			t.Errorf("%q: %v", c.in, err)
-			continue
-		}
-		if got != c.want {
-			t.Errorf("%q: got %q, want %q", c.in, got, c.want)
-		}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("X-Requested-With", "XMLHttpRequest")
+
+	resp, err := c.Do(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	resp.Body.Close()
+
+	if gotMethod != http.MethodPost {
+		t.Errorf("method = %q, want POST", gotMethod)
+	}
+	if gotCT != "application/x-www-form-urlencoded" {
+		t.Errorf("Content-Type = %q", gotCT)
+	}
+	if gotXReq != "XMLHttpRequest" {
+		t.Errorf("X-Requested-With = %q", gotXReq)
+	}
+	if gotUA != "default-ua" {
+		t.Errorf("User-Agent = %q, want default-ua to fill when caller did not set it", gotUA)
+	}
+	if string(gotBody) != "user=a&pass=b" {
+		t.Errorf("body = %q", string(gotBody))
+	}
+}
+
+func TestClientDoRespectsCallerUserAgent(t *testing.T) {
+	var gotUA atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUA.Store(r.Header.Get("User-Agent"))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := New(Config{Timeout: 5 * time.Second, UserAgent: "default-ua"})
+	req, _ := http.NewRequest(http.MethodGet, srv.URL, nil)
+	req.Header.Set("User-Agent", "caller-ua")
+	resp, err := c.Do(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	resp.Body.Close()
+
+	if got := gotUA.Load(); got != "caller-ua" {
+		t.Fatalf("UA = %v, want caller-ua (caller's header must win)", got)
+	}
+}
+
+func TestClientDoHonorsCtxOverRequestCtx(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	c := New(Config{Timeout: 5 * time.Second, UserAgent: "test"})
+	req, _ := http.NewRequest(http.MethodGet, srv.URL, nil) // background ctx
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := c.Do(ctx, req); err == nil {
+		t.Fatal("expected error from canceled ctx passed to Do")
 	}
 }

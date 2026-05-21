@@ -65,28 +65,26 @@ func New(cfg Config) *Client {
 	}
 }
 
-func (c *Client) Get(ctx context.Context, rawurl string) (*http.Response, error) {
-	if c.limiter != nil {
-		host, err := hostOf(rawurl)
-		if err != nil {
-			return nil, err
-		}
-		if err := c.limiter.Wait(ctx, host); err != nil {
+// Do issues req, applying the host limiter and default User-Agent. The
+// caller-provided ctx takes precedence over any context already attached to
+// req. Callers may set their own User-Agent header to override the default.
+func (c *Client) Do(ctx context.Context, req *http.Request) (*http.Response, error) {
+	if c.limiter != nil && req.URL != nil {
+		if err := c.limiter.Wait(ctx, req.URL.Host); err != nil {
 			return nil, err
 		}
 	}
+	req = req.WithContext(ctx)
+	if c.userAgent != "" && req.Header.Get("User-Agent") == "" {
+		req.Header.Set("User-Agent", c.userAgent)
+	}
+	return c.http.Do(req)
+}
+
+func (c *Client) Get(ctx context.Context, rawurl string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawurl, nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", c.userAgent)
-	return c.http.Do(req)
-}
-
-func hostOf(rawurl string) (string, error) {
-	u, err := url.Parse(rawurl)
-	if err != nil {
-		return "", err
-	}
-	return u.Host, nil
+	return c.Do(ctx, req)
 }
