@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
-	"io"
+	"log/slog"
 	"net/url"
 	"os"
 	"strings"
@@ -36,6 +36,9 @@ type scanConfig struct {
 	maxRetries   int
 	maxRetryWait time.Duration
 	outputPath   string
+
+	logLevel  string
+	logFormat string
 
 	crawl        bool
 	crawlPages   int
@@ -119,6 +122,10 @@ Modes:
 	f.DurationVar(&cfg.maxRetryWait, "max-retry-wait", 30*time.Second,
 		"cap on a single Retry-After sleep")
 	f.StringVarP(&cfg.outputPath, "output", "o", "-", "output path ('-' for stdout)")
+	f.StringVar(&cfg.logLevel, "log-level", "info",
+		"log verbosity: debug | info | warn | error (debug surfaces per-target skip events)")
+	f.StringVar(&cfg.logFormat, "log-format", "text",
+		"log output format: text (key=value) | json (one record per line, pipe to jq)")
 
 	f.BoolVar(&cfg.crawl, "crawl", false, "discover scan targets by crawling from each seed URL")
 	f.IntVar(&cfg.crawlPages, "max-pages", 100, "max unique pages to enqueue while crawling (0 = unlimited)")
@@ -154,22 +161,28 @@ Modes:
 }
 
 func runScan(ctx context.Context, cfg *scanConfig, level checks.Level) int {
-	rep, err := report.New(cfg.format)
+	log, err := newLogger(cfg.logLevel, cfg.logFormat, os.Stderr)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
+		return exitFailure
+	}
+
+	rep, err := report.New(cfg.format)
+	if err != nil {
+		log.Error("report init failed", "err", err)
 		return exitFailure
 	}
 
 	out, closeOut, err := openOutput(cfg.outputPath)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
+		log.Error("open output failed", "path", cfg.outputPath, "err", err)
 		return exitFailure
 	}
 	defer closeOut()
 
-	proxies, err := loadProxies(ctx, cfg)
+	proxies, err := loadProxies(ctx, log, cfg)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "proxy error:", err)
+		log.Error("proxy load failed", "err", err)
 		return exitFailure
 	}
 	clientCfg := httpclient.Config{
@@ -183,38 +196,36 @@ func runScan(ctx context.Context, cfg *scanConfig, level checks.Level) int {
 	if len(proxies) > 0 {
 		pool = proxy.NewSmartPool(proxies)
 		clientCfg.Transport = proxy.NewTransport(pool, proxy.TransportConfig{})
-		fmt.Fprintf(os.Stderr, "[proxy] pool ready: %d proxies (epsilon-greedy on success rate)\n", pool.Len())
+		log.Info("proxy pool ready", "proxies", pool.Len(), "strategy", "epsilon-greedy")
 	}
 	client := httpclient.New(clientCfg)
 
 	seeds, err := collectSeeds(cfg.urls, cfg.urlsFile)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "input error:", err)
+		log.Error("input load failed", "err", err)
 		return exitFailure
 	}
 
 	sc, err := buildScope(cfg, seeds)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "scope error:", err)
+		log.Error("scope build failed", "err", err)
 		return exitFailure
 	}
 	if hosts := sc.Hosts(); len(hosts) > 0 {
-		fmt.Fprintf(os.Stderr, "[scope] hosts=%s depth=%d\n",
-			strings.Join(hosts, ","), sc.MaxDepth())
+		log.Info("scope configured", "hosts", strings.Join(hosts, ","), "depth", sc.MaxDepth())
 	} else {
-		fmt.Fprintf(os.Stderr, "[scope] hosts=* depth=%d\n", sc.MaxDepth())
+		log.Info("scope configured", "hosts", "*", "depth", sc.MaxDepth())
 	}
 
 	all := registry()
 	enabled := checks.Filter(all, level)
-	fmt.Fprintf(os.Stderr, "[scan] level=%s, %d/%d check(s) enabled\n",
-		level, len(enabled), len(all))
+	log.Info("scan starting", "scan_level", level.String(), "enabled", len(enabled), "total", len(all))
 
 	scannerOpts := []scanner.Option{
 		scanner.WithConcurrency(cfg.concurrency),
 		scanner.WithScope(sc),
 		scanner.WithSkipHandler(func(target, check, reason string) {
-			fmt.Fprintf(os.Stderr, "[skip] %s/%s: %s\n", check, target, reason)
+			log.Debug("check skipped", "check", check, "target", target, "reason", reason)
 		}),
 	}
 	// stacks is shared with the report writer. OnDetect fires inside the
@@ -228,19 +239,21 @@ func runScan(ctx context.Context, cfg *scanConfig, level checks.Level) int {
 				stacksMu.Lock()
 				stacks[host] = stack
 				stacksMu.Unlock()
-				fmt.Fprintf(os.Stderr, "[fingerprint] %s: %s (confidence=%.0f%%)\n",
-					host, stack.Summary(), stack.Confidence*100)
+				log.Info("fingerprint detected",
+					"host", host,
+					"stack", stack.Summary(),
+					"confidence", stack.Confidence)
 			}),
 		)
 		scannerOpts = append(scannerOpts, scanner.WithFingerprint(det))
 	} else {
-		fmt.Fprintln(os.Stderr, "[fingerprint] disabled (--no-fingerprint)")
+		log.Info("fingerprint disabled", "reason", "--no-fingerprint")
 	}
 
 	var checkErrors atomic.Int64
 	scannerOpts = append(scannerOpts, scanner.WithErrorHandler(func(target, check string, err error) {
 		checkErrors.Add(1)
-		fmt.Fprintf(os.Stderr, "[error] %s/%s: %v\n", check, target, err)
+		log.Warn("check error", "check", check, "target", target, "err", err)
 	}))
 	s := scanner.New(client, enabled, scannerOpts...)
 
@@ -254,7 +267,7 @@ func runScan(ctx context.Context, cfg *scanConfig, level checks.Level) int {
 			MaxPages: cfg.crawlPages,
 			Scope:    sc,
 		}, crawler.WithErrorHandler(func(target string, err error) {
-			fmt.Fprintf(os.Stderr, "[crawl] %s: %v\n", target, err)
+			log.Warn("crawl error", "target", target, "err", err)
 		}))
 		go func() { feedErr <- cr.Crawl(ctx, seeds, targets) }()
 	} else {
@@ -274,19 +287,19 @@ func runScan(ctx context.Context, cfg *scanConfig, level checks.Level) int {
 
 	exit := exitOK
 	if err := rep.Write(ctx, out, deduped, report.Metadata{Stacks: stacks}); err != nil {
-		fmt.Fprintln(os.Stderr, "report failed:", err)
+		log.Error("report write failed", "err", err)
 		exit = exitFailure
 	}
 	if err := <-scanErr; err != nil && ctx.Err() == nil {
-		fmt.Fprintln(os.Stderr, "scan error:", err)
+		log.Error("scan failed", "err", err)
 		exit = exitFailure
 	}
 	if err := <-feedErr; err != nil {
-		fmt.Fprintln(os.Stderr, "input error:", err)
+		log.Error("input feed failed", "err", err)
 		exit = exitFailure
 	}
 	if n := checkErrors.Load(); n > 0 {
-		fmt.Fprintf(os.Stderr, "%d check error(s) occurred\n", n)
+		log.Warn("check errors occurred", "count", n)
 		if exit == exitOK {
 			exit = exitFailure
 		}
@@ -295,7 +308,7 @@ func runScan(ctx context.Context, cfg *scanConfig, level checks.Level) int {
 		exit = exitCanceled
 	}
 	if pool != nil {
-		printProxyStats(os.Stderr, pool, cfg.proxyStatsTopN)
+		logProxyStats(log, pool, cfg.proxyStatsTopN)
 	}
 	return exit
 }
@@ -336,7 +349,7 @@ func buildScope(cfg *scanConfig, seeds []string) (*scope.Scope, error) {
 // list. Inline/file errors are fatal (user-supplied input); scrape errors are
 // per-source and reported but non-fatal so a single dead source doesn't
 // disable proxying entirely.
-func loadProxies(ctx context.Context, cfg *scanConfig) ([]*url.URL, error) {
+func loadProxies(ctx context.Context, log *slog.Logger, cfg *scanConfig) ([]*url.URL, error) {
 	manual, err := proxy.Load(cfg.proxies, cfg.proxiesFile)
 	if err != nil {
 		return nil, err
@@ -347,18 +360,18 @@ func loadProxies(ctx context.Context, cfg *scanConfig) ([]*url.URL, error) {
 	}
 	sources := append([]string{}, proxy.DefaultSources...)
 	sources = append(sources, cfg.proxySources...)
-	fmt.Fprintf(os.Stderr, "[proxy] scraping %d source(s)...\n", len(sources))
+	log.Info("proxy scraping", "sources", len(sources))
 	scraped, err := proxy.Scrape(ctx, proxy.ScrapeConfig{
 		Sources:   sources,
 		UserAgent: cfg.userAgent,
 		OnError: func(src string, err error) {
-			fmt.Fprintf(os.Stderr, "[proxy] source %s: %v\n", src, err)
+			log.Warn("proxy source failed", "source", src, "err", err)
 		},
 	})
 	if err != nil {
 		return nil, err
 	}
-	fmt.Fprintf(os.Stderr, "[proxy] scraped %d proxies\n", len(scraped))
+	log.Info("proxy scraped", "proxies", len(scraped))
 
 	seen := map[string]struct{}{}
 	out := make([]*url.URL, 0, len(manual)+len(scraped))
@@ -379,7 +392,7 @@ func loadProxies(ctx context.Context, cfg *scanConfig) ([]*url.URL, error) {
 	return out, nil
 }
 
-func printProxyStats(w io.Writer, pool *proxy.SmartPool, topN int) {
+func logProxyStats(log *slog.Logger, pool *proxy.SmartPool, topN int) {
 	stats := pool.Stats()
 	used := 0
 	for _, s := range stats {
@@ -390,8 +403,10 @@ func printProxyStats(w io.Writer, pool *proxy.SmartPool, topN int) {
 	if used == 0 {
 		return
 	}
-	fmt.Fprintf(w, "[proxy] used %d/%d; overall block rate %.1f%%\n",
-		used, pool.Len(), pool.OverallBlockRate()*100)
+	log.Info("proxy pool summary",
+		"used", used,
+		"total", pool.Len(),
+		"block_rate", pool.OverallBlockRate())
 	if topN <= 0 {
 		return
 	}
@@ -401,8 +416,13 @@ func printProxyStats(w io.Writer, pool *proxy.SmartPool, topN int) {
 	}
 	for i := 0; i < limit; i++ {
 		s := stats[i]
-		fmt.Fprintf(w, "[proxy] %s req=%d ok=%d block=%d err=%d ok-rate=%.0f%% block-rate=%.0f%%\n",
-			s.URL, s.Requests, s.Successes, s.Blocks, s.Errors,
-			s.SuccessRate()*100, s.BlockRate()*100)
+		log.Info("proxy stat",
+			"url", s.URL.String(),
+			"req", s.Requests,
+			"ok", s.Successes,
+			"block", s.Blocks,
+			"err", s.Errors,
+			"ok_rate", s.SuccessRate(),
+			"block_rate", s.BlockRate())
 	}
 }
