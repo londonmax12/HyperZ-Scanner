@@ -20,36 +20,43 @@ type Config struct {
 	MaxIdleConnsPerHost int
 	MaxConnsPerHost     int
 	Limiter             *HostLimiter
-	// Proxy selects the proxy URL for each request. Nil means use
-	// http.ProxyFromEnvironment; return (nil, nil) from the func to bypass
-	// the proxy for a given request.
+	// Proxy selects the proxy URL for each request. Ignored when Transport
+	// is set; otherwise nil means http.ProxyFromEnvironment.
 	Proxy func(*http.Request) (*url.URL, error)
+	// Transport, if set, replaces the default http.Transport entirely —
+	// used by the smart proxy pool so it can both pick proxies and observe
+	// per-request outcomes. When non-nil, Proxy / MaxIdleConnsPerHost /
+	// MaxConnsPerHost are ignored.
+	Transport http.RoundTripper
 }
 
 func New(cfg Config) *Client {
-	if cfg.MaxIdleConnsPerHost == 0 {
-		cfg.MaxIdleConnsPerHost = 32
-	}
-	if cfg.MaxConnsPerHost == 0 {
-		cfg.MaxConnsPerHost = 64
-	}
-	proxy := cfg.Proxy
-	if proxy == nil {
-		proxy = http.ProxyFromEnvironment
-	}
-	transport := &http.Transport{
-		Proxy: proxy,
-		DialContext: (&net.Dialer{
-			Timeout:   5 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
-		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          256,
-		MaxIdleConnsPerHost:   cfg.MaxIdleConnsPerHost,
-		MaxConnsPerHost:       cfg.MaxConnsPerHost,
-		IdleConnTimeout:       60 * time.Second,
-		TLSHandshakeTimeout:   5 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
+	transport := cfg.Transport
+	if transport == nil {
+		if cfg.MaxIdleConnsPerHost == 0 {
+			cfg.MaxIdleConnsPerHost = 32
+		}
+		if cfg.MaxConnsPerHost == 0 {
+			cfg.MaxConnsPerHost = 64
+		}
+		proxy := cfg.Proxy
+		if proxy == nil {
+			proxy = http.ProxyFromEnvironment
+		}
+		transport = &http.Transport{
+			Proxy: proxy,
+			DialContext: (&net.Dialer{
+				Timeout:   5 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			ForceAttemptHTTP2:     true,
+			MaxIdleConns:          256,
+			MaxIdleConnsPerHost:   cfg.MaxIdleConnsPerHost,
+			MaxConnsPerHost:       cfg.MaxConnsPerHost,
+			IdleConnTimeout:       60 * time.Second,
+			TLSHandshakeTimeout:   5 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+		}
 	}
 	return &Client{
 		http:      &http.Client{Timeout: cfg.Timeout, Transport: transport},

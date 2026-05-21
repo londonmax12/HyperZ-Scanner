@@ -24,14 +24,24 @@ hyperz -url https://example.com -format json
 hyperz -url https://example.com -timeout 5s -user-agent "myscanner/1.0"
 hyperz -url https://example.com -proxy http://127.0.0.1:8080
 hyperz -urls-file targets.txt -proxies-file proxies.txt
+hyperz -urls-file targets.txt -scrape-proxies
 ```
 
 ### Proxies
 
 `-proxy` (repeatable) and `-proxies-file` accept `http://`, `https://`,
 `socks5://`, and `socks5h://` URLs; bare `host:port` entries default to
-`http://`. Multiple proxies are used round-robin across requests. A follow-up
-will add auto-scraping and block-rate-aware cycling.
+`http://`. Pass `-scrape-proxies` to pull additional proxies from built-in
+public lists at startup, or `-proxy-source <url>` (repeatable) to add custom
+sources.
+
+When more than one proxy is in play, requests go through a smart pool that
+picks proxies via epsilon-greedy on per-proxy success rate. Bad proxies fade
+out automatically; promising ones get used more. The pool distinguishes
+target blocks (HTTP 403/429) from proxy errors (5xx, network) — at scan end,
+hyperz prints per-proxy stats and an overall block rate so you can tell
+whether the scan itself is being rejected. Tune visible rows with
+`-proxy-stats-top` (default 10, 0 to hide).
 
 ## Layout
 

@@ -31,16 +31,23 @@ type config struct {
 	crawlWorkers  int
 	crawlSameHost bool
 
-	proxies     []string
-	proxiesFile string
+	proxies        []string
+	proxiesFile    string
+	scrapeProxies  bool
+	proxySources   []string
+	proxyStatsTopN int
 }
 
 func parseFlags() (*config, error) {
 	var urls stringList
 	var proxies stringList
+	var proxySources stringList
 	flag.Var(&urls, "url", "target URL to scan (repeatable)")
 	flag.Var(&proxies, "proxy", "proxy URL to route requests through, e.g. http://host:port or socks5://host:port (repeatable)")
-	proxiesFile := flag.String("proxies-file", "", "file with one proxy per line (round-robin across requests)")
+	flag.Var(&proxySources, "proxy-source", "URL of an additional proxy list to scrape (repeatable; implies -scrape-proxies)")
+	proxiesFile := flag.String("proxies-file", "", "file with one proxy per line")
+	scrapeProxies := flag.Bool("scrape-proxies", false, "fetch proxies from built-in public sources at startup")
+	proxyStatsTopN := flag.Int("proxy-stats-top", 10, "rows of per-proxy stats to print at scan end (0 to hide)")
 	urlsFile := flag.String("urls-file", "", "file with one URL per line (use '-' for stdin)")
 	timeout := flag.Duration("timeout", 10*time.Second, "per-request timeout")
 	userAgent := flag.String("user-agent", "hyperz/0.1", "User-Agent header to send")
@@ -75,7 +82,10 @@ func parseFlags() (*config, error) {
 		crawlPages:    *crawlPages,
 		crawlWorkers:  *crawlWorkers,
 		crawlSameHost: *crawlSameHost,
-		proxies:       proxies,
-		proxiesFile:   *proxiesFile,
+		proxies:        proxies,
+		proxiesFile:    *proxiesFile,
+		scrapeProxies:  *scrapeProxies,
+		proxySources:   proxySources,
+		proxyStatsTopN: *proxyStatsTopN,
 	}, nil
 }
