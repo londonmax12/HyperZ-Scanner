@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/londonball/hyperz/internal/checks"
+	"github.com/londonball/hyperz/internal/fingerprint"
 )
 
 // PDF reporter emits a minimal, dependency-free PDF 1.4 document using
@@ -42,10 +43,10 @@ const (
 
 type pdfReporter struct{}
 
-func (pdfReporter) Write(ctx context.Context, w io.Writer, in <-chan checks.Finding) error {
+func (pdfReporter) Write(ctx context.Context, w io.Writer, in <-chan checks.Finding, meta Metadata) error {
 	findings := drain(ctx, in)
 	d := newPDFDoc()
-	d.renderReport(findings)
+	d.renderReport(findings, meta.Stacks)
 	d.addFooters()
 	return d.serialize(w)
 }
@@ -150,8 +151,9 @@ var severityOrder = []checks.Severity{
 	checks.SeverityInfo,
 }
 
-func (d *pdfDoc) renderReport(findings []checks.Finding) {
+func (d *pdfDoc) renderReport(findings []checks.Finding, stacks map[string]*fingerprint.Stack) {
 	d.renderCover(findings)
+	d.renderStacks(stacks)
 	if len(findings) == 0 {
 		return
 	}
@@ -174,6 +176,28 @@ func (d *pdfDoc) renderReport(findings []checks.Finding) {
 				d.separator()
 			}
 		}
+	}
+}
+
+// renderStacks adds a "Detected stacks" page after the cover. Each row is
+// "host — server=… language=… …" so the PDF stays single-column without
+// reaching for table primitives we don't have.
+func (d *pdfDoc) renderStacks(stacks map[string]*fingerprint.Stack) {
+	if len(stacks) == 0 {
+		return
+	}
+	d.newPage()
+	d.writeLine("Detected stacks", fontBold, pdfSizeH2, 0.10, 0.10, 0.10)
+	d.gap(4)
+	d.hline(pdfBodyLeft, pdfBodyRight, d.y, 0.5, 0.85, 0.85, 0.85)
+	d.gap(8)
+	for _, host := range sortedHosts(stacks) {
+		s := stacks[host]
+		d.writeLine(host, fontBold, pdfSizeBase, 0.10, 0.10, 0.10)
+		d.writeWrapped(s.Summary(), 12, fontReg, pdfSizeBase, 0.25, 0.25, 0.25)
+		d.writeLineAt(12, fmt.Sprintf("confidence: %.0f%%", s.Confidence*100),
+			fontReg, pdfSizeChrome, 0.55, 0.55, 0.55)
+		d.gap(4)
 	}
 }
 

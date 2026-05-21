@@ -12,12 +12,27 @@ import (
 	"time"
 
 	"github.com/londonball/hyperz/internal/checks"
+	"github.com/londonball/hyperz/internal/fingerprint"
 )
+
+// Metadata carries scan-level context that reporters render alongside the
+// finding list. It's separate from Finding because each entry describes the
+// scan/host, not an individual issue.
+type Metadata struct {
+	// Stacks maps a host (typically "host" or "scheme://host") to the
+	// fingerprint detected for it. nil/empty when fingerprinting is
+	// disabled or every detection failed.
+	Stacks map[string]*fingerprint.Stack
+}
 
 // Reporter consumes findings from a channel and writes them in some format.
 // Streaming reporters emit as findings arrive; aggregate reporters buffer.
+//
+// meta is read after the findings channel closes, so it's safe for the caller
+// to keep populating the underlying maps while the scan is in flight — every
+// in-tree reporter touches meta only at the end.
 type Reporter interface {
-	Write(ctx context.Context, w io.Writer, in <-chan checks.Finding) error
+	Write(ctx context.Context, w io.Writer, in <-chan checks.Finding, meta Metadata) error
 }
 
 // Formats returns the names of all supported output formats.
@@ -72,7 +87,7 @@ func Dedupe(in <-chan checks.Finding) <-chan checks.Finding {
 
 type textReporter struct{}
 
-func (textReporter) Write(ctx context.Context, w io.Writer, in <-chan checks.Finding) error {
+func (textReporter) Write(ctx context.Context, w io.Writer, in <-chan checks.Finding, meta Metadata) error {
 	count := 0
 	for f := range in {
 		if ctx.Err() != nil {
@@ -84,8 +99,25 @@ func (textReporter) Write(ctx context.Context, w io.Writer, in <-chan checks.Fin
 		count++
 	}
 	if count == 0 {
-		_, err := fmt.Fprintln(w, "no findings")
+		if _, err := fmt.Fprintln(w, "no findings"); err != nil {
+			return err
+		}
+	}
+	return writeTextStacks(w, meta.Stacks)
+}
+
+func writeTextStacks(w io.Writer, stacks map[string]*fingerprint.Stack) error {
+	if len(stacks) == 0 {
+		return nil
+	}
+	if _, err := fmt.Fprintln(w, "\ndetected stacks:"); err != nil {
 		return err
+	}
+	for _, host := range sortedHosts(stacks) {
+		if _, err := fmt.Fprintf(w, "  %s — %s (confidence=%.0f%%)\n",
+			host, stacks[host].Summary(), stacks[host].Confidence*100); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -126,13 +158,23 @@ func writeTextFinding(w io.Writer, f checks.Finding) error {
 
 type jsonlReporter struct{}
 
-func (jsonlReporter) Write(ctx context.Context, w io.Writer, in <-chan checks.Finding) error {
+func (jsonlReporter) Write(ctx context.Context, w io.Writer, in <-chan checks.Finding, meta Metadata) error {
 	enc := json.NewEncoder(w)
 	for f := range in {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 		if err := enc.Encode(f); err != nil {
+			return err
+		}
+	}
+	if len(meta.Stacks) > 0 {
+		// Tagged tail record so consumers can stream past findings and pick
+		// up host metadata without having to buffer the whole file.
+		if err := enc.Encode(map[string]any{
+			"type":   "stacks",
+			"stacks": meta.Stacks,
+		}); err != nil {
 			return err
 		}
 	}
@@ -150,7 +192,10 @@ var csvHeader = []string{
 	"dedupe_key",
 }
 
-func (csvReporter) Write(ctx context.Context, w io.Writer, in <-chan checks.Finding) error {
+// csv intentionally ignores Metadata: the format is flat tabular finding
+// rows and there's no natural place for per-host stack info without
+// breaking the row contract. Use jsonl/json/markdown if you need both.
+func (csvReporter) Write(ctx context.Context, w io.Writer, in <-chan checks.Finding, _ Metadata) error {
 	cw := csv.NewWriter(w)
 	if err := cw.Write(csvHeader); err != nil {
 		return err
@@ -180,25 +225,33 @@ func (csvReporter) Write(ctx context.Context, w io.Writer, in <-chan checks.Find
 	return cw.Error()
 }
 
-// ---------- json (buffered, pretty array) ----------
+// ---------- json (buffered, pretty envelope) ----------
 
 type jsonReporter struct{}
 
-func (jsonReporter) Write(ctx context.Context, w io.Writer, in <-chan checks.Finding) error {
+// jsonEnvelope wraps the findings array so we have a stable place to add
+// scan metadata (detected stacks today, scan time/target list tomorrow)
+// without piggybacking on individual finding records.
+type jsonEnvelope struct {
+	Findings []checks.Finding              `json:"findings"`
+	Stacks   map[string]*fingerprint.Stack `json:"detected_stacks,omitempty"`
+}
+
+func (jsonReporter) Write(ctx context.Context, w io.Writer, in <-chan checks.Finding, meta Metadata) error {
 	findings := drain(ctx, in)
 	if findings == nil {
 		findings = []checks.Finding{}
 	}
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
-	return enc.Encode(findings)
+	return enc.Encode(jsonEnvelope{Findings: findings, Stacks: meta.Stacks})
 }
 
 // ---------- sarif (buffered) ----------
 
 type sarifReporter struct{}
 
-func (sarifReporter) Write(ctx context.Context, w io.Writer, in <-chan checks.Finding) error {
+func (sarifReporter) Write(ctx context.Context, w io.Writer, in <-chan checks.Finding, meta Metadata) error {
 	findings := drain(ctx, in)
 
 	type sarifMessage struct {
@@ -237,8 +290,9 @@ func (sarifReporter) Write(ctx context.Context, w io.Writer, in <-chan checks.Fi
 		Driver sarifDriver `json:"driver"`
 	}
 	type sarifRun struct {
-		Tool    sarifTool     `json:"tool"`
-		Results []sarifResult `json:"results"`
+		Tool       sarifTool                     `json:"tool"`
+		Results    []sarifResult                 `json:"results"`
+		Properties map[string]any                `json:"properties,omitempty"`
 	}
 	type sarifLog struct {
 		Schema  string     `json:"$schema"`
@@ -305,13 +359,17 @@ func (sarifReporter) Write(ctx context.Context, w io.Writer, in <-chan checks.Fi
 	}
 	sort.Slice(rules, func(i, j int) bool { return rules[i].ID < rules[j].ID })
 
+	run := sarifRun{
+		Tool:    sarifTool{Driver: sarifDriver{Name: "hyperz", Rules: rules}},
+		Results: results,
+	}
+	if len(meta.Stacks) > 0 {
+		run.Properties = map[string]any{"detectedStacks": meta.Stacks}
+	}
 	doc := sarifLog{
 		Schema:  "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/Schemata/sarif-schema-2.1.0.json",
 		Version: "2.1.0",
-		Runs: []sarifRun{{
-			Tool:    sarifTool{Driver: sarifDriver{Name: "hyperz", Rules: rules}},
-			Results: results,
-		}},
+		Runs:    []sarifRun{run},
 	}
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
@@ -352,7 +410,7 @@ func cweURL(cwe string) string {
 
 type markdownReporter struct{}
 
-func (markdownReporter) Write(ctx context.Context, w io.Writer, in <-chan checks.Finding) error {
+func (markdownReporter) Write(ctx context.Context, w io.Writer, in <-chan checks.Finding, meta Metadata) error {
 	findings := drain(ctx, in)
 
 	bySev := map[checks.Severity]int{}
@@ -380,6 +438,8 @@ func (markdownReporter) Write(ctx context.Context, w io.Writer, in <-chan checks
 		}
 		fmt.Fprintln(w)
 	}
+
+	writeMarkdownStacks(w, meta.Stacks)
 
 	if len(findings) == 0 {
 		fmt.Fprintln(w, "_No findings._")
@@ -432,6 +492,22 @@ func (markdownReporter) Write(ctx context.Context, w io.Writer, in <-chan checks
 
 func escapePipe(s string) string { return strings.ReplaceAll(s, "|", `\|`) }
 
+func writeMarkdownStacks(w io.Writer, stacks map[string]*fingerprint.Stack) {
+	if len(stacks) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "## Detected stacks\n\n")
+	fmt.Fprintf(w, "| Host | Server | Language | Framework | CMS | CDN | WAF | Confidence |\n")
+	fmt.Fprintf(w, "|---|---|---|---|---|---|---|---|\n")
+	for _, host := range sortedHosts(stacks) {
+		s := stacks[host]
+		fmt.Fprintf(w, "| %s | %s | %s | %s | %s | %s | %s | %.0f%% |\n",
+			escapePipe(host), s.Server, s.Language, s.Framework,
+			s.CMS, s.CDN, s.WAF, s.Confidence*100)
+	}
+	fmt.Fprintln(w)
+}
+
 // ---------- helpers ----------
 
 func drain(ctx context.Context, in <-chan checks.Finding) []checks.Finding {
@@ -466,6 +542,15 @@ func defaultStr(s, fallback string) string {
 	return s
 }
 
+func sortedHosts(stacks map[string]*fingerprint.Stack) []string {
+	hosts := make([]string, 0, len(stacks))
+	for h := range stacks {
+		hosts = append(hosts, h)
+	}
+	sort.Strings(hosts)
+	return hosts
+}
+
 // Write is a one-shot helper kept for the single-target slice path.
 func Write(w io.Writer, format string, findings []checks.Finding) error {
 	r, err := New(format)
@@ -477,5 +562,5 @@ func Write(w io.Writer, format string, findings []checks.Finding) error {
 		in <- f
 	}
 	close(in)
-	return r.Write(context.Background(), w, in)
+	return r.Write(context.Background(), w, in, Metadata{})
 }

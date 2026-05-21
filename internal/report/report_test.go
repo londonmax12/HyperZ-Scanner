@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/londonball/hyperz/internal/checks"
+	"github.com/londonball/hyperz/internal/fingerprint"
 )
 
 func sampleFindings() []checks.Finding {
@@ -35,15 +36,27 @@ func channelFrom(findings []checks.Finding) <-chan checks.Finding {
 
 func writeFormat(t *testing.T, format string, findings []checks.Finding) string {
 	t.Helper()
+	return writeFormatWithMeta(t, format, findings, Metadata{})
+}
+
+func writeFormatWithMeta(t *testing.T, format string, findings []checks.Finding, meta Metadata) string {
+	t.Helper()
 	r, err := New(format)
 	if err != nil {
 		t.Fatalf("New(%q): %v", format, err)
 	}
 	var buf bytes.Buffer
-	if err := r.Write(context.Background(), &buf, channelFrom(findings)); err != nil {
+	if err := r.Write(context.Background(), &buf, channelFrom(findings), meta); err != nil {
 		t.Fatalf("Write(%q): %v", format, err)
 	}
 	return buf.String()
+}
+
+func sampleStacks() map[string]*fingerprint.Stack {
+	return map[string]*fingerprint.Stack{
+		"example.com": {Server: "nginx", Language: "php", CMS: "wordpress", Confidence: 0.5},
+		"api.example.com": {Server: "openresty", Language: "node", Confidence: 0.33},
+	}
 }
 
 func TestNewKnownFormats(t *testing.T) {
@@ -90,21 +103,45 @@ func TestTextReporterNoFindings(t *testing.T) {
 	}
 }
 
-func TestJSONReporterEmitsArray(t *testing.T) {
+func TestJSONReporterEnvelope(t *testing.T) {
 	out := writeFormat(t, "json", sampleFindings())
-	var got []checks.Finding
+	var got jsonEnvelope
 	if err := json.Unmarshal([]byte(out), &got); err != nil {
 		t.Fatalf("json decode: %v\n%s", err, out)
 	}
-	if !reflect.DeepEqual(got, sampleFindings()) {
-		t.Fatalf("got %+v\nwant %+v", got, sampleFindings())
+	if !reflect.DeepEqual(got.Findings, sampleFindings()) {
+		t.Fatalf("findings = %+v\nwant %+v", got.Findings, sampleFindings())
+	}
+	if got.Stacks != nil {
+		t.Errorf("stacks should be omitted when empty, got %v", got.Stacks)
 	}
 }
 
-func TestJSONReporterEmptyArrayNotNull(t *testing.T) {
+func TestJSONReporterEmptyFindings(t *testing.T) {
 	out := writeFormat(t, "json", nil)
-	if strings.TrimSpace(out) != "[]" {
-		t.Fatalf("got %q, want []", out)
+	var got jsonEnvelope
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("decode: %v\n%s", err, out)
+	}
+	if len(got.Findings) != 0 {
+		t.Fatalf("findings = %v, want empty slice", got.Findings)
+	}
+	if !strings.Contains(out, `"findings": []`) {
+		t.Errorf("empty findings should serialize as [] not null:\n%s", out)
+	}
+}
+
+func TestJSONReporterIncludesStacks(t *testing.T) {
+	out := writeFormatWithMeta(t, "json", sampleFindings(), Metadata{Stacks: sampleStacks()})
+	var got jsonEnvelope
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("decode: %v\n%s", err, out)
+	}
+	if len(got.Stacks) != 2 {
+		t.Fatalf("stacks = %d, want 2", len(got.Stacks))
+	}
+	if s := got.Stacks["example.com"]; s == nil || s.CMS != "wordpress" {
+		t.Errorf("example.com stack = %+v", s)
 	}
 }
 
@@ -513,6 +550,106 @@ func TestSARIFIncludesCWEAndFingerprint(t *testing.T) {
 	}
 	if res.Properties["remediation"] != "set it" {
 		t.Errorf("result remediation = %q", res.Properties["remediation"])
+	}
+}
+
+func TestTextReporterRendersStacks(t *testing.T) {
+	out := writeFormatWithMeta(t, "text", sampleFindings(), Metadata{Stacks: sampleStacks()})
+	for _, want := range []string{
+		"detected stacks:",
+		"api.example.com — server=openresty language=node (confidence=33%)",
+		"example.com — server=nginx language=php cms=wordpress (confidence=50%)",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("text missing %q\nfull:\n%s", want, out)
+		}
+	}
+}
+
+func TestJSONLReporterTailsStacks(t *testing.T) {
+	out := writeFormatWithMeta(t, "jsonl", sampleFindings(), Metadata{Stacks: sampleStacks()})
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	if len(lines) != 4 {
+		t.Fatalf("got %d lines (3 findings + 1 stacks tail), want 4:\n%s", len(lines), out)
+	}
+	var tail struct {
+		Type   string                        `json:"type"`
+		Stacks map[string]*fingerprint.Stack `json:"stacks"`
+	}
+	if err := json.Unmarshal([]byte(lines[3]), &tail); err != nil {
+		t.Fatalf("decode tail: %v\n%s", err, lines[3])
+	}
+	if tail.Type != "stacks" {
+		t.Errorf("tail type = %q, want 'stacks'", tail.Type)
+	}
+	if tail.Stacks["example.com"].CMS != "wordpress" {
+		t.Errorf("tail stacks missing example.com CMS")
+	}
+}
+
+func TestMarkdownReporterRendersStacksSection(t *testing.T) {
+	out := writeFormatWithMeta(t, "markdown", sampleFindings(), Metadata{Stacks: sampleStacks()})
+	for _, want := range []string{
+		"## Detected stacks",
+		"| Host | Server | Language",
+		"| api.example.com | openresty | node",
+		"| example.com | nginx | php |",
+		"wordpress",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("markdown missing %q\nfull:\n%s", want, out)
+		}
+	}
+}
+
+func TestSARIFReporterIncludesStacks(t *testing.T) {
+	out := writeFormatWithMeta(t, "sarif", sampleFindings(), Metadata{Stacks: sampleStacks()})
+	var doc struct {
+		Runs []struct {
+			Properties struct {
+				DetectedStacks map[string]struct {
+					Server string `json:"server"`
+					CMS    string `json:"cms"`
+				} `json:"detectedStacks"`
+			} `json:"properties"`
+		} `json:"runs"`
+	}
+	if err := json.Unmarshal([]byte(out), &doc); err != nil {
+		t.Fatalf("decode: %v\n%s", err, out)
+	}
+	stacks := doc.Runs[0].Properties.DetectedStacks
+	if len(stacks) != 2 {
+		t.Fatalf("detectedStacks = %d, want 2:\n%s", len(stacks), out)
+	}
+	if stacks["example.com"].CMS != "wordpress" {
+		t.Errorf("example.com CMS = %q", stacks["example.com"].CMS)
+	}
+}
+
+func TestPDFReporterRendersStacksSection(t *testing.T) {
+	out := writeFormatWithMeta(t, "pdf", sampleFindings(), Metadata{Stacks: sampleStacks()})
+	for _, want := range []string{
+		"Detected stacks",
+		"example.com",
+		"api.example.com",
+		"server=nginx language=php cms=wordpress",
+		"confidence: 50%",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("PDF missing %q", want)
+		}
+	}
+}
+
+func TestReporterStacksOmittedWhenEmpty(t *testing.T) {
+	// Empty stacks should not produce headers/sections in any format.
+	for _, f := range []string{"text", "jsonl", "markdown"} {
+		out := writeFormat(t, f, sampleFindings())
+		for _, marker := range []string{"detected stacks", "Detected stacks"} {
+			if strings.Contains(out, marker) {
+				t.Errorf("%s: included %q with empty Metadata:\n%s", f, marker, out)
+			}
+		}
 	}
 }
 

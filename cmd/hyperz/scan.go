@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -207,9 +208,17 @@ func runScan(ctx context.Context, cfg *scanConfig, mode checks.Mode) int {
 			fmt.Fprintf(os.Stderr, "[skip] %s/%s: %s\n", check, target, reason)
 		}),
 	}
+	// stacks is shared with the report writer. OnDetect fires inside the
+	// fingerprint cache's sync.Once, so we only need the mutex to guard the
+	// concurrent map writes; reads happen after the findings channel closes.
+	var stacksMu sync.Mutex
+	stacks := map[string]*fingerprint.Stack{}
 	if !cfg.noFingerprint {
 		det := fingerprint.New(client,
 			fingerprint.WithOnDetect(func(host string, stack *fingerprint.Stack) {
+				stacksMu.Lock()
+				stacks[host] = stack
+				stacksMu.Unlock()
 				fmt.Fprintf(os.Stderr, "[fingerprint] %s: %s (confidence=%.0f%%)\n",
 					host, stack.Summary(), stack.Confidence*100)
 			}),
@@ -255,7 +264,7 @@ func runScan(ctx context.Context, cfg *scanConfig, mode checks.Mode) int {
 	deduped := report.Dedupe(findings)
 
 	exit := exitOK
-	if err := rep.Write(ctx, out, deduped); err != nil {
+	if err := rep.Write(ctx, out, deduped, report.Metadata{Stacks: stacks}); err != nil {
 		fmt.Fprintln(os.Stderr, "report failed:", err)
 		exit = exitFailure
 	}
