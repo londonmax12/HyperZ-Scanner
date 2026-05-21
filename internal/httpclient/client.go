@@ -276,6 +276,15 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 	}
 }
 
+// ReadBody reads up to max bytes from resp.Body. The caller still owns
+// closing resp.Body. A nil resp or resp.Body returns (nil, nil).
+func ReadBody(resp *http.Response, max int64) ([]byte, error) {
+	if resp == nil || resp.Body == nil {
+		return nil, nil
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, max))
+}
+
 func drainAndClose(body io.ReadCloser) {
 	if body == nil {
 		return

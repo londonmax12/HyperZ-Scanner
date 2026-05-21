@@ -3,11 +3,12 @@ package proxy
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"sync"
 	"time"
+
+	"github.com/londonball/hyperz/internal/httpclient"
 )
 
 // DefaultSources is a small built-in list of public proxy aggregators. They
@@ -122,7 +123,7 @@ func fetchProxies(ctx context.Context, client *http.Client, source, ua string, m
 	if resp.StatusCode/100 != 2 {
 		return nil, fmt.Errorf("status %d", resp.StatusCode)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes))
+	body, err := httpclient.ReadBody(resp, maxBytes)
 	if err != nil {
 		return nil, err
 	}

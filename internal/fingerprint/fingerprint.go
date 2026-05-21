@@ -10,7 +10,6 @@ package fingerprint
 
 import (
 	"context"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -201,7 +200,7 @@ func (d *Detector) detect(ctx context.Context, target string) (*Stack, error) {
 
 	var body []byte
 	if isHTML(resp.Header.Get("Content-Type")) {
-		body, _ = io.ReadAll(io.LimitReader(resp.Body, d.maxBodyBytes))
+		body, _ = httpclient.ReadBody(resp, d.maxBodyBytes)
 	}
 	return classify(resp, body), nil
 }

@@ -5,7 +5,6 @@ package crawler
 
 import (
 	"context"
-	"io"
 	"net/url"
 	"strings"
 	"sync"
@@ -162,7 +161,7 @@ func (c *Crawler) process(ctx context.Context, it item, out chan<- string, submi
 		return
 	}
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, c.cfg.MaxBodyBytes))
+	body, err := httpclient.ReadBody(resp, c.cfg.MaxBodyBytes)
 	if err != nil {
 		if c.onError != nil {
 			c.onError(it.url, err)
