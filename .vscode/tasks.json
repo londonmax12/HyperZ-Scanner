@@ -1,0 +1,69 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "hyperz: run",
+      "type": "shell",
+      "command": "go",
+      "args": [
+        "run",
+        "./cmd/hyperz",
+        "-url",
+        "${input:targetUrl}",
+        "-format",
+        "${input:format}"
+      ],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "problemMatcher": "$go"
+    },
+    {
+      "label": "hyperz: build",
+      "type": "shell",
+      "command": "go",
+      "args": ["build", "-o", "bin/hyperz.exe", "./cmd/hyperz"],
+      "group": "build",
+      "problemMatcher": "$go"
+    },
+    {
+      "label": "hyperz: test",
+      "type": "shell",
+      "command": "go",
+      "args": ["test", "-v", "./..."],
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      },
+      "problemMatcher": "$go"
+    },
+    {
+      "label": "hyperz: vet",
+      "type": "shell",
+      "command": "go",
+      "args": ["vet", "./..."],
+      "problemMatcher": "$go"
+    }
+  ],
+  "inputs": [
+    {
+      "id": "targetUrl",
+      "type": "promptString",
+      "description": "Target URL to scan",
+      "default": "https://example.com"
+    },
+    {
+      "id": "format",
+      "type": "pickString",
+      "description": "Output format",
+      "options": ["text", "json"],
+      "default": "text"
+    }
+  ]
+}
