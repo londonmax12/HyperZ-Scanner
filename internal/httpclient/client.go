@@ -20,6 +20,10 @@ type Config struct {
 	MaxIdleConnsPerHost int
 	MaxConnsPerHost     int
 	Limiter             *HostLimiter
+	// Proxy selects the proxy URL for each request. Nil means use
+	// http.ProxyFromEnvironment; return (nil, nil) from the func to bypass
+	// the proxy for a given request.
+	Proxy func(*http.Request) (*url.URL, error)
 }
 
 func New(cfg Config) *Client {
@@ -29,8 +33,12 @@ func New(cfg Config) *Client {
 	if cfg.MaxConnsPerHost == 0 {
 		cfg.MaxConnsPerHost = 64
 	}
+	proxy := cfg.Proxy
+	if proxy == nil {
+		proxy = http.ProxyFromEnvironment
+	}
 	transport := &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
+		Proxy: proxy,
 		DialContext: (&net.Dialer{
 			Timeout:   5 * time.Second,
 			KeepAlive: 30 * time.Second,

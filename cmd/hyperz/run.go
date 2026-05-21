@@ -9,6 +9,7 @@ import (
 	"github.com/londonball/hyperz/internal/checks"
 	"github.com/londonball/hyperz/internal/crawler"
 	"github.com/londonball/hyperz/internal/httpclient"
+	"github.com/londonball/hyperz/internal/proxy"
 	"github.com/londonball/hyperz/internal/report"
 	"github.com/londonball/hyperz/internal/scanner"
 )
@@ -34,11 +35,22 @@ func run(ctx context.Context, cfg *config) int {
 	}
 	defer closeOut()
 
-	client := httpclient.New(httpclient.Config{
+	proxies, err := proxy.Load(cfg.proxies, cfg.proxiesFile)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "proxy error:", err)
+		return exitFailure
+	}
+	clientCfg := httpclient.Config{
 		Timeout:   cfg.timeout,
 		UserAgent: cfg.userAgent,
 		Limiter:   httpclient.NewHostLimiter(cfg.rps, cfg.burst),
-	})
+	}
+	if len(proxies) > 0 {
+		pool := proxy.NewPool(proxies)
+		clientCfg.Proxy = pool.ProxyFunc()
+		fmt.Fprintf(os.Stderr, "[proxy] loaded %d proxies (round-robin)\n", pool.Len())
+	}
+	client := httpclient.New(clientCfg)
 
 	var checkErrors atomic.Int64
 	s := scanner.New(client,

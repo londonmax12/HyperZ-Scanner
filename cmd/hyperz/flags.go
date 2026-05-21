@@ -30,11 +30,17 @@ type config struct {
 	crawlPages    int
 	crawlWorkers  int
 	crawlSameHost bool
+
+	proxies     []string
+	proxiesFile string
 }
 
 func parseFlags() (*config, error) {
 	var urls stringList
+	var proxies stringList
 	flag.Var(&urls, "url", "target URL to scan (repeatable)")
+	flag.Var(&proxies, "proxy", "proxy URL to route requests through, e.g. http://host:port or socks5://host:port (repeatable)")
+	proxiesFile := flag.String("proxies-file", "", "file with one proxy per line (round-robin across requests)")
 	urlsFile := flag.String("urls-file", "", "file with one URL per line (use '-' for stdin)")
 	timeout := flag.Duration("timeout", 10*time.Second, "per-request timeout")
 	userAgent := flag.String("user-agent", "hyperz/0.1", "User-Agent header to send")
@@ -69,5 +75,7 @@ func parseFlags() (*config, error) {
 		crawlPages:    *crawlPages,
 		crawlWorkers:  *crawlWorkers,
 		crawlSameHost: *crawlSameHost,
+		proxies:       proxies,
+		proxiesFile:   *proxiesFile,
 	}, nil
 }
