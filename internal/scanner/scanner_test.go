@@ -3,12 +3,15 @@ package scanner
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/londonball/hyperz/internal/checks"
+	"github.com/londonball/hyperz/internal/fingerprint"
 	"github.com/londonball/hyperz/internal/httpclient"
 	"github.com/londonball/hyperz/internal/scope"
 )
@@ -162,6 +165,98 @@ func TestScanConcurrencyOptionRespected(t *testing.T) {
 	s = New(newNilClient(), []checks.Check{c}, WithConcurrency(3))
 	if s.concurrency != 3 {
 		t.Fatalf("concurrency = %d, want 3", s.concurrency)
+	}
+}
+
+// stubGatedCheck implements fingerprint.StackGated and records whether it
+// was run. Use it to verify the scanner consults AppliesTo.
+type stubGatedCheck struct {
+	stubCheck
+	wantValue string // e.g. "wordpress"; check applies iff stack.Matches(wantValue)
+}
+
+func (s *stubGatedCheck) AppliesTo(stack *fingerprint.Stack) bool {
+	return stack.Matches(s.wantValue)
+}
+
+func TestScanGatedCheckRunsWhenStackMatches(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`<meta name="generator" content="WordPress 6.4">`))
+	}))
+	defer srv.Close()
+
+	client := newNilClient()
+	det := fingerprint.New(client)
+	gated := &stubGatedCheck{
+		stubCheck: stubCheck{name: "wp", findings: []checks.Finding{{Title: "wp-only"}}},
+		wantValue: "wordpress",
+	}
+	s := New(client, []checks.Check{gated}, WithFingerprint(det))
+
+	got, err := s.Scan(context.Background(), srv.URL)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d findings, want 1 (gated check should have fired against WP)", len(got))
+	}
+	if gated.hits.Load() != 1 {
+		t.Fatalf("gated check hits = %d, want 1", gated.hits.Load())
+	}
+}
+
+func TestScanGatedCheckSkippedWhenStackDoesNotMatch(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Plain nginx response, no WordPress signals.
+		w.Header().Set("Server", "nginx")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	client := newNilClient()
+	det := fingerprint.New(client)
+	gated := &stubGatedCheck{
+		stubCheck: stubCheck{name: "wp", findings: []checks.Finding{{Title: "wp-only"}}},
+		wantValue: "wordpress",
+	}
+	var skips atomic.Int64
+	s := New(client, []checks.Check{gated},
+		WithFingerprint(det),
+		WithSkipHandler(func(target, check, reason string) { skips.Add(1) }),
+	)
+
+	got, err := s.Scan(context.Background(), srv.URL)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("got %d findings, want 0 (gated check should be skipped)", len(got))
+	}
+	if gated.hits.Load() != 0 {
+		t.Fatalf("gated check hits = %d, want 0", gated.hits.Load())
+	}
+	if skips.Load() != 1 {
+		t.Fatalf("skip handler calls = %d, want 1", skips.Load())
+	}
+}
+
+func TestScanWithoutFingerprintAlwaysRunsGatedChecks(t *testing.T) {
+	// No detector wired → AppliesTo must not be consulted, so a check that
+	// would reject every stack still runs.
+	gated := &stubGatedCheck{
+		stubCheck: stubCheck{name: "wp", findings: []checks.Finding{{Title: "x"}}},
+		wantValue: "wordpress",
+	}
+	s := New(newNilClient(), []checks.Check{gated})
+	got, err := s.Scan(context.Background(), "http://example.invalid")
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if len(got) != 1 || gated.hits.Load() != 1 {
+		t.Fatalf("expected gated check to run when no detector wired; findings=%d hits=%d",
+			len(got), gated.hits.Load())
 	}
 }
 

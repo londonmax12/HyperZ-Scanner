@@ -14,6 +14,7 @@ import (
 
 	"github.com/londonball/hyperz/internal/checks"
 	"github.com/londonball/hyperz/internal/crawler"
+	"github.com/londonball/hyperz/internal/fingerprint"
 	"github.com/londonball/hyperz/internal/httpclient"
 	"github.com/londonball/hyperz/internal/proxy"
 	"github.com/londonball/hyperz/internal/report"
@@ -36,6 +37,8 @@ type scanConfig struct {
 	crawl        bool
 	crawlPages   int
 	crawlWorkers int
+
+	noFingerprint bool
 
 	scopeHosts       []string
 	scopeAnyHost     bool
@@ -112,6 +115,9 @@ Modes:
 	f.BoolVar(&cfg.crawl, "crawl", false, "discover scan targets by crawling from each seed URL")
 	f.IntVar(&cfg.crawlPages, "max-pages", 100, "max unique pages to enqueue while crawling (0 = unlimited)")
 	f.IntVar(&cfg.crawlWorkers, "crawl-workers", 8, "number of parallel crawl fetchers")
+
+	f.BoolVar(&cfg.noFingerprint, "no-fingerprint", false,
+		"disable stack detection; runs every check against every target")
 
 	f.StringSliceVar(&cfg.scopeHosts, "scope-host", nil,
 		"hostname allowed in scope (repeatable; defaults to the seed hosts when empty)")
@@ -194,16 +200,31 @@ func runScan(ctx context.Context, cfg *scanConfig, mode checks.Mode) int {
 	fmt.Fprintf(os.Stderr, "[scan] mode=%s, %d/%d check(s) enabled\n",
 		mode, len(enabled), len(all))
 
-	var checkErrors atomic.Int64
-	s := scanner.New(client,
-		enabled,
+	scannerOpts := []scanner.Option{
 		scanner.WithConcurrency(cfg.concurrency),
 		scanner.WithScope(sc),
-		scanner.WithErrorHandler(func(target, check string, err error) {
-			checkErrors.Add(1)
-			fmt.Fprintf(os.Stderr, "[error] %s/%s: %v\n", check, target, err)
+		scanner.WithSkipHandler(func(target, check, reason string) {
+			fmt.Fprintf(os.Stderr, "[skip] %s/%s: %s\n", check, target, reason)
 		}),
-	)
+	}
+	if !cfg.noFingerprint {
+		det := fingerprint.New(client,
+			fingerprint.WithOnDetect(func(host string, stack *fingerprint.Stack) {
+				fmt.Fprintf(os.Stderr, "[fingerprint] %s: %s (confidence=%.0f%%)\n",
+					host, stack.Summary(), stack.Confidence*100)
+			}),
+		)
+		scannerOpts = append(scannerOpts, scanner.WithFingerprint(det))
+	} else {
+		fmt.Fprintln(os.Stderr, "[fingerprint] disabled (--no-fingerprint)")
+	}
+
+	var checkErrors atomic.Int64
+	scannerOpts = append(scannerOpts, scanner.WithErrorHandler(func(target, check string, err error) {
+		checkErrors.Add(1)
+		fmt.Fprintf(os.Stderr, "[error] %s/%s: %v\n", check, target, err)
+	}))
+	s := scanner.New(client, enabled, scannerOpts...)
 
 	targets := make(chan string, cfg.concurrency)
 	findings := make(chan checks.Finding, 64)
