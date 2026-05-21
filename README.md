@@ -27,6 +27,11 @@ hyperz scan --url https://example.com --proxy http://127.0.0.1:8080
 hyperz scan --urls-file targets.txt --proxies-file proxies.txt
 hyperz scan --urls-file targets.txt --scrape-proxies
 hyperz scan --url https://example.com --crawl --max-depth 3
+hyperz scan --url https://example.com --cookie "sid=abc; theme=dark"
+hyperz scan --url https://example.com --cookies-file cookies.txt
+hyperz scan --url https://example.com --auth-basic user:pass
+hyperz scan --url https://example.com --auth-bearer eyJhbGciOi...
+hyperz scan --url https://example.com --header "X-API-Key: secret"
 ```
 
 Run `hyperz --help` to see every subcommand, and `hyperz scan --help` for the
@@ -55,6 +60,20 @@ against systems you have explicit authorization to test.
 `--mode aggressive` adds noisy or heavy fuzzing (long wordlists, many
 requests) on top of default. Likely to trip rate limits or WAFs — reserve
 for explicit deep scans.
+
+### Authentication & cookies
+
+Use `--auth-basic user:pass` for HTTP Basic, `--auth-bearer <token>` for an
+`Authorization: Bearer …` header, or `--header "Name: Value"` (repeatable)
+for any custom header (e.g. `X-API-Key`). A request that already carries the
+relevant header on its own wins, so individual checks can still override.
+
+`--cookie "name=value"` (repeatable; semicolon-separated pairs allowed) seeds
+a cookie jar shared by every request, so server-issued `Set-Cookie` headers
+also stick for the rest of the scan. `--cookies-file <path>` accepts either
+the Netscape format that curl and browsers export, or a plain `name=value`
+per line (prefix a line with `<domain> ` to scope it; otherwise the cookie is
+attached to every seed host).
 
 ### Proxies
 

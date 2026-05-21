@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
 	"strings"
@@ -454,6 +455,149 @@ func TestClientDoRespectsCallerUserAgent(t *testing.T) {
 
 	if got := gotUA.Load(); got != "caller-ua" {
 		t.Fatalf("UA = %v, want caller-ua (caller's header must win)", got)
+	}
+}
+
+func TestClientAppliesBasicAuth(t *testing.T) {
+	var gotAuth atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth.Store(r.Header.Get("Authorization"))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := New(Config{
+		Timeout:   5 * time.Second,
+		UserAgent: "t",
+		BasicAuth: &BasicAuth{Username: "alice", Password: "s3cret"},
+	})
+	resp, err := c.Get(context.Background(), srv.URL)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	resp.Body.Close()
+
+	got, _ := gotAuth.Load().(string)
+	// "alice:s3cret" base64 → YWxpY2U6czNjcmV0
+	if got != "Basic YWxpY2U6czNjcmV0" {
+		t.Fatalf("Authorization = %q, want Basic YWxpY2U6czNjcmV0", got)
+	}
+}
+
+func TestClientBasicAuthDoesNotOverrideExistingAuthorization(t *testing.T) {
+	var gotAuth atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth.Store(r.Header.Get("Authorization"))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := New(Config{
+		Timeout:   5 * time.Second,
+		UserAgent: "t",
+		BasicAuth: &BasicAuth{Username: "alice", Password: "x"},
+	})
+	req, _ := http.NewRequest(http.MethodGet, srv.URL, nil)
+	req.Header.Set("Authorization", "Bearer caller-token")
+	resp, err := c.Do(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	resp.Body.Close()
+
+	if got := gotAuth.Load(); got != "Bearer caller-token" {
+		t.Fatalf("Authorization = %v, want caller's Bearer to win", got)
+	}
+}
+
+func TestClientAppliesBearerToken(t *testing.T) {
+	var gotAuth atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth.Store(r.Header.Get("Authorization"))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := New(Config{
+		Timeout:     5 * time.Second,
+		UserAgent:   "t",
+		BearerToken: "abc.def.ghi",
+	})
+	resp, err := c.Get(context.Background(), srv.URL)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	resp.Body.Close()
+	if got := gotAuth.Load(); got != "Bearer abc.def.ghi" {
+		t.Fatalf("Authorization = %v, want Bearer abc.def.ghi", got)
+	}
+}
+
+func TestClientAppliesExtraHeaders(t *testing.T) {
+	var gotKey, gotTrace atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotKey.Store(r.Header.Get("X-API-Key"))
+		gotTrace.Store(r.Header.Get("X-Trace"))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	h := http.Header{}
+	h.Set("X-API-Key", "k-1")
+	h.Set("X-Trace", "default-trace")
+	c := New(Config{Timeout: 5 * time.Second, UserAgent: "t", ExtraHeaders: h})
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL, nil)
+	req.Header.Set("X-Trace", "caller-trace") // caller wins
+	resp, err := c.Do(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	resp.Body.Close()
+	if got := gotKey.Load(); got != "k-1" {
+		t.Fatalf("X-API-Key = %v, want k-1", got)
+	}
+	if got := gotTrace.Load(); got != "caller-trace" {
+		t.Fatalf("X-Trace = %v, want caller-trace (caller header wins)", got)
+	}
+}
+
+func TestClientUsesCookieJar(t *testing.T) {
+	var hits atomic.Int32
+	var sawCookie atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := hits.Add(1)
+		if n == 1 {
+			http.SetCookie(w, &http.Cookie{Name: "sid", Value: "abc", Path: "/"})
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		c, err := r.Cookie("sid")
+		if err == nil {
+			sawCookie.Store(c.Value)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatalf("cookiejar.New: %v", err)
+	}
+	c := New(Config{Timeout: 5 * time.Second, UserAgent: "t", Jar: jar})
+
+	for i := 0; i < 2; i++ {
+		resp, err := c.Get(context.Background(), srv.URL)
+		if err != nil {
+			t.Fatalf("Get %d: %v", i, err)
+		}
+		resp.Body.Close()
+	}
+	if got := sawCookie.Load(); got != "abc" {
+		t.Fatalf("second request saw sid = %v, want abc (jar must replay Set-Cookie)", got)
+	}
+	if c.Jar() != jar {
+		t.Fatal("Jar() did not return the configured jar")
 	}
 }
 

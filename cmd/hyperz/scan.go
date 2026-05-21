@@ -58,6 +58,12 @@ type scanConfig struct {
 	scrapeProxies  bool
 	proxySources   []string
 	proxyStatsTopN int
+
+	cookies     []string
+	cookiesFile string
+	authBasic   string
+	authBearer  string
+	headers     []string
 }
 
 func newScanCmd() *cobra.Command {
@@ -157,6 +163,17 @@ Modes:
 	f.IntVar(&cfg.proxyStatsTopN, "proxy-stats-top", 10,
 		"rows of per-proxy stats to print at scan end (0 to hide)")
 
+	f.StringSliceVar(&cfg.cookies, "cookie", nil,
+		"cookie to send with every request; 'name=value' or 'name=value; name2=value2' (repeatable)")
+	f.StringVar(&cfg.cookiesFile, "cookies-file", "",
+		"file with cookies (Netscape format from curl/browsers, or 'name=value' per line)")
+	f.StringVar(&cfg.authBasic, "auth-basic", "",
+		"HTTP Basic credentials as user:pass; applied to every request lacking Authorization")
+	f.StringVar(&cfg.authBearer, "auth-bearer", "",
+		"Bearer token; sent as 'Authorization: Bearer <token>' when no Authorization is set")
+	f.StringSliceVar(&cfg.headers, "header", nil,
+		"extra header 'Name: Value' sent on every request (repeatable; e.g. an API key)")
+
 	return cmd
 }
 
@@ -185,12 +202,23 @@ func runScan(ctx context.Context, cfg *scanConfig, level checks.Level) int {
 		log.Error("proxy load failed", "err", err)
 		return exitFailure
 	}
+
+	seeds, err := collectSeeds(cfg.urls, cfg.urlsFile)
+	if err != nil {
+		log.Error("input load failed", "err", err)
+		return exitFailure
+	}
+
 	clientCfg := httpclient.Config{
 		Timeout:      cfg.timeout,
 		UserAgent:    cfg.userAgent,
 		Limiter:      httpclient.NewHostLimiter(cfg.rps, cfg.burst),
 		MaxRetries:   cfg.maxRetries,
 		MaxRetryWait: cfg.maxRetryWait,
+	}
+	if err := applyAuthConfig(&clientCfg, cfg, seeds, log); err != nil {
+		log.Error("auth config failed", "err", err)
+		return exitFailure
 	}
 	var pool *proxy.SmartPool
 	if len(proxies) > 0 {
@@ -199,12 +227,6 @@ func runScan(ctx context.Context, cfg *scanConfig, level checks.Level) int {
 		log.Info("proxy pool ready", "proxies", pool.Len(), "strategy", "epsilon-greedy")
 	}
 	client := httpclient.New(clientCfg)
-
-	seeds, err := collectSeeds(cfg.urls, cfg.urlsFile)
-	if err != nil {
-		log.Error("input load failed", "err", err)
-		return exitFailure
-	}
 
 	sc, err := buildScope(cfg, seeds)
 	if err != nil {

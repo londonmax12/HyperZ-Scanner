@@ -28,8 +28,8 @@ type Metadata struct {
 // Reporter consumes findings from a channel and writes them in some format.
 // Streaming reporters emit as findings arrive; aggregate reporters buffer.
 //
-// Implementations MUST drain `in` until it closes — even on ctx cancel or a
-// writer error — because the scanner sends per-check findings unconditionally
+// Implementations MUST drain `in` until it closes, even on ctx cancel or a
+// writer error; because the scanner sends per-check findings unconditionally
 // and a non-draining reporter will deadlock the upstream pipeline. After a
 // writer error the recommended pattern is to remember the first error,
 // continue ranging over `in` to a no-op, and return the saved error at the end.
@@ -309,9 +309,9 @@ func (sarifReporter) Write(ctx context.Context, w io.Writer, in <-chan checks.Fi
 		Driver sarifDriver `json:"driver"`
 	}
 	type sarifRun struct {
-		Tool       sarifTool                     `json:"tool"`
-		Results    []sarifResult                 `json:"results"`
-		Properties map[string]any                `json:"properties,omitempty"`
+		Tool       sarifTool      `json:"tool"`
+		Results    []sarifResult  `json:"results"`
+		Properties map[string]any `json:"properties,omitempty"`
 	}
 	type sarifLog struct {
 		Schema  string     `json:"$schema"`

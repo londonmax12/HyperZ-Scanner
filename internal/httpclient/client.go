@@ -17,8 +17,18 @@ type Client struct {
 	limiter      *HostLimiter
 	maxRetries   int
 	maxRetryWait time.Duration
+	basicAuth    *BasicAuth
+	bearerToken  string
+	extraHeaders http.Header
 	nowFn        func() time.Time // overridable for tests parsing HTTP-date Retry-After
 	sleepFn      func(context.Context, time.Duration) error
+}
+
+// BasicAuth holds HTTP Basic credentials applied to every outgoing request
+// that doesn't already carry an Authorization header.
+type BasicAuth struct {
+	Username string
+	Password string
 }
 
 type Config struct {
@@ -42,6 +52,21 @@ type Config struct {
 	// MaxRetryWait caps how long a Retry-After header can ask us to sleep
 	// for a single retry. Zero means "use a sensible default" (30s).
 	MaxRetryWait time.Duration
+	// Jar, when non-nil, stores and replays cookies across requests via the
+	// underlying http.Client. Callers can pre-seed it (e.g. session cookies)
+	// before passing it in.
+	Jar http.CookieJar
+	// BasicAuth, when non-nil, applies HTTP Basic credentials to every
+	// outgoing request that doesn't already carry an Authorization header.
+	BasicAuth *BasicAuth
+	// BearerToken, when non-empty, sets `Authorization: Bearer <token>` on
+	// every request that doesn't already carry an Authorization header.
+	// Ignored when BasicAuth is also set.
+	BearerToken string
+	// ExtraHeaders are applied to every outgoing request. Caller-set headers
+	// on a specific request win; otherwise these are added in. Useful for
+	// custom auth tokens (e.g. X-API-Key) or canary identifiers.
+	ExtraHeaders http.Header
 }
 
 func New(cfg Config) *Client {
@@ -77,15 +102,26 @@ func New(cfg Config) *Client {
 		maxWait = 30 * time.Second
 	}
 	return &Client{
-		http:         &http.Client{Timeout: cfg.Timeout, Transport: transport},
+		http: &http.Client{
+			Timeout:   cfg.Timeout,
+			Transport: transport,
+			Jar:       cfg.Jar,
+		},
 		userAgent:    cfg.UserAgent,
 		limiter:      cfg.Limiter,
 		maxRetries:   cfg.MaxRetries,
 		maxRetryWait: maxWait,
+		basicAuth:    cfg.BasicAuth,
+		bearerToken:  cfg.BearerToken,
+		extraHeaders: cfg.ExtraHeaders.Clone(),
 		nowFn:        time.Now,
 		sleepFn:      sleepCtx,
 	}
 }
+
+// Jar returns the cookie jar wired into the underlying http.Client (may be
+// nil). Exposed so the CLI can pre-seed cookies after constructing the client.
+func (c *Client) Jar() http.CookieJar { return c.http.Jar }
 
 // Do issues req, applying the host limiter and default User-Agent. The
 // caller-provided ctx takes precedence over any context already attached to
@@ -100,6 +136,22 @@ func (c *Client) Do(ctx context.Context, req *http.Request) (*http.Response, err
 	req = req.WithContext(ctx)
 	if c.userAgent != "" && req.Header.Get("User-Agent") == "" {
 		req.Header.Set("User-Agent", c.userAgent)
+	}
+	for k, vs := range c.extraHeaders {
+		if req.Header.Get(k) != "" {
+			continue
+		}
+		for _, v := range vs {
+			req.Header.Add(k, v)
+		}
+	}
+	if req.Header.Get("Authorization") == "" {
+		switch {
+		case c.basicAuth != nil:
+			req.SetBasicAuth(c.basicAuth.Username, c.basicAuth.Password)
+		case c.bearerToken != "":
+			req.Header.Set("Authorization", "Bearer "+c.bearerToken)
+		}
 	}
 
 	attempts := 1 + c.maxRetries
