@@ -2,7 +2,11 @@ package checks
 
 import (
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
 	"fmt"
+	"net/url"
+	"strings"
 
 	"github.com/londonball/hyperz/internal/httpclient"
 )
@@ -44,12 +48,106 @@ func ParseMode(s string) (Mode, error) {
 	}
 }
 
+// Evidence captures the request/response artifact that justifies a finding.
+// Snippet is a short, human-readable excerpt; request line, response status,
+// a few headers, and/or a body fragment. kept small enough to fit inline in
+// reports.
+type Evidence struct {
+	Method     string `json:"method,omitempty"`
+	RequestURL string `json:"request_url,omitempty"`
+	Status     int    `json:"status,omitempty"`
+	Snippet    string `json:"snippet,omitempty"`
+}
+
+// Finding is the report-facing record of one issue at one location.
+//
+// Target is the scan root the user supplied. URL is where the issue was
+// actually observed (which equals Target for site-wide checks, but differs
+// for per-page checks discovered via crawling).
+//
+// DedupeKey is a stable identifier for the *issue*, not the report row —
+// scope it as narrowly as the issue requires (per-page for XSS, per-host for
+// missing security headers, etc.) so the same problem doesn't flood the
+// output. See MakeDedupeKey and HostScope.
 type Finding struct {
-	Check    string   `json:"check"`
-	Target   string   `json:"target"`
-	Severity Severity `json:"severity"`
-	Title    string   `json:"title"`
-	Detail   string   `json:"detail,omitempty"`
+	Check       string    `json:"check"`
+	Target      string    `json:"target"`
+	URL         string    `json:"url,omitempty"`
+	Severity    Severity  `json:"severity"`
+	Title       string    `json:"title"`
+	Detail      string    `json:"detail,omitempty"`
+	CWE         string    `json:"cwe,omitempty"`
+	OWASP       string    `json:"owasp,omitempty"`
+	Remediation string    `json:"remediation,omitempty"`
+	Evidence    *Evidence `json:"evidence,omitempty"`
+	DedupeKey   string    `json:"dedupe_key,omitempty"`
+}
+
+// MakeDedupeKey hashes its parts into a stable 16-char hex fingerprint. A
+// 0x00 separator prevents accidental collisions when one part borrows from
+// the next (e.g. "ab"|"c" vs "a"|"bc"). SHA-1's collision weakness doesn't
+// matter here; there's no adversary, only deterministic grouping.
+func MakeDedupeKey(parts ...string) string {
+	h := sha1.New()
+	for i, p := range parts {
+		if i > 0 {
+			h.Write([]byte{0})
+		}
+		h.Write([]byte(p))
+	}
+	return hex.EncodeToString(h.Sum(nil))[:16]
+}
+
+// HostScope returns "scheme://host" for use as a dedupe scope. Site-wide
+// checks (headers, TLS config, cookie flags) should dedupe at this scope so
+// the same misconfiguration doesn't fire once per crawled page. Returns the
+// input unchanged if it can't be parsed.
+func HostScope(rawurl string) string {
+	u, err := url.Parse(rawurl)
+	if err != nil || u.Host == "" {
+		return rawurl
+	}
+	return u.Scheme + "://" + u.Host
+}
+
+// BuildEvidence produces a compact Evidence for an *http.Response-style
+// observation. headers is rendered with one "Key: Value" per line; long
+// values are truncated. snippet keeps total size bounded so reports don't
+// balloon when a target returns large headers.
+func BuildEvidence(method, reqURL string, status int, headers map[string][]string, bodyPreview string) *Evidence {
+	const maxHeaderVal = 200
+	var b strings.Builder
+	keys := make([]string, 0, len(headers))
+	for k := range headers {
+		keys = append(keys, k)
+	}
+	// Stable order without pulling sort: simple insertion sort, short list.
+	for i := 1; i < len(keys); i++ {
+		for j := i; j > 0 && keys[j-1] > keys[j]; j-- {
+			keys[j-1], keys[j] = keys[j], keys[j-1]
+		}
+	}
+	for _, k := range keys {
+		for _, v := range headers[k] {
+			if len(v) > maxHeaderVal {
+				v = v[:maxHeaderVal] + "…"
+			}
+			b.WriteString(k)
+			b.WriteString(": ")
+			b.WriteString(v)
+			b.WriteByte('\n')
+		}
+	}
+	if bodyPreview != "" {
+		b.WriteByte('\n')
+		b.WriteString(bodyPreview)
+	}
+	return &Evidence{
+		Method:     method,
+		RequestURL: reqURL,
+		Status:     status,
+		Snippet:    b.String(),
+	}
 }
 
 type Check interface {

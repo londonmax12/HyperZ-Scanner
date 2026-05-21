@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -45,6 +46,28 @@ func New(format string) (Reporter, error) {
 	}
 }
 
+// Dedupe forwards findings from in to a new channel, dropping any whose
+// DedupeKey has already been seen. Findings without a DedupeKey are always
+// forwarded — checks opt into dedupe by setting a key. The returned channel
+// is closed when in is closed, preserving the stream contract.
+func Dedupe(in <-chan checks.Finding) <-chan checks.Finding {
+	out := make(chan checks.Finding, cap(in))
+	go func() {
+		defer close(out)
+		seen := map[string]struct{}{}
+		for f := range in {
+			if k := f.DedupeKey; k != "" {
+				if _, ok := seen[k]; ok {
+					continue
+				}
+				seen[k] = struct{}{}
+			}
+			out <- f
+		}
+	}()
+	return out
+}
+
 // ---------- text (streaming) ----------
 
 type textReporter struct{}
@@ -55,19 +78,46 @@ func (textReporter) Write(ctx context.Context, w io.Writer, in <-chan checks.Fin
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if _, err := fmt.Fprintf(w, "[%s] %s — %s — %s\n", f.Severity, f.Check, f.Target, f.Title); err != nil {
+		if err := writeTextFinding(w, f); err != nil {
 			return err
-		}
-		if f.Detail != "" {
-			if _, err := fmt.Fprintf(w, "    %s\n", f.Detail); err != nil {
-				return err
-			}
 		}
 		count++
 	}
 	if count == 0 {
 		_, err := fmt.Fprintln(w, "no findings")
 		return err
+	}
+	return nil
+}
+
+func writeTextFinding(w io.Writer, f checks.Finding) error {
+	loc := f.URL
+	if loc == "" {
+		loc = f.Target
+	}
+	if _, err := fmt.Fprintf(w, "[%s] %s — %s — %s\n", f.Severity, f.Check, loc, f.Title); err != nil {
+		return err
+	}
+	if f.Detail != "" {
+		if _, err := fmt.Fprintf(w, "    %s\n", f.Detail); err != nil {
+			return err
+		}
+	}
+	if tags := joinNonEmpty(" ", f.CWE, f.OWASP); tags != "" {
+		if _, err := fmt.Fprintf(w, "    refs: %s\n", tags); err != nil {
+			return err
+		}
+	}
+	if f.Remediation != "" {
+		if _, err := fmt.Fprintf(w, "    fix:  %s\n", f.Remediation); err != nil {
+			return err
+		}
+	}
+	if e := f.Evidence; e != nil && (e.Method != "" || e.Snippet != "" || e.Status != 0) {
+		if _, err := fmt.Fprintf(w, "    evidence: %s %s → %d\n",
+			defaultStr(e.Method, "GET"), defaultStr(e.RequestURL, loc), e.Status); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -93,16 +143,36 @@ func (jsonlReporter) Write(ctx context.Context, w io.Writer, in <-chan checks.Fi
 
 type csvReporter struct{}
 
+var csvHeader = []string{
+	"severity", "check", "target", "url", "title", "detail",
+	"cwe", "owasp", "remediation",
+	"evidence_method", "evidence_url", "evidence_status",
+	"dedupe_key",
+}
+
 func (csvReporter) Write(ctx context.Context, w io.Writer, in <-chan checks.Finding) error {
 	cw := csv.NewWriter(w)
-	if err := cw.Write([]string{"severity", "check", "target", "title", "detail"}); err != nil {
+	if err := cw.Write(csvHeader); err != nil {
 		return err
 	}
 	for f := range in {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if err := cw.Write([]string{string(f.Severity), f.Check, f.Target, f.Title, f.Detail}); err != nil {
+		var method, eURL, status string
+		if e := f.Evidence; e != nil {
+			method = e.Method
+			eURL = e.RequestURL
+			if e.Status != 0 {
+				status = strconv.Itoa(e.Status)
+			}
+		}
+		if err := cw.Write([]string{
+			string(f.Severity), f.Check, f.Target, f.URL, f.Title, f.Detail,
+			f.CWE, f.OWASP, f.Remediation,
+			method, eURL, status,
+			f.DedupeKey,
+		}); err != nil {
 			return err
 		}
 	}
@@ -144,15 +214,19 @@ func (sarifReporter) Write(ctx context.Context, w io.Writer, in <-chan checks.Fi
 		PhysicalLocation sarifPhysicalLoc `json:"physicalLocation"`
 	}
 	type sarifResult struct {
-		RuleID    string          `json:"ruleId"`
-		Level     string          `json:"level"`
-		Message   sarifMessage    `json:"message"`
-		Locations []sarifLocation `json:"locations"`
+		RuleID              string            `json:"ruleId"`
+		Level               string            `json:"level"`
+		Message             sarifMessage      `json:"message"`
+		Locations           []sarifLocation   `json:"locations"`
+		PartialFingerprints map[string]string `json:"partialFingerprints,omitempty"`
+		Properties          map[string]string `json:"properties,omitempty"`
 	}
 	type sarifRule struct {
-		ID               string       `json:"id"`
-		Name             string       `json:"name"`
-		ShortDescription sarifMessage `json:"shortDescription"`
+		ID               string            `json:"id"`
+		Name             string            `json:"name"`
+		ShortDescription sarifMessage      `json:"shortDescription"`
+		HelpURI          string            `json:"helpUri,omitempty"`
+		Properties       map[string]string `json:"properties,omitempty"`
 	}
 	type sarifDriver struct {
 		Name           string      `json:"name"`
@@ -176,22 +250,53 @@ func (sarifReporter) Write(ctx context.Context, w io.Writer, in <-chan checks.Fi
 	results := make([]sarifResult, 0, len(findings))
 	for _, f := range findings {
 		if _, ok := rulesSeen[f.Check]; !ok {
-			rulesSeen[f.Check] = sarifRule{
+			rule := sarifRule{
 				ID:               f.Check,
 				Name:             f.Check,
 				ShortDescription: sarifMessage{Text: f.Check},
 			}
+			if f.CWE != "" {
+				rule.HelpURI = cweURL(f.CWE)
+				rule.Properties = map[string]string{"cwe": f.CWE}
+				if f.OWASP != "" {
+					rule.Properties["owasp"] = f.OWASP
+				}
+			} else if f.OWASP != "" {
+				rule.Properties = map[string]string{"owasp": f.OWASP}
+			}
+			rulesSeen[f.Check] = rule
 		}
-		results = append(results, sarifResult{
+
+		loc := f.URL
+		if loc == "" {
+			loc = f.Target
+		}
+		res := sarifResult{
 			RuleID:  f.Check,
 			Level:   sarifLevel(f.Severity),
 			Message: sarifMessage{Text: f.Title + ifDetail(f.Detail)},
 			Locations: []sarifLocation{{
 				PhysicalLocation: sarifPhysicalLoc{
-					ArtifactLocation: sarifArtifactLoc{URI: f.Target},
+					ArtifactLocation: sarifArtifactLoc{URI: loc},
 				},
 			}},
-		})
+		}
+		if f.DedupeKey != "" {
+			res.PartialFingerprints = map[string]string{"hyperz/v1": f.DedupeKey}
+		}
+		if f.Remediation != "" || f.CWE != "" || f.OWASP != "" {
+			res.Properties = map[string]string{}
+			if f.CWE != "" {
+				res.Properties["cwe"] = f.CWE
+			}
+			if f.OWASP != "" {
+				res.Properties["owasp"] = f.OWASP
+			}
+			if f.Remediation != "" {
+				res.Properties["remediation"] = f.Remediation
+			}
+		}
+		results = append(results, res)
 	}
 
 	rules := make([]sarifRule, 0, len(rulesSeen))
@@ -233,6 +338,16 @@ func ifDetail(d string) string {
 	return " — " + d
 }
 
+// cweURL maps a "CWE-123" id to its mitre.org page so SARIF viewers can link
+// out. Anything that doesn't start with "CWE-" is returned as-is.
+func cweURL(cwe string) string {
+	id := strings.TrimPrefix(cwe, "CWE-")
+	if id == cwe {
+		return ""
+	}
+	return "https://cwe.mitre.org/data/definitions/" + id + ".html"
+}
+
 // ---------- markdown (buffered) ----------
 
 type markdownReporter struct{}
@@ -272,10 +387,45 @@ func (markdownReporter) Write(ctx context.Context, w io.Writer, in <-chan checks
 	}
 
 	fmt.Fprintf(w, "## Findings\n\n")
-	fmt.Fprintf(w, "| Severity | Check | Target | Title |\n|---|---|---|---|\n")
+	fmt.Fprintf(w, "| Severity | Check | URL | Title | CWE | OWASP |\n|---|---|---|---|---|---|\n")
 	for _, f := range findings {
-		fmt.Fprintf(w, "| %s | %s | %s | %s |\n",
-			f.Severity, f.Check, f.Target, escapePipe(f.Title))
+		loc := f.URL
+		if loc == "" {
+			loc = f.Target
+		}
+		fmt.Fprintf(w, "| %s | %s | %s | %s | %s | %s |\n",
+			f.Severity, f.Check, escapePipe(loc), escapePipe(f.Title),
+			escapePipe(f.CWE), escapePipe(f.OWASP))
+	}
+
+	fmt.Fprintf(w, "\n## Details\n\n")
+	for _, f := range findings {
+		loc := f.URL
+		if loc == "" {
+			loc = f.Target
+		}
+		fmt.Fprintf(w, "### [%s] %s — %s\n\n", f.Severity, f.Check, escapePipe(f.Title))
+		fmt.Fprintf(w, "- **URL:** %s\n", loc)
+		if tags := joinNonEmpty(", ", f.CWE, f.OWASP); tags != "" {
+			fmt.Fprintf(w, "- **Refs:** %s\n", tags)
+		}
+		if f.Detail != "" {
+			fmt.Fprintf(w, "- **Detail:** %s\n", f.Detail)
+		}
+		if f.Remediation != "" {
+			fmt.Fprintf(w, "- **Remediation:** %s\n", f.Remediation)
+		}
+		if e := f.Evidence; e != nil {
+			fmt.Fprintf(w, "- **Evidence:** `%s %s → %d`\n",
+				defaultStr(e.Method, "GET"), defaultStr(e.RequestURL, loc), e.Status)
+			if e.Snippet != "" {
+				fmt.Fprintf(w, "\n```\n%s\n```\n", e.Snippet)
+			}
+		}
+		if f.DedupeKey != "" {
+			fmt.Fprintf(w, "- **Fingerprint:** `%s`\n", f.DedupeKey)
+		}
+		fmt.Fprintln(w)
 	}
 	return nil
 }
@@ -297,6 +447,23 @@ func drain(ctx context.Context, in <-chan checks.Finding) []checks.Finding {
 			findings = append(findings, f)
 		}
 	}
+}
+
+func joinNonEmpty(sep string, parts ...string) string {
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return strings.Join(out, sep)
+}
+
+func defaultStr(s, fallback string) string {
+	if s == "" {
+		return fallback
+	}
+	return s
 }
 
 // Write is a one-shot helper kept for the single-target slice path.

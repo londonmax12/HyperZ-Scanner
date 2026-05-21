@@ -236,12 +236,54 @@ func (d *pdfDoc) renderSeverityHeading(sev checks.Severity, n int) {
 func (d *pdfDoc) renderFinding(f checks.Finding) {
 	r, g, b := severityRGB(f.Severity)
 	d.writeLine(fmt.Sprintf("[%s] %s", f.Severity, f.Check), fontBold, pdfSizeH3, r, g, b)
-	d.writeWrapped("target: "+f.Target, 0, fontReg, pdfSizeBase, 0, 0, 0)
+	loc := f.URL
+	if loc == "" {
+		loc = f.Target
+	}
+	d.writeWrapped("url:    "+loc, 0, fontReg, pdfSizeBase, 0, 0, 0)
 	d.writeWrapped("title:  "+f.Title, 0, fontReg, pdfSizeBase, 0, 0, 0)
+	if refs := pdfJoinNonEmpty("  ", f.CWE, f.OWASP); refs != "" {
+		d.writeWrapped("refs:   "+refs, 0, fontReg, pdfSizeBase, 0.25, 0.25, 0.25)
+	}
 	if f.Detail != "" {
 		d.writeWrapped("detail: "+f.Detail, 0, fontReg, pdfSizeBase, 0.25, 0.25, 0.25)
 	}
+	if f.Remediation != "" {
+		d.writeWrapped("fix:    "+f.Remediation, 0, fontReg, pdfSizeBase, 0.20, 0.35, 0.20)
+	}
+	if e := f.Evidence; e != nil && (e.Method != "" || e.Status != 0 || e.Snippet != "") {
+		method := e.Method
+		if method == "" {
+			method = "GET"
+		}
+		reqURL := e.RequestURL
+		if reqURL == "" {
+			reqURL = loc
+		}
+		d.writeWrapped(
+			fmt.Sprintf("evidence: %s %s -> %d", method, reqURL, e.Status),
+			0, fontReg, pdfSizeBase, 0.30, 0.30, 0.30)
+		for _, line := range strings.Split(e.Snippet, "\n") {
+			if line == "" {
+				continue
+			}
+			d.writeWrapped(line, 12, fontReg, pdfSizeChrome, 0.35, 0.35, 0.35)
+		}
+	}
+	if f.DedupeKey != "" {
+		d.writeLine("id: "+f.DedupeKey, fontReg, pdfSizeChrome, 0.55, 0.55, 0.55)
+	}
 	d.gap(4)
+}
+
+func pdfJoinNonEmpty(sep string, parts ...string) string {
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return strings.Join(out, sep)
 }
 
 func (d *pdfDoc) separator() {

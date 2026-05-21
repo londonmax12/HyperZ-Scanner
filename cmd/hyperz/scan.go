@@ -198,8 +198,13 @@ func runScan(ctx context.Context, cfg *scanConfig, mode checks.Mode) int {
 	scanErr := make(chan error, 1)
 	go func() { scanErr <- s.ScanAll(ctx, targets, findings) }()
 
+	// Dedupe before reporting so site-wide issues (e.g. missing security
+	// headers) don't fire once per crawled page. Checks opt in by setting
+	// Finding.DedupeKey; findings without a key pass through unchanged.
+	deduped := report.Dedupe(findings)
+
 	exit := exitOK
-	if err := rep.Write(ctx, out, findings); err != nil {
+	if err := rep.Write(ctx, out, deduped); err != nil {
 		fmt.Fprintln(os.Stderr, "report failed:", err)
 		exit = exitFailure
 	}

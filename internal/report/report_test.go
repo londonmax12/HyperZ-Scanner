@@ -132,9 +132,8 @@ func TestCSVReporterIncludesHeader(t *testing.T) {
 	if len(rows) != 4 {
 		t.Fatalf("got %d rows (incl. header), want 4", len(rows))
 	}
-	wantHeader := []string{"severity", "check", "target", "title", "detail"}
-	if !reflect.DeepEqual(rows[0], wantHeader) {
-		t.Fatalf("header = %v, want %v", rows[0], wantHeader)
+	if !reflect.DeepEqual(rows[0], csvHeader) {
+		t.Fatalf("header = %v, want %v", rows[0], csvHeader)
 	}
 	if rows[1][0] != "high" || rows[1][1] != "security-headers" || rows[1][2] != "http://a" {
 		t.Fatalf("row 1 = %v", rows[1])
@@ -366,6 +365,154 @@ func TestPDFWrap(t *testing.T) {
 		if len(line) > 5 {
 			t.Errorf("hard-split overflowed: %q", line)
 		}
+	}
+}
+
+func TestDedupeDropsRepeats(t *testing.T) {
+	in := make(chan checks.Finding, 5)
+	in <- checks.Finding{Title: "a", DedupeKey: "k1"}
+	in <- checks.Finding{Title: "a-dup", DedupeKey: "k1"}
+	in <- checks.Finding{Title: "b", DedupeKey: "k2"}
+	in <- checks.Finding{Title: "no-key-1"} // empty key always passes through
+	in <- checks.Finding{Title: "no-key-2"}
+	close(in)
+
+	got := []string{}
+	for f := range Dedupe(in) {
+		got = append(got, f.Title)
+	}
+	want := []string{"a", "b", "no-key-1", "no-key-2"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("dedupe got %v, want %v", got, want)
+	}
+}
+
+func TestDedupeClosesOutputWhenInputCloses(t *testing.T) {
+	in := make(chan checks.Finding)
+	out := Dedupe(in)
+	close(in)
+	if _, ok := <-out; ok {
+		t.Fatal("Dedupe output must close once input closes")
+	}
+}
+
+func TestTextReporterRendersNewFields(t *testing.T) {
+	findings := []checks.Finding{{
+		Check: "security-headers", Target: "http://t", URL: "http://t/page",
+		Severity: checks.SeverityMedium, Title: "missing CSP",
+		CWE: "CWE-693", OWASP: "A05:2021 Security Misconfiguration",
+		Remediation: "Set Content-Security-Policy",
+		Evidence: &checks.Evidence{
+			Method: "GET", RequestURL: "http://t/page", Status: 200,
+		},
+	}}
+	out := writeFormat(t, "text", findings)
+	for _, want := range []string{
+		"http://t/page", // URL, not Target, is the location
+		"refs: CWE-693 A05:2021 Security Misconfiguration",
+		"fix:  Set Content-Security-Policy",
+		"evidence: GET http://t/page → 200",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("text missing %q\nfull:\n%s", want, out)
+		}
+	}
+}
+
+func TestCSVRowIncludesEvidenceAndDedupe(t *testing.T) {
+	findings := []checks.Finding{{
+		Check: "security-headers", Target: "http://t", URL: "http://t/p",
+		Severity: checks.SeverityLow, Title: "x", CWE: "CWE-1021",
+		OWASP: "A05", Remediation: "set X-Frame-Options",
+		Evidence:  &checks.Evidence{Method: "GET", RequestURL: "http://t/p", Status: 200},
+		DedupeKey: "abc123",
+	}}
+	out := writeFormat(t, "csv", findings)
+	r := csv.NewReader(strings.NewReader(out))
+	rows, err := r.ReadAll()
+	if err != nil {
+		t.Fatalf("csv: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(rows))
+	}
+	idx := map[string]int{}
+	for i, h := range rows[0] {
+		idx[h] = i
+	}
+	for col, want := range map[string]string{
+		"url":             "http://t/p",
+		"cwe":             "CWE-1021",
+		"owasp":           "A05",
+		"remediation":     "set X-Frame-Options",
+		"evidence_method": "GET",
+		"evidence_url":    "http://t/p",
+		"evidence_status": "200",
+		"dedupe_key":      "abc123",
+	} {
+		i, ok := idx[col]
+		if !ok {
+			t.Fatalf("CSV missing column %q (header=%v)", col, rows[0])
+		}
+		if rows[1][i] != want {
+			t.Errorf("CSV col %q = %q, want %q", col, rows[1][i], want)
+		}
+	}
+}
+
+func TestSARIFIncludesCWEAndFingerprint(t *testing.T) {
+	findings := []checks.Finding{{
+		Check: "security-headers", Target: "http://t", URL: "http://t/p",
+		Severity: checks.SeverityMedium, Title: "missing CSP",
+		CWE: "CWE-693", OWASP: "A05:2021", Remediation: "set it",
+		DedupeKey: "fp1",
+	}}
+	out := writeFormat(t, "sarif", findings)
+	var doc struct {
+		Runs []struct {
+			Tool struct {
+				Driver struct {
+					Rules []struct {
+						ID         string            `json:"id"`
+						HelpURI    string            `json:"helpUri"`
+						Properties map[string]string `json:"properties"`
+					} `json:"rules"`
+				} `json:"driver"`
+			} `json:"tool"`
+			Results []struct {
+				Locations []struct {
+					PhysicalLocation struct {
+						ArtifactLocation struct{ URI string } `json:"artifactLocation"`
+					} `json:"physicalLocation"`
+				} `json:"locations"`
+				PartialFingerprints map[string]string `json:"partialFingerprints"`
+				Properties          map[string]string `json:"properties"`
+			} `json:"results"`
+		} `json:"runs"`
+	}
+	if err := json.Unmarshal([]byte(out), &doc); err != nil {
+		t.Fatalf("sarif decode: %v\n%s", err, out)
+	}
+	rule := doc.Runs[0].Tool.Driver.Rules[0]
+	if !strings.Contains(rule.HelpURI, "cwe.mitre.org") || !strings.Contains(rule.HelpURI, "693") {
+		t.Errorf("rule HelpURI = %q, want cwe.mitre.org/.../693", rule.HelpURI)
+	}
+	if rule.Properties["cwe"] != "CWE-693" {
+		t.Errorf("rule props cwe = %q", rule.Properties["cwe"])
+	}
+	if rule.Properties["owasp"] != "A05:2021" {
+		t.Errorf("rule props owasp = %q", rule.Properties["owasp"])
+	}
+	res := doc.Runs[0].Results[0]
+	if res.Locations[0].PhysicalLocation.ArtifactLocation.URI != "http://t/p" {
+		t.Errorf("result URI should be URL not Target: %q",
+			res.Locations[0].PhysicalLocation.ArtifactLocation.URI)
+	}
+	if res.PartialFingerprints["hyperz/v1"] != "fp1" {
+		t.Errorf("partialFingerprints = %v", res.PartialFingerprints)
+	}
+	if res.Properties["remediation"] != "set it" {
+		t.Errorf("result remediation = %q", res.Properties["remediation"])
 	}
 }
 

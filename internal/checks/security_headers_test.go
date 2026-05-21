@@ -124,3 +124,106 @@ func TestSecurityHeadersName(t *testing.T) {
 		t.Fatalf("Name = %q, want security-headers", got)
 	}
 }
+
+func TestSecurityHeadersPopulatesEnrichedFields(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Send back a couple of headers so Evidence isn't empty, but omit CSP.
+		w.Header().Set("Server", "nginx")
+		w.Header().Set("Strict-Transport-Security", "max-age=63072000")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	findings, err := SecurityHeaders{}.Run(context.Background(), newTestClient(t), srv.URL)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("got %d findings, want 1 (only CSP missing)", len(findings))
+	}
+	f := findings[0]
+	if f.CWE != "CWE-693" {
+		t.Errorf("CWE = %q, want CWE-693", f.CWE)
+	}
+	if f.OWASP == "" {
+		t.Errorf("OWASP empty")
+	}
+	if f.Remediation == "" {
+		t.Errorf("Remediation empty")
+	}
+	if f.URL == "" {
+		t.Errorf("URL empty — should be the observed request URL")
+	}
+	if f.DedupeKey == "" {
+		t.Errorf("DedupeKey empty")
+	}
+	if f.Evidence == nil {
+		t.Fatalf("Evidence is nil")
+	}
+	if f.Evidence.Method != "GET" || f.Evidence.Status != 200 {
+		t.Errorf("Evidence method/status = %q/%d", f.Evidence.Method, f.Evidence.Status)
+	}
+	if !strings.Contains(f.Evidence.Snippet, "Server") {
+		t.Errorf("Evidence snippet should contain observed headers; got %q", f.Evidence.Snippet)
+	}
+}
+
+func TestSecurityHeadersDedupeKeysAreStableAndPerHeader(t *testing.T) {
+	// Two requests to the same host must produce the same dedupe key for the
+	// same missing header (that's the whole point — site-wide dedupe). And
+	// keys for different missing headers must differ.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	run := func() map[string]string {
+		findings, err := SecurityHeaders{}.Run(context.Background(), newTestClient(t), srv.URL)
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		out := map[string]string{}
+		for _, f := range findings {
+			out[strings.TrimPrefix(f.Title, "missing security header: ")] = f.DedupeKey
+		}
+		return out
+	}
+	a, b := run(), run()
+	if len(a) != 5 || len(b) != 5 {
+		t.Fatalf("expected 5 findings each; got %d / %d", len(a), len(b))
+	}
+	for header, key := range a {
+		if b[header] != key {
+			t.Errorf("dedupe key for %q drifted: %q vs %q", header, key, b[header])
+		}
+	}
+	seen := map[string]string{}
+	for header, key := range a {
+		if other, dup := seen[key]; dup {
+			t.Errorf("headers %q and %q share dedupe key %q", other, header, key)
+		}
+		seen[key] = header
+	}
+}
+
+func TestMakeDedupeKeySeparatorAvoidsCollision(t *testing.T) {
+	if MakeDedupeKey("ab", "c") == MakeDedupeKey("a", "bc") {
+		t.Fatal("MakeDedupeKey must not collide on adjacent-part fusion")
+	}
+}
+
+func TestHostScope(t *testing.T) {
+	cases := map[string]string{
+		"https://example.com/path?q=1": "https://example.com",
+		"http://example.com:8080/x":    "http://example.com:8080",
+		"not a url":                    "not a url",
+	}
+	for in, want := range cases {
+		if got := HostScope(in); got != want {
+			t.Errorf("HostScope(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
