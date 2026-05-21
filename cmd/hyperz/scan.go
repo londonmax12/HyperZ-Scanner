@@ -30,10 +30,12 @@ type scanConfig struct {
 	userAgent   string
 	format      string
 	mode        string
-	concurrency int
-	rps         float64
-	burst       int
-	outputPath  string
+	concurrency  int
+	rps          float64
+	burst        int
+	maxRetries   int
+	maxRetryWait time.Duration
+	outputPath   string
 
 	crawl        bool
 	crawlPages   int
@@ -111,6 +113,10 @@ Modes:
 	f.IntVar(&cfg.concurrency, "concurrency", 8, "number of targets scanned in parallel")
 	f.Float64Var(&cfg.rps, "rate", 5, "max requests per second per host")
 	f.IntVar(&cfg.burst, "burst", 5, "per-host rate limiter burst")
+	f.IntVar(&cfg.maxRetries, "max-retries", 2,
+		"retry idempotent requests this many times on 429/503 (0 disables)")
+	f.DurationVar(&cfg.maxRetryWait, "max-retry-wait", 30*time.Second,
+		"cap on a single Retry-After sleep")
 	f.StringVarP(&cfg.outputPath, "output", "o", "-", "output path ('-' for stdout)")
 
 	f.BoolVar(&cfg.crawl, "crawl", false, "discover scan targets by crawling from each seed URL")
@@ -166,9 +172,11 @@ func runScan(ctx context.Context, cfg *scanConfig, mode checks.Mode) int {
 		return exitFailure
 	}
 	clientCfg := httpclient.Config{
-		Timeout:   cfg.timeout,
-		UserAgent: cfg.userAgent,
-		Limiter:   httpclient.NewHostLimiter(cfg.rps, cfg.burst),
+		Timeout:      cfg.timeout,
+		UserAgent:    cfg.userAgent,
+		Limiter:      httpclient.NewHostLimiter(cfg.rps, cfg.burst),
+		MaxRetries:   cfg.maxRetries,
+		MaxRetryWait: cfg.maxRetryWait,
 	}
 	var pool *proxy.SmartPool
 	if len(proxies) > 0 {

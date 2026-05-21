@@ -58,6 +58,47 @@ func TestHostLimiterContextCancellation(t *testing.T) {
 	}
 }
 
+func TestHostLimiterPenalizeHalves(t *testing.T) {
+	lim := NewHostLimiter(10, 1)
+	// Materialize the host limiter at the base rate.
+	if err := lim.Wait(context.Background(), "h"); err != nil {
+		t.Fatalf("seed wait: %v", err)
+	}
+	if got := lim.Limit("h"); got != 10 {
+		t.Fatalf("baseline rate = %v, want 10", got)
+	}
+	lim.Penalize("h")
+	if got := lim.Limit("h"); got != 5 {
+		t.Fatalf("after 1 penalty rate = %v, want 5", got)
+	}
+	lim.Penalize("h")
+	if got := lim.Limit("h"); got != 2.5 {
+		t.Fatalf("after 2 penalties rate = %v, want 2.5", got)
+	}
+}
+
+func TestHostLimiterPenalizeFloor(t *testing.T) {
+	lim := NewHostLimiter(1, 1)
+	for i := 0; i < 20; i++ {
+		lim.Penalize("h")
+	}
+	got := lim.Limit("h")
+	if got > 0.1+1e-9 || got < 0.1-1e-9 {
+		t.Fatalf("floored rate = %v, want ~0.1", got)
+	}
+}
+
+func TestHostLimiterPenalizeUnknownHostMaterializes(t *testing.T) {
+	// Penalize on a host that has never been Wait'd should still install a
+	// limiter so the *next* Wait sees the lowered rate (rather than
+	// re-creating at the base rate and silently ignoring the penalty).
+	lim := NewHostLimiter(10, 1)
+	lim.Penalize("fresh")
+	if got := lim.Limit("fresh"); got != 5 {
+		t.Fatalf("rate after penalty on fresh host = %v, want 5", got)
+	}
+}
+
 func TestHostLimiterConcurrentSameHostShares(t *testing.T) {
 	// Two goroutines hitting the same host should both observe the same
 	// limiter (i.e., map access is thread-safe and reuse occurs).
