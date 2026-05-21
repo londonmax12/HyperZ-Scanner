@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/londonball/hyperz/internal/checks"
 	"github.com/londonball/hyperz/internal/report"
 )
 
@@ -20,6 +21,7 @@ type config struct {
 	timeout     time.Duration
 	userAgent   string
 	format      string
+	mode        checks.Mode
 	concurrency int
 	rps         float64
 	burst       int
@@ -53,6 +55,8 @@ func parseFlags() (*config, error) {
 	userAgent := flag.String("user-agent", "hyperz/0.1", "User-Agent header to send")
 	format := flag.String("format", "text",
 		"output format: "+strings.Join(report.Formats(), "|"))
+	mode := flag.String("mode", string(checks.ModePassive),
+		"scan mode: passive (safe, observation-only) | active (also runs intrusive probes)")
 	concurrency := flag.Int("concurrency", 8, "number of targets scanned in parallel")
 	rps := flag.Float64("rate", 5, "max requests per second per host")
 	burst := flag.Int("burst", 5, "per-host rate limiter burst")
@@ -67,12 +71,17 @@ func parseFlags() (*config, error) {
 	if len(urls) == 0 && *urlsFile == "" {
 		return nil, errors.New("provide -url and/or -urls-file")
 	}
+	parsedMode, err := checks.ParseMode(*mode)
+	if err != nil {
+		return nil, err
+	}
 	return &config{
 		urls:          urls,
 		urlsFile:      *urlsFile,
 		timeout:       *timeout,
 		userAgent:     *userAgent,
 		format:        *format,
+		mode:          parsedMode,
 		concurrency:   *concurrency,
 		rps:           *rps,
 		burst:         *burst,

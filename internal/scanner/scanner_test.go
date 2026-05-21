@@ -21,7 +21,8 @@ type stubCheck struct {
 	hits     atomic.Int64
 }
 
-func (s *stubCheck) Name() string { return s.name }
+func (s *stubCheck) Name() string      { return s.name }
+func (s *stubCheck) Mode() checks.Mode { return checks.ModePassive }
 func (s *stubCheck) Run(ctx context.Context, _ *httpclient.Client, target string) ([]checks.Finding, error) {
 	s.hits.Add(1)
 	if s.delay > 0 {

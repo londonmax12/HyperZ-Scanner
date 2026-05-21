@@ -55,11 +55,16 @@ func run(ctx context.Context, cfg *config) int {
 	}
 	client := httpclient.New(clientCfg)
 
+	all := []checks.Check{
+		checks.SecurityHeaders{},
+	}
+	enabled := checks.Filter(all, cfg.mode)
+	fmt.Fprintf(os.Stderr, "[scan] mode=%s, %d/%d check(s) enabled\n",
+		cfg.mode, len(enabled), len(all))
+
 	var checkErrors atomic.Int64
 	s := scanner.New(client,
-		[]checks.Check{
-			checks.SecurityHeaders{},
-		},
+		enabled,
 		scanner.WithConcurrency(cfg.concurrency),
 		scanner.WithErrorHandler(func(target, check string, err error) {
 			checkErrors.Add(1)

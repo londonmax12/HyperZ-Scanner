@@ -22,10 +22,21 @@ go build ./cmd/hyperz
 hyperz -url https://example.com
 hyperz -url https://example.com -format json
 hyperz -url https://example.com -timeout 5s -user-agent "myscanner/1.0"
+hyperz -url https://example.com -mode active
 hyperz -url https://example.com -proxy http://127.0.0.1:8080
 hyperz -urls-file targets.txt -proxies-file proxies.txt
 hyperz -urls-file targets.txt -scrape-proxies
 ```
+
+### Modes
+
+`-mode passive` (default) runs only observation-only checks — it inspects
+responses to normal-looking requests and never sends payloads designed to
+trigger vulnerabilities. Safe to point at anything you're allowed to look at.
+
+`-mode active` adds intrusive probes (XSS, SQLi, traversal, etc.) on top of
+the passive set. Active scans can be logged as attacks; only run them
+against systems you have explicit authorization to test.
 
 ### Proxies
 
@@ -61,7 +72,8 @@ Implement the `checks.Check` interface and register it in
 ```go
 type MyCheck struct{}
 
-func (MyCheck) Name() string { return "my-check" }
+func (MyCheck) Name() string      { return "my-check" }
+func (MyCheck) Mode() checks.Mode { return checks.ModePassive } // or ModeActive
 
 func (MyCheck) Run(ctx context.Context, client *httpclient.Client, target string) ([]checks.Finding, error) {
     // ...

@@ -11,6 +11,8 @@ type SecurityHeaders struct{}
 
 func (SecurityHeaders) Name() string { return "security-headers" }
 
+func (SecurityHeaders) Mode() Mode { return ModePassive }
+
 func (c SecurityHeaders) Run(ctx context.Context, client *httpclient.Client, target string) ([]Finding, error) {
 	resp, err := client.Get(ctx, target)
 	if err != nil {
