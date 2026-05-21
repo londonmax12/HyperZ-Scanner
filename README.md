@@ -22,7 +22,7 @@ go build ./cmd/hyperz
 hyperz scan --url https://example.com
 hyperz scan --url https://example.com --format json -o report.json
 hyperz scan --url https://example.com --timeout 5s --user-agent "myscanner/1.0"
-hyperz scan --url https://example.com --mode active
+hyperz scan --url https://example.com --mode aggressive
 hyperz scan --url https://example.com --proxy http://127.0.0.1:8080
 hyperz scan --urls-file targets.txt --proxies-file proxies.txt
 hyperz scan --urls-file targets.txt --scrape-proxies
@@ -35,18 +35,26 @@ full flag reference. Other useful subcommands:
 ```
 hyperz version       # build info
 hyperz formats       # list output formats
-hyperz checks list   # list built-in checks and their mode
+hyperz checks list   # list built-in checks and their level
 ```
 
-### Modes
+### Scan levels
+
+`--mode` selects how invasive the scan is. Each level includes every check
+at or below it — an aggressive scan is a superset of a passive one, so you
+never silently drop the cheap observations.
 
 `--mode passive` (default) runs only observation-only checks — it inspects
 responses to normal-looking requests and never sends payloads designed to
 trigger vulnerabilities. Safe to point at anything you're allowed to look at.
 
-`--mode active` adds intrusive probes (XSS, SQLi, traversal, etc.) on top of
-the passive set. Active scans can be logged as attacks; only run them
+`--mode default` adds low-risk crafted probes (XSS, SQLi, traversal, etc.)
+on top of the passive set. These can be logged as attacks; only run them
 against systems you have explicit authorization to test.
+
+`--mode aggressive` adds noisy or heavy fuzzing (long wordlists, many
+requests) on top of default. Likely to trip rate limits or WAFs — reserve
+for explicit deep scans.
 
 ### Proxies
 
@@ -82,8 +90,8 @@ Implement the `checks.Check` interface and register it in the catalog at
 ```go
 type MyCheck struct{}
 
-func (MyCheck) Name() string      { return "my-check" }
-func (MyCheck) Mode() checks.Mode { return checks.ModePassive } // or ModeActive
+func (MyCheck) Name() string        { return "my-check" }
+func (MyCheck) Level() checks.Level { return checks.LevelPassive } // or LevelDefault / LevelAggressive
 
 func (MyCheck) Run(ctx context.Context, client *httpclient.Client, target string) ([]checks.Finding, error) {
     // ...

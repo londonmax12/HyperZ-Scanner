@@ -22,30 +22,51 @@ const (
 	SeverityCritical Severity = "critical"
 )
 
-// Mode classifies a check by how invasive it is.
+// Level classifies a check by how invasive it is. Levels are ordered:
+// running at a higher level includes every check at or below it.
 //
-// Passive checks only inspect responses to normal-looking requests; they
-// don't send payloads designed to trigger vulnerabilities. They're safe to
+// LevelPassive: only inspect responses to normal-looking requests. Safe to
 // run against any target you're allowed to look at.
 //
-// Active checks send crafted probes (XSS, SQLi, traversal, etc.) and may
-// be logged as attacks. Run them only against systems you have explicit
-// authorization to test.
-type Mode string
+// LevelDefault: crafted probes (XSS, SQLi, traversal, etc.) that may be
+// logged as attacks. Run only with authorization.
+//
+// LevelAggressive: noisy or heavy fuzzing; many requests, long wordlists,
+// likely to trip rate limits or WAFs. Reserve for explicit deep scans.
+//
+// Constants are spaced (10/20/30) so future intermediate tiers can slot in
+// without renumbering existing checks.
+type Level int
 
 const (
-	ModePassive Mode = "passive"
-	ModeActive  Mode = "active"
+	LevelPassive    Level = 10
+	LevelDefault    Level = 20
+	LevelAggressive Level = 30
 )
 
-func ParseMode(s string) (Mode, error) {
-	switch Mode(s) {
-	case ModePassive:
-		return ModePassive, nil
-	case ModeActive:
-		return ModeActive, nil
+func (l Level) String() string {
+	switch l {
+	case LevelPassive:
+		return "passive"
+	case LevelDefault:
+		return "default"
+	case LevelAggressive:
+		return "aggressive"
 	default:
-		return "", fmt.Errorf("invalid mode %q (want %q or %q)", s, ModePassive, ModeActive)
+		return fmt.Sprintf("level(%d)", int(l))
+	}
+}
+
+func ParseLevel(s string) (Level, error) {
+	switch s {
+	case "passive":
+		return LevelPassive, nil
+	case "default":
+		return LevelDefault, nil
+	case "aggressive":
+		return LevelAggressive, nil
+	default:
+		return 0, fmt.Errorf("invalid level %q (want passive, default, or aggressive)", s)
 	}
 }
 
@@ -153,30 +174,27 @@ func BuildEvidence(method, reqURL string, status int, headers map[string][]strin
 
 type Check interface {
 	Name() string
-	Mode() Mode
+	Level() Level
 	// Run inspects target and returns findings.
 	//
 	// scope is the user-authorized boundary of the scan. Passive checks may
 	// ignore it (they only look at target, which is already in scope by the
-	// time the scanner dispatches). Active checks MUST consult scope before
-	// probing sub-resources discovered on the page — a form on /admin is
-	// only safe to fuzz if /admin is itself in scope.
+	// time the scanner dispatches). Non-passive checks MUST consult scope
+	// before probing sub-resources discovered on the page — a form on
+	// /admin is only safe to fuzz if /admin is itself in scope.
 	//
 	// A nil scope means "no restrictions"; treat it as permissive.
 	Run(ctx context.Context, client *httpclient.Client, scope *scope.Scope, target string) ([]Finding, error)
 }
 
-// Filter returns the subset of checks that should run for the given mode.
-// Passive mode keeps only passive checks. Active mode keeps everything;
-// running active probes without first making the passive observations
-// would discard cheap, useful findings, so an active scan is a superset.
-func Filter(all []Check, mode Mode) []Check {
-	if mode == ModeActive {
-		return all
-	}
+// Filter returns the subset of checks that should run at the given level.
+// A scan at level N includes every check whose level is <= N; higher
+// levels are supersets, so an aggressive scan never silently drops the
+// cheap passive observations.
+func Filter(all []Check, max Level) []Check {
 	out := make([]Check, 0, len(all))
 	for _, c := range all {
-		if c.Mode() == ModePassive {
+		if c.Level() <= max {
 			out = append(out, c)
 		}
 	}

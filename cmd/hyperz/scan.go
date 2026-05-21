@@ -75,7 +75,7 @@ Modes:
                       only run against systems you are authorized to test.`,
 		Example: `  hyperz scan --url https://example.com
   hyperz scan --url https://example.com --format json -o report.json
-  hyperz scan --url https://example.com --mode active
+  hyperz scan --url https://example.com --mode aggressive
   hyperz scan --urls-file targets.txt --proxies-file proxies.txt
   hyperz scan --urls-file targets.txt --scrape-proxies
   hyperz scan --url https://example.com --crawl --max-depth 3`,
@@ -86,11 +86,11 @@ Modes:
 			if len(cfg.urls) == 0 && cfg.urlsFile == "" {
 				return fmt.Errorf("provide --url and/or --urls-file (or a URL as a positional arg)")
 			}
-			parsedMode, err := checks.ParseMode(cfg.mode)
+			level, err := checks.ParseLevel(cfg.mode)
 			if err != nil {
 				return err
 			}
-			code := runScan(cmd.Context(), &cfg, parsedMode)
+			code := runScan(cmd.Context(), &cfg, level)
 			if code == exitCanceled {
 				return fmt.Errorf("canceled")
 			}
@@ -108,8 +108,9 @@ Modes:
 	f.StringVar(&cfg.userAgent, "user-agent", "hyperz/0.1", "User-Agent header to send")
 	f.StringVar(&cfg.format, "format", "text",
 		"output format ("+strings.Join(report.Formats(), "|")+")")
-	f.StringVar(&cfg.mode, "mode", string(checks.ModePassive),
-		"scan mode: passive (safe, observation-only) | active (also runs intrusive probes)")
+	f.StringVar(&cfg.mode, "mode", checks.LevelPassive.String(),
+		"scan level: passive (safe, observation-only) | default (low-risk crafted probes) | aggressive (heavy fuzzing). "+
+			"Higher levels include everything below; checks above the requested level are skipped.")
 	f.IntVar(&cfg.concurrency, "concurrency", 8, "number of targets scanned in parallel")
 	f.Float64Var(&cfg.rps, "rate", 5, "max requests per second per host")
 	f.IntVar(&cfg.burst, "burst", 5, "per-host rate limiter burst")
@@ -152,7 +153,7 @@ Modes:
 	return cmd
 }
 
-func runScan(ctx context.Context, cfg *scanConfig, mode checks.Mode) int {
+func runScan(ctx context.Context, cfg *scanConfig, level checks.Level) int {
 	rep, err := report.New(cfg.format)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
@@ -205,9 +206,9 @@ func runScan(ctx context.Context, cfg *scanConfig, mode checks.Mode) int {
 	}
 
 	all := registry()
-	enabled := checks.Filter(all, mode)
-	fmt.Fprintf(os.Stderr, "[scan] mode=%s, %d/%d check(s) enabled\n",
-		mode, len(enabled), len(all))
+	enabled := checks.Filter(all, level)
+	fmt.Fprintf(os.Stderr, "[scan] level=%s, %d/%d check(s) enabled\n",
+		level, len(enabled), len(all))
 
 	scannerOpts := []scanner.Option{
 		scanner.WithConcurrency(cfg.concurrency),

@@ -13,11 +13,11 @@ type SecurityHeaders struct{}
 
 func (SecurityHeaders) Name() string { return "security-headers" }
 
-func (SecurityHeaders) Mode() Mode { return ModePassive }
+func (SecurityHeaders) Level() Level { return LevelPassive }
 
 // headerRule describes one missing-header finding's metadata. We keep CWE/
 // OWASP/remediation alongside severity so the check stays the single source
-// of truth — reporters just render what's set on the Finding.
+// of truth; reporters just render what's set on the Finding.
 type headerRule struct {
 	severity    Severity
 	cwe         string

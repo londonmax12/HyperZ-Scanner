@@ -26,7 +26,7 @@ type stubCheck struct {
 }
 
 func (s *stubCheck) Name() string      { return s.name }
-func (s *stubCheck) Mode() checks.Mode { return checks.ModePassive }
+func (s *stubCheck) Level() checks.Level { return checks.LevelPassive }
 func (s *stubCheck) Run(ctx context.Context, _ *httpclient.Client, _ *scope.Scope, target string) ([]checks.Finding, error) {
 	s.hits.Add(1)
 	if s.delay > 0 {
