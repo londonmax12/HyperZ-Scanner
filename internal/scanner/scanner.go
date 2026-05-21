@@ -71,6 +71,11 @@ func New(client *httpclient.Client, c []checks.Check, opts ...Option) *Scanner {
 
 // ScanAll consumes targets from `targets` and emits findings on `out` until
 // targets is closed and all in-flight work drains. It closes `out` on return.
+//
+// On ctx cancel, workers stop picking up new targets and scanOne stops
+// scheduling new checks, but any check whose Run has already returned will
+// have its findings flushed to `out`. The reader of `out` must keep
+// draining until close, or those senders will block.
 func (s *Scanner) ScanAll(ctx context.Context, targets <-chan string, out chan<- checks.Finding) error {
 	defer close(out)
 
@@ -96,6 +101,13 @@ func (s *Scanner) ScanAll(ctx context.Context, targets <-chan string, out chan<-
 	return ctx.Err()
 }
 
+// scanOne fingerprints target then runs every applicable check in parallel.
+// When a check's Run returns, its findings are sent unconditionally — they
+// already exist in memory, so we flush them even if ctx cancels mid-send.
+// New checks are not scheduled after ctx cancels (the loop bails on
+// ctx.Err()), so the post-cancel send burst is bounded by checks already
+// in flight. The caller (the report side) must drain `out` until it closes
+// or the senders will deadlock.
 func (s *Scanner) scanOne(ctx context.Context, target string, out chan<- checks.Finding) {
 	stack := s.fingerprint(ctx, target)
 
@@ -118,11 +130,7 @@ func (s *Scanner) scanOne(ctx context.Context, target string, out chan<- checks.
 				return
 			}
 			for _, f := range found {
-				select {
-				case <-ctx.Done():
-					return
-				case out <- f:
-				}
+				out <- f
 			}
 		}(c)
 	}

@@ -28,6 +28,12 @@ type Metadata struct {
 // Reporter consumes findings from a channel and writes them in some format.
 // Streaming reporters emit as findings arrive; aggregate reporters buffer.
 //
+// Implementations MUST drain `in` until it closes — even on ctx cancel or a
+// writer error — because the scanner sends per-check findings unconditionally
+// and a non-draining reporter will deadlock the upstream pipeline. After a
+// writer error the recommended pattern is to remember the first error,
+// continue ranging over `in` to a no-op, and return the saved error at the end.
+//
 // meta is read after the findings channel closes, so it's safe for the caller
 // to keep populating the underlying maps while the scan is in flight — every
 // in-tree reporter touches meta only at the end.
@@ -87,16 +93,21 @@ func Dedupe(in <-chan checks.Finding) <-chan checks.Finding {
 
 type textReporter struct{}
 
-func (textReporter) Write(ctx context.Context, w io.Writer, in <-chan checks.Finding, meta Metadata) error {
+func (textReporter) Write(_ context.Context, w io.Writer, in <-chan checks.Finding, meta Metadata) error {
 	count := 0
+	var writeErr error
 	for f := range in {
-		if ctx.Err() != nil {
-			return ctx.Err()
+		if writeErr != nil {
+			continue
 		}
 		if err := writeTextFinding(w, f); err != nil {
-			return err
+			writeErr = err
+			continue
 		}
 		count++
+	}
+	if writeErr != nil {
+		return writeErr
 	}
 	if count == 0 {
 		if _, err := fmt.Fprintln(w, "no findings"); err != nil {
@@ -158,15 +169,19 @@ func writeTextFinding(w io.Writer, f checks.Finding) error {
 
 type jsonlReporter struct{}
 
-func (jsonlReporter) Write(ctx context.Context, w io.Writer, in <-chan checks.Finding, meta Metadata) error {
+func (jsonlReporter) Write(_ context.Context, w io.Writer, in <-chan checks.Finding, meta Metadata) error {
 	enc := json.NewEncoder(w)
+	var writeErr error
 	for f := range in {
-		if ctx.Err() != nil {
-			return ctx.Err()
+		if writeErr != nil {
+			continue
 		}
 		if err := enc.Encode(f); err != nil {
-			return err
+			writeErr = err
 		}
+	}
+	if writeErr != nil {
+		return writeErr
 	}
 	if len(meta.Stacks) > 0 {
 		// Tagged tail record so consumers can stream past findings and pick
@@ -195,14 +210,15 @@ var csvHeader = []string{
 // csv intentionally ignores Metadata: the format is flat tabular finding
 // rows and there's no natural place for per-host stack info without
 // breaking the row contract. Use jsonl/json/markdown if you need both.
-func (csvReporter) Write(ctx context.Context, w io.Writer, in <-chan checks.Finding, _ Metadata) error {
+func (csvReporter) Write(_ context.Context, w io.Writer, in <-chan checks.Finding, _ Metadata) error {
 	cw := csv.NewWriter(w)
+	var writeErr error
 	if err := cw.Write(csvHeader); err != nil {
-		return err
+		writeErr = err
 	}
 	for f := range in {
-		if ctx.Err() != nil {
-			return ctx.Err()
+		if writeErr != nil {
+			continue
 		}
 		var method, eURL, status string
 		if e := f.Evidence; e != nil {
@@ -218,8 +234,11 @@ func (csvReporter) Write(ctx context.Context, w io.Writer, in <-chan checks.Find
 			method, eURL, status,
 			f.DedupeKey,
 		}); err != nil {
-			return err
+			writeErr = err
 		}
+	}
+	if writeErr != nil {
+		return writeErr
 	}
 	cw.Flush()
 	return cw.Error()
@@ -510,19 +529,18 @@ func writeMarkdownStacks(w io.Writer, stacks map[string]*fingerprint.Stack) {
 
 // ---------- helpers ----------
 
-func drain(ctx context.Context, in <-chan checks.Finding) []checks.Finding {
+// drain ranges in to completion. Buffered reporters call this so they have
+// the full finding slice before laying out their document. It does NOT bail
+// on ctx cancel: the scanner contract is that `in` will close once all
+// in-flight checks have flushed (including post-cancel ones), and dropping
+// findings here would defeat that guarantee. ctx is kept on the signature
+// for symmetry with the Reporter interface and future cancellation needs.
+func drain(_ context.Context, in <-chan checks.Finding) []checks.Finding {
 	var findings []checks.Finding
-	for {
-		select {
-		case <-ctx.Done():
-			return findings
-		case f, ok := <-in:
-			if !ok {
-				return findings
-			}
-			findings = append(findings, f)
-		}
+	for f := range in {
+		findings = append(findings, f)
 	}
+	return findings
 }
 
 func joinNonEmpty(sep string, parts ...string) string {

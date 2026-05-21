@@ -303,6 +303,35 @@ func TestWriteHelperUnknownFormat(t *testing.T) {
 	}
 }
 
+// TestReportersDrainOnCanceledContext pins the contract that every reporter
+// finishes consuming `in` even when ctx is already canceled. The scanner
+// sends per-check findings unconditionally, so a reporter that bails on
+// ctx.Done would (a) drop findings and (b) deadlock the upstream pipeline.
+func TestReportersDrainOnCanceledContext(t *testing.T) {
+	findings := sampleFindings()
+	for _, format := range []string{"text", "jsonl", "csv", "json", "sarif", "markdown"} {
+		t.Run(format, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			r, err := New(format)
+			if err != nil {
+				t.Fatalf("New(%q): %v", format, err)
+			}
+			var buf bytes.Buffer
+			if err := r.Write(ctx, &buf, channelFrom(findings), Metadata{}); err != nil {
+				t.Fatalf("Write returned %v on canceled ctx (should drain, not bail)", err)
+			}
+			// "missing header X" is finding[0]; the last finding's title pokes
+			// at whether the reporter consumed past an early ctx.Err() check.
+			for _, want := range []string{"missing header X", "weak cipher"} {
+				if !strings.Contains(buf.String(), want) {
+					t.Errorf("%s missing %q — reporter dropped findings on canceled ctx", format, want)
+				}
+			}
+		})
+	}
+}
+
 func TestEscapePipe(t *testing.T) {
 	if got := escapePipe("a|b|c"); got != `a\|b\|c` {
 		t.Fatalf("escapePipe = %q", got)

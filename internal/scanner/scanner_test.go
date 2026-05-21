@@ -3,6 +3,7 @@ package scanner
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -25,7 +26,7 @@ type stubCheck struct {
 	hits     atomic.Int64
 }
 
-func (s *stubCheck) Name() string      { return s.name }
+func (s *stubCheck) Name() string        { return s.name }
 func (s *stubCheck) Level() checks.Level { return checks.LevelPassive }
 func (s *stubCheck) Run(ctx context.Context, _ *httpclient.Client, _ *scope.Scope, target string) ([]checks.Finding, error) {
 	s.hits.Add(1)
@@ -128,6 +129,50 @@ func TestScanErrorHandlerInvoked(t *testing.T) {
 	defer mu.Unlock()
 	if calls != 1 || gotTgt != "http://t" || gotName != "stub" {
 		t.Fatalf("error handler calls=%d tgt=%q name=%q", calls, gotTgt, gotName)
+	}
+}
+
+// TestScanCancellationFlushesInFlightFindings pins the contract that once a
+// check's Run has returned, all of its findings reach the reporter; even if
+// ctx cancels while the per-finding send loop is mid-flight. Before the fix
+// the send loop selected on ctx.Done(), so a cancel between sends silently
+// dropped any remaining findings from that check.
+func TestScanCancellationFlushesInFlightFindings(t *testing.T) {
+	const n = 10
+	findings := make([]checks.Finding, n)
+	for i := range findings {
+		findings[i] = checks.Finding{Check: "many", Title: fmt.Sprintf("f%d", i)}
+	}
+	c := &stubCheck{name: "many", findings: findings}
+	s := New(newNilClient(), []checks.Check{c}, WithConcurrency(1))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	targets := make(chan string, 1)
+	targets <- "http://t"
+	close(targets)
+	// Unbuffered so the sender parks between each send — that's the window
+	// where the old code dropped findings on cancel.
+	out := make(chan checks.Finding)
+
+	scanDone := make(chan error, 1)
+	go func() { scanDone <- s.ScanAll(ctx, targets, out) }()
+
+	var got []checks.Finding
+	got = append(got, <-out)
+	got = append(got, <-out)
+	// Sender is now parked on the third send. Cancel; the contract is that
+	// the remaining 8 findings still arrive because the check already ran.
+	cancel()
+	for f := range out {
+		got = append(got, f)
+	}
+	if len(got) != n {
+		t.Fatalf("got %d findings, want %d (in-flight findings dropped on cancel)", len(got), n)
+	}
+	if err := <-scanDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("ScanAll err = %v, want context.Canceled", err)
 	}
 }
 
