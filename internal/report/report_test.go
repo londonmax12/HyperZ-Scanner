@@ -272,3 +272,116 @@ func TestEscapePipe(t *testing.T) {
 		t.Fatalf("escapePipe = %q", got)
 	}
 }
+
+func TestPDFReporterStructure(t *testing.T) {
+	out := writeFormat(t, "pdf", sampleFindings())
+	if !strings.HasPrefix(out, "%PDF-1.") {
+		head := out
+		if len(head) > 16 {
+			head = head[:16]
+		}
+		t.Fatalf("missing PDF magic; first 16 bytes: %q", head)
+	}
+	if !strings.HasSuffix(strings.TrimRight(out, "\n"), "%%EOF") {
+		t.Fatalf("missing %%%%EOF trailer")
+	}
+	for _, marker := range []string{
+		"/Type /Catalog",
+		"/Type /Pages",
+		"/Type /Page ",
+		"/BaseFont /Helvetica",
+		"xref",
+		"trailer",
+		"startxref",
+	} {
+		if !strings.Contains(out, marker) {
+			t.Errorf("PDF missing structural marker %q", marker)
+		}
+	}
+}
+
+func TestPDFReporterRendersFindings(t *testing.T) {
+	out := writeFormat(t, "pdf", sampleFindings())
+	for _, want := range []string{
+		"hyperz scan report",
+		"Total findings: 3",
+		"[high] security-headers",
+		"missing header X",
+		"http://a",
+		"details A",
+		"[low] tls",
+		// pipe is not a PDF-special character, so it survives escape unchanged
+		"weak cipher | pipe",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("PDF missing text %q", want)
+		}
+	}
+}
+
+func TestPDFReporterEmpty(t *testing.T) {
+	out := writeFormat(t, "pdf", nil)
+	if !strings.HasPrefix(out, "%PDF-1.") {
+		t.Fatalf("empty PDF missing magic")
+	}
+	if !strings.Contains(out, "Total findings: 0") {
+		t.Errorf("empty PDF missing zero summary")
+	}
+	if !strings.Contains(out, "No findings.") {
+		t.Errorf("empty PDF missing no-findings note")
+	}
+}
+
+func TestPDFEscape(t *testing.T) {
+	cases := map[string]string{
+		"plain":          "plain",
+		`a\b`:            `a\\b`,
+		"a(b)c":          `a\(b\)c`,
+		"tab\there":      "tab?here",
+		"high \xe9 byte": "high ? byte", // non-ASCII replaced
+	}
+	for in, want := range cases {
+		if got := pdfEscape(in); got != want {
+			t.Errorf("pdfEscape(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestPDFWrap(t *testing.T) {
+	if got := pdfWrap("short", 10); !reflect.DeepEqual(got, []string{"short"}) {
+		t.Errorf("short: %v", got)
+	}
+	got := pdfWrap("the quick brown fox jumps", 10)
+	for _, line := range got {
+		if len(line) > 10 {
+			t.Errorf("wrap overflowed: %q (len %d)", line, len(line))
+		}
+	}
+	if strings.Join(got, " ") != "the quick brown fox jumps" {
+		t.Errorf("wrap dropped content: %v", got)
+	}
+	// Word longer than max must be hard-split rather than emitted oversized.
+	long := pdfWrap("abcdefghijklmno", 5)
+	for _, line := range long {
+		if len(line) > 5 {
+			t.Errorf("hard-split overflowed: %q", line)
+		}
+	}
+}
+
+func TestPDFReporterMultiPage(t *testing.T) {
+	// Generate enough findings to force pagination.
+	var many []checks.Finding
+	for i := 0; i < 200; i++ {
+		many = append(many, checks.Finding{
+			Check: "security-headers", Target: "http://example/" + strings.Repeat("x", 3),
+			Severity: checks.SeverityLow, Title: "filler row",
+		})
+	}
+	out := writeFormat(t, "pdf", many)
+	// Count /Type /Page entries (note trailing space rules out /Pages).
+	pageCount := strings.Count(out, "/Type /Page ")
+	if pageCount < 2 {
+		t.Fatalf("expected pagination across multiple pages, got %d", pageCount)
+	}
+}

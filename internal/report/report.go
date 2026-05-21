@@ -21,7 +21,7 @@ type Reporter interface {
 
 // Formats returns the names of all supported output formats.
 func Formats() []string {
-	return []string{"text", "json", "jsonl", "csv", "sarif", "markdown"}
+	return []string{"text", "json", "jsonl", "csv", "sarif", "markdown", "pdf"}
 }
 
 func New(format string) (Reporter, error) {
@@ -38,6 +38,8 @@ func New(format string) (Reporter, error) {
 		return sarifReporter{}, nil
 	case "md", "markdown":
 		return markdownReporter{}, nil
+	case "pdf":
+		return pdfReporter{}, nil
 	default:
 		return nil, fmt.Errorf("unknown format %q (supported: %s)", format, strings.Join(Formats(), ", "))
 	}
