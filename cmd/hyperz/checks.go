@@ -14,6 +14,7 @@ import (
 func registry() []checks.Check {
 	return []checks.Check{
 		checks.SecurityHeaders{},
+		checks.CookieAttributes{},
 	}
 }
 
