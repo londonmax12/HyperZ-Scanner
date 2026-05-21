@@ -9,6 +9,39 @@ import (
 	"strings"
 )
 
+// collectSeeds reads CLI URLs and an optional URL file into a slice. Used by
+// the crawl path, which needs the full seed list before workers start.
+func collectSeeds(urls []string, urlsFile string) ([]string, error) {
+	var out []string
+	add := func(u string) {
+		u = strings.TrimSpace(u)
+		if u == "" || strings.HasPrefix(u, "#") {
+			return
+		}
+		out = append(out, u)
+	}
+	for _, u := range urls {
+		add(u)
+	}
+	if urlsFile == "" {
+		return out, nil
+	}
+	r, closeFn, err := openInput(urlsFile)
+	if err != nil {
+		return nil, fmt.Errorf("open urls-file: %w", err)
+	}
+	defer closeFn()
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 64*1024), 1024*1024)
+	for sc.Scan() {
+		add(sc.Text())
+	}
+	if err := sc.Err(); err != nil {
+		return nil, fmt.Errorf("read urls-file: %w", err)
+	}
+	return out, nil
+}
+
 func feed(ctx context.Context, out chan<- string, urls []string, urlsFile string) error {
 	push := func(u string) bool {
 		u = strings.TrimSpace(u)

@@ -24,6 +24,12 @@ type config struct {
 	rps         float64
 	burst       int
 	outputPath  string
+
+	crawl         bool
+	crawlDepth    int
+	crawlPages    int
+	crawlWorkers  int
+	crawlSameHost bool
 }
 
 func parseFlags() (*config, error) {
@@ -38,20 +44,30 @@ func parseFlags() (*config, error) {
 	rps := flag.Float64("rate", 5, "max requests per second per host")
 	burst := flag.Int("burst", 5, "per-host rate limiter burst")
 	output := flag.String("o", "-", "output path ('-' for stdout)")
+	crawl := flag.Bool("crawl", false, "discover scan targets by crawling from each seed URL")
+	crawlDepth := flag.Int("max-depth", 2, "max crawl depth (0 = only seeds, no link extraction)")
+	crawlPages := flag.Int("max-pages", 100, "max unique pages to enqueue while crawling (0 = unlimited)")
+	crawlWorkers := flag.Int("crawl-workers", 8, "number of parallel crawl fetchers")
+	crawlSameHost := flag.Bool("crawl-same-host", true, "only follow links on seed hosts")
 	flag.Parse()
 
 	if len(urls) == 0 && *urlsFile == "" {
 		return nil, errors.New("provide -url and/or -urls-file")
 	}
 	return &config{
-		urls:        urls,
-		urlsFile:    *urlsFile,
-		timeout:     *timeout,
-		userAgent:   *userAgent,
-		format:      *format,
-		concurrency: *concurrency,
-		rps:         *rps,
-		burst:       *burst,
-		outputPath:  *output,
+		urls:          urls,
+		urlsFile:      *urlsFile,
+		timeout:       *timeout,
+		userAgent:     *userAgent,
+		format:        *format,
+		concurrency:   *concurrency,
+		rps:           *rps,
+		burst:         *burst,
+		outputPath:    *output,
+		crawl:         *crawl,
+		crawlDepth:    *crawlDepth,
+		crawlPages:    *crawlPages,
+		crawlWorkers:  *crawlWorkers,
+		crawlSameHost: *crawlSameHost,
 	}, nil
 }

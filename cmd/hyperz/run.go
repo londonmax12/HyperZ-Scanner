@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 
 	"github.com/londonball/hyperz/internal/checks"
+	"github.com/londonball/hyperz/internal/crawler"
 	"github.com/londonball/hyperz/internal/httpclient"
 	"github.com/londonball/hyperz/internal/report"
 	"github.com/londonball/hyperz/internal/scanner"
@@ -55,10 +56,27 @@ func run(ctx context.Context, cfg *config) int {
 	findings := make(chan checks.Finding, 64)
 
 	feedErr := make(chan error, 1)
-	go func() {
-		defer close(targets)
-		feedErr <- feed(ctx, targets, cfg.urls, cfg.urlsFile)
-	}()
+	if cfg.crawl {
+		seeds, err := collectSeeds(cfg.urls, cfg.urlsFile)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "input error:", err)
+			return exitFailure
+		}
+		cr := crawler.New(client, crawler.Config{
+			Workers:  cfg.crawlWorkers,
+			MaxDepth: cfg.crawlDepth,
+			MaxPages: cfg.crawlPages,
+			SameHost: cfg.crawlSameHost,
+		}, crawler.WithErrorHandler(func(target string, err error) {
+			fmt.Fprintf(os.Stderr, "[crawl] %s: %v\n", target, err)
+		}))
+		go func() { feedErr <- cr.Crawl(ctx, seeds, targets) }()
+	} else {
+		go func() {
+			defer close(targets)
+			feedErr <- feed(ctx, targets, cfg.urls, cfg.urlsFile)
+		}()
+	}
 
 	scanErr := make(chan error, 1)
 	go func() { scanErr <- s.ScanAll(ctx, targets, findings) }()
