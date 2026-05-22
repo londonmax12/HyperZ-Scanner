@@ -107,6 +107,7 @@ func TestOpenRedirectEvidenceCapturesExchange(t *testing.T) {
 func TestOpenRedirectMatchesProtocolRelative(t *testing.T) {
 	// Some apps strip the scheme and reflect "//host/...". Browsers treat
 	// this as a same-scheme cross-host redirect; the probe must catch it.
+	// Path is redirect-ish so the canonical `next` probe fires at default level.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		next := r.URL.Query().Get("next")
 		// Strip "https:" prefix to produce a protocol-relative Location.
@@ -118,7 +119,7 @@ func TestOpenRedirectMatchesProtocolRelative(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	findings, err := OpenRedirect{}.Run(context.Background(), newTestClient(t), nil, srv.URL+"/")
+	findings, err := OpenRedirect{}.Run(context.Background(), newTestClient(t), nil, srv.URL+"/login")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -145,12 +146,15 @@ func TestOpenRedirectNoFindingOnSafeRedirect(t *testing.T) {
 }
 
 func TestOpenRedirectNoFindingWhenNo3xx(t *testing.T) {
+	// Path is redirect-ish so the canonical sweep actually fires and exercises
+	// the 200-response rejection branch — without that, candidates would be
+	// empty for / and the test would trivially pass by skipping all probes.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
 
-	findings, err := OpenRedirect{}.Run(context.Background(), newTestClient(t), nil, srv.URL+"/")
+	findings, err := OpenRedirect{}.Run(context.Background(), newTestClient(t), nil, srv.URL+"/login")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -162,14 +166,15 @@ func TestOpenRedirectNoFindingWhenNo3xx(t *testing.T) {
 func TestOpenRedirectNoFindingOnDifferentExternalHost(t *testing.T) {
 	// Server redirects everywhere to a fixed external host (not our canary).
 	// That's still potentially questionable, but it's not what we probed -
-	// the canary didn't influence the destination, so no finding.
+	// the canary didn't influence the destination, so no finding. Path is
+	// redirect-ish so the canonical sweep fires and the matcher gets exercised.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Location", "https://partner.example.org/welcome")
 		w.WriteHeader(http.StatusFound)
 	}))
 	defer srv.Close()
 
-	findings, err := OpenRedirect{}.Run(context.Background(), newTestClient(t), nil, srv.URL+"/")
+	findings, err := OpenRedirect{}.Run(context.Background(), newTestClient(t), nil, srv.URL+"/login")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -220,6 +225,9 @@ func TestOpenRedirectPreservesOtherQueryParamsAndOverridesProbedParam(t *testing
 	}))
 	defer srv.Close()
 
+	// /r is intentionally NOT a redirect-ish path: the test should pass on
+	// the strength of URL-present params (a, b, next) alone, proving they're
+	// probed regardless of the path heuristic.
 	_, err := OpenRedirect{}.Run(context.Background(), newTestClient(t),
 		nil, srv.URL+"/r?a=1&b=2&next=original")
 	if err != nil {
@@ -260,8 +268,9 @@ func TestOpenRedirectPreservesOtherQueryParamsAndOverridesProbedParam(t *testing
 }
 
 func TestOpenRedirectProbesCanonicalParamNames(t *testing.T) {
-	// Server reflects only ?redirect= (not ?next=). The check should still
-	// catch it because `redirect` is in the canonical list.
+	// Server reflects only ?redirect= (not ?next=). The check should catch it
+	// because `redirect` is in the canonical list AND /login is a redirect-ish
+	// path that earns the full canonical sweep at LevelDefault.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		v := r.URL.Query().Get("redirect")
 		if v == "" {
@@ -273,7 +282,7 @@ func TestOpenRedirectProbesCanonicalParamNames(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	findings, err := OpenRedirect{}.Run(context.Background(), newTestClient(t), nil, srv.URL+"/r")
+	findings, err := OpenRedirect{}.Run(context.Background(), newTestClient(t), nil, srv.URL+"/login")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -329,7 +338,9 @@ func TestOpenRedirectMultipleVulnerableParamsProduceDistinctFindings(t *testing.
 	}))
 	defer srv.Close()
 
-	findings, err := OpenRedirect{}.Run(context.Background(), newTestClient(t), nil, srv.URL+"/r")
+	// /login is redirect-ish, so the canonical sweep fires and all three names
+	// get probed at LevelDefault.
+	findings, err := OpenRedirect{}.Run(context.Background(), newTestClient(t), nil, srv.URL+"/login")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -361,15 +372,17 @@ func TestOpenRedirectDedupeKeyStableAndPerPath(t *testing.T) {
 	}
 	loginA := run("/login")
 	loginB := run("/login") // same path, must dedupe to same key
-	profile := run("/profile")
+	// /logout is also redirect-ish (different keyword), so the canonical
+	// sweep fires there too — exercising "different path, different key".
+	logout := run("/logout")
 	if loginA == "" {
 		t.Fatal("DedupeKey empty")
 	}
 	if loginA != loginB {
 		t.Errorf("same-path keys drifted: %q vs %q", loginA, loginB)
 	}
-	if loginA == profile {
-		t.Errorf("different-path keys collapsed: %q == %q", loginA, profile)
+	if loginA == logout {
+		t.Errorf("different-path keys collapsed: %q == %q", loginA, logout)
 	}
 }
 
@@ -416,9 +429,180 @@ func TestOpenRedirectReturnsErrorOnNetworkFailure(t *testing.T) {
 		Timeout:   1 * time.Second,
 		UserAgent: "test",
 	})
-	_, err := OpenRedirect{}.Run(context.Background(), c, nil, "http://hyperz-test-no-such-host.invalid/")
+	// /login is redirect-ish so the canonical sweep fires; with the host
+	// unreachable every probe errors and the wholesale-failure path returns
+	// the first error.
+	_, err := OpenRedirect{}.Run(context.Background(), c, nil, "http://hyperz-test-no-such-host.invalid/login")
 	if err == nil {
 		t.Fatal("expected error from unreachable host")
+	}
+}
+
+func TestOpenRedirectReportsEveryProbeFailureAsBreadcrumb(t *testing.T) {
+	// Unreachable host: every candidate-param probe will fail. Even though
+	// the function-level return error only carries the first failure, the
+	// reporter attached to the context must see one event per probe so the
+	// scan summary doesn't lose 13/14 errors when a host is flaky.
+	c := httpclient.New(httpclient.Config{
+		Timeout:   500 * time.Millisecond,
+		UserAgent: "test",
+	})
+
+	var (
+		mu     sync.Mutex
+		errors []error
+	)
+	ctx := WithReporter(context.Background(), func(err error) {
+		mu.Lock()
+		defer mu.Unlock()
+		errors = append(errors, err)
+	})
+
+	// /login earns the full canonical sweep; with the host unreachable every
+	// probe fails, so the reporter sees one breadcrumb per canonical param.
+	_, runErr := OpenRedirect{}.Run(ctx, c, nil, "http://hyperz-test-no-such-host.invalid/login")
+	if runErr == nil {
+		t.Fatal("expected wholesale-failure error to propagate")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	wantAtLeast := len(openRedirectParams)
+	if len(errors) < wantAtLeast {
+		t.Fatalf("reporter saw %d events, want >= %d (one per probe)", len(errors), wantAtLeast)
+	}
+	// Every breadcrumb should name the parameter that failed so the user can
+	// tell which probe blew up - a bare "connection refused" with no param
+	// context defeats the point of the breadcrumb.
+	for _, err := range errors {
+		if !strings.Contains(err.Error(), "probe param") {
+			t.Errorf("breadcrumb missing param context: %v", err)
+		}
+	}
+}
+
+func TestOpenRedirectSkipsCanonicalSweepOnNonRedirectishPath(t *testing.T) {
+	// /products has no redirect-ish keyword and the URL carries no params,
+	// so candidate set is empty: the check must not send any probes. This
+	// is the central blast-radius guarantee — on a 200-page crawl the
+	// product/article pages stay un-probed.
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	findings, err := OpenRedirect{}.Run(context.Background(), newTestClient(t), nil, srv.URL+"/products")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("got %d findings, want 0 on non-redirect-ish path with no params", len(findings))
+	}
+	if got := hits.Load(); got != 0 {
+		t.Fatalf("server hit %d times; non-redirect-ish path with no params must not be probed", got)
+	}
+}
+
+func TestOpenRedirectProbesUrlParamsEvenOnNonRedirectishPath(t *testing.T) {
+	// `next` is canonical but the path /products doesn't earn the canonical
+	// sweep. Because `next` is already in the URL it still gets probed — the
+	// app is actively passing it, so it's the highest-signal candidate.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		v := r.URL.Query().Get("next")
+		if v == "" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.Header().Set("Location", v)
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer srv.Close()
+
+	findings, err := OpenRedirect{}.Run(context.Background(), newTestClient(t), nil, srv.URL+"/products?next=original")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding from URL-present `next` probe, got %d: %+v", len(findings), findings)
+	}
+}
+
+func TestOpenRedirectSkipsNonUrlCanonicalNamesOnNonRedirectishPath(t *testing.T) {
+	// The page has `next` present (so `next` IS probed) but reflects only
+	// `redirect`. Since /products isn't redirect-ish, `redirect` is NOT in
+	// the candidate set and the bug stays uncaught at LevelDefault — by
+	// design. This pins the blast-radius trade-off: cheap default scans
+	// trade away coverage on non-redirect-ish pages.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		v := r.URL.Query().Get("redirect")
+		if v == "" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.Header().Set("Location", v)
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer srv.Close()
+
+	findings, err := OpenRedirect{}.Run(context.Background(), newTestClient(t), nil, srv.URL+"/products?next=original")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("expected 0 findings (canonical `redirect` should be skipped on non-redirect-ish path), got %d: %+v", len(findings), findings)
+	}
+}
+
+func TestOpenRedirectAggressiveLevelSweepsEverywhere(t *testing.T) {
+	// At LevelAggressive the canonical sweep fires regardless of path —
+	// the user has explicitly opted into the noisier scan. /products is
+	// not redirect-ish but `redirect` still gets probed and the bug fires.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		v := r.URL.Query().Get("redirect")
+		if v == "" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.Header().Set("Location", v)
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer srv.Close()
+
+	ctx := WithLevel(context.Background(), LevelAggressive)
+	findings, err := OpenRedirect{}.Run(ctx, newTestClient(t), nil, srv.URL+"/products")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding at LevelAggressive on non-redirect-ish path, got %d: %+v", len(findings), findings)
+	}
+}
+
+func TestLooksRedirectish(t *testing.T) {
+	cases := []struct {
+		path string
+		want bool
+	}{
+		{"/login", true},
+		{"/LOGIN", true},
+		{"/logout", true},
+		{"/api/auth/callback", true},
+		{"/admin/sso-init", true},
+		{"/go/redirect/123", true},
+		{"/authentication", true}, // substring match by design — loose
+		{"/products", false},
+		{"/articles/2024", false},
+		{"/", false},
+		{"", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.path, func(t *testing.T) {
+			if got := looksRedirectish(tc.path); got != tc.want {
+				t.Errorf("looksRedirectish(%q) = %v, want %v", tc.path, got, tc.want)
+			}
+		})
 	}
 }
 

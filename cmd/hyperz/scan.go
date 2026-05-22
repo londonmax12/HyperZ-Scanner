@@ -253,6 +253,7 @@ func runScan(ctx context.Context, cfg *scanConfig, level checks.Level) int {
 		scanner.WithConcurrency(cfg.concurrency),
 		scanner.WithCheckConcurrency(cfg.checkConcurrency),
 		scanner.WithScope(sc),
+		scanner.WithLevel(level),
 		scanner.WithSkipHandler(func(target, check, reason string) {
 			log.Debug("check skipped", "check", check, "target", target, "reason", reason)
 		}),

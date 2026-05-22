@@ -18,9 +18,15 @@ import (
 // a reserved (.example) domain; a 3xx response whose Location points at the
 // canary host means the param is unvalidated.
 //
-// Candidates are the canonical redirect names (next, url, redirect, ...)
-// plus any param already present on the target URL - so apps using a
-// non-standard name visible in real traffic still get covered.
+// Candidates are chosen to keep blast radius bounded on large crawls:
+//   - params already present on the target URL are always probed (high
+//     signal; the app is already passing them, so they're worth testing).
+//   - the canonical redirect names (next, url, redirect, ...) only fire on
+//     URLs whose path looks redirect-related (login/logout/auth/sso/redirect),
+//     OR on any URL when running at LevelAggressive.
+//
+// Without this gating, a 200-page crawl would fan out len(openRedirectParams)
+// probes per page regardless of whether the page accepts redirect params.
 //
 // This is an active (LevelDefault) check; it only runs when the user opts
 // into a `default` or `aggressive` scan. Per-host rate limiting in the
@@ -77,14 +83,22 @@ func (c OpenRedirect) Run(ctx context.Context, client *httpclient.Client, sc *sc
 		return nil, nil
 	}
 
+	sweep := LevelFrom(ctx) >= LevelAggressive || looksRedirectish(u.Path)
+	candidates := openRedirectCandidates(u, sweep)
+
 	var findings []Finding
 	var firstErr error
-	for _, name := range openRedirectCandidates(u) {
+	for _, name := range candidates {
 		if ctx.Err() != nil {
 			break
 		}
 		f, err := c.probe(ctx, client, target, u, name)
 		if err != nil {
+			// Every per-probe failure is breadcrumbed through the scanner's
+			// error handler so a flaky host doesn't go silent when only a
+			// subset of probes succeed. firstErr is retained for the
+			// wholesale-failure return path below.
+			Report(ctx, fmt.Errorf("probe param %q: %w", name, err))
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -105,13 +119,17 @@ func (c OpenRedirect) Run(ctx context.Context, client *httpclient.Client, sc *sc
 }
 
 // openRedirectCandidates returns the deduped, sorted set of param names to
-// probe: the canonical list plus any param already present on the target
-// URL. Sorted output keeps probe order (and therefore finding order) stable
-// across runs.
-func openRedirectCandidates(u *url.URL) []string {
-	set := make(map[string]struct{}, len(openRedirectParams))
-	for _, p := range openRedirectParams {
-		set[p] = struct{}{}
+// probe. Params already on the URL are always included (highest signal: the
+// app is actively passing them). When sweep is true the canonical list is
+// folded in as well — gated this way to avoid 14 probes per crawled page
+// when the page has no redirect surface to begin with. Sorted output keeps
+// probe order (and therefore finding order) stable across runs.
+func openRedirectCandidates(u *url.URL, sweep bool) []string {
+	set := make(map[string]struct{})
+	if sweep {
+		for _, p := range openRedirectParams {
+			set[p] = struct{}{}
+		}
 	}
 	for k := range u.Query() {
 		if k == "" {
@@ -125,6 +143,30 @@ func openRedirectCandidates(u *url.URL) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// openRedirectPathKeywords are the path substrings that flag a URL as
+// "probably handles a redirect" and earn it the full canonical sweep at
+// LevelDefault. Matched as case-insensitive substrings against the URL path,
+// so /api/auth/callback, /admin/sso-init, and /go/redirect/123 all qualify.
+// Loose by design — false positives just cost extra probes on a few pages
+// per scan, where a missed real path costs a missed finding.
+var openRedirectPathKeywords = []string{
+	"login",
+	"logout",
+	"auth",
+	"sso",
+	"redirect",
+}
+
+func looksRedirectish(path string) bool {
+	p := strings.ToLower(path)
+	for _, kw := range openRedirectPathKeywords {
+		if strings.Contains(p, kw) {
+			return true
+		}
+	}
+	return false
 }
 
 // probe issues one no-follow GET with `param` overlaid to the canary value;
@@ -209,6 +251,7 @@ func isRedirectStatus(code int) bool {
 // so that both absolute ("https://evil.example/x") and protocol-relative
 // ("//evil.example/x") forms match; same-origin paths produce a non-canary
 // host and are rejected.
+
 func openRedirectMatches(location, canary string) bool {
 	loc := strings.TrimSpace(location)
 	if loc == "" {

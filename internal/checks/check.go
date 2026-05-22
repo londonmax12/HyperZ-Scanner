@@ -253,6 +253,61 @@ func BuildEvidence(method, reqURL string, status int, headers map[string][]strin
 	}
 }
 
+// reporterKey carries a per-call sub-error reporter through the context that
+// the scanner hands to Run. A check may swallow individual sub-probe errors
+// when it can still return findings, but should call Report to leave a
+// breadcrumb so a flaky host doesn't fail silently.
+type reporterKey struct{}
+
+// WithReporter attaches fn to ctx so checks running under ctx can forward
+// non-fatal sub-errors. The scanner uses this to bridge per-probe failures
+// into its WithErrorHandler callback. fn may be nil, in which case Report
+// is a no-op.
+func WithReporter(ctx context.Context, fn func(err error)) context.Context {
+	if fn == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, reporterKey{}, fn)
+}
+
+// Report forwards err to the reporter attached to ctx, if any. Use it for
+// sub-failures the check chose not to surface as a fatal return error -
+// e.g. one of many probes hit a network error but other probes succeeded.
+// Safe to call with a nil err (no-op) or on a ctx without a reporter (no-op).
+func Report(ctx context.Context, err error) {
+	if err == nil {
+		return
+	}
+	fn, _ := ctx.Value(reporterKey{}).(func(err error))
+	if fn != nil {
+		fn(err)
+	}
+}
+
+// levelKey carries the active scan level through the context the scanner
+// hands to Run. Checks may consult it to scale how invasive they are - e.g.
+// a check might probe only the high-signal inputs at LevelDefault and fan
+// out a full canonical sweep at LevelAggressive.
+type levelKey struct{}
+
+// WithLevel attaches lvl to ctx so checks can adjust behavior to the active
+// scan level. The scanner sets this once per run; checks should treat absence
+// (see LevelFrom) as "default" rather than as an error.
+func WithLevel(ctx context.Context, lvl Level) context.Context {
+	return context.WithValue(ctx, levelKey{}, lvl)
+}
+
+// LevelFrom returns the scan level attached to ctx, or LevelDefault if none
+// was attached. A check that wants to gate aggressive behavior should compare
+// against LevelAggressive directly; treating the missing case as Default
+// keeps unit tests that build their own ctx working without ceremony.
+func LevelFrom(ctx context.Context) Level {
+	if lvl, ok := ctx.Value(levelKey{}).(Level); ok {
+		return lvl
+	}
+	return LevelDefault
+}
+
 type Check interface {
 	Name() string
 	Level() Level

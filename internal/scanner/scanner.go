@@ -17,6 +17,7 @@ type Scanner struct {
 	detector         *fingerprint.Detector
 	concurrency      int
 	checkConcurrency int
+	level            checks.Level
 	onError          func(target, check string, err error)
 	onSkip           func(target, check, reason string)
 }
@@ -74,8 +75,17 @@ func WithSkipHandler(fn func(target, check, reason string)) Option {
 	return func(s *Scanner) { s.onSkip = fn }
 }
 
+// WithLevel records the scan level the caller filtered checks for, so the
+// scanner can attach it to each check's ctx via checks.WithLevel. Checks that
+// want to scale their behavior (e.g. fewer probes at default, full sweep at
+// aggressive) read it via checks.LevelFrom. The default (LevelDefault) is the
+// conservative choice when the option isn't set.
+func WithLevel(lvl checks.Level) Option {
+	return func(s *Scanner) { s.level = lvl }
+}
+
 func New(client *httpclient.Client, c []checks.Check, opts ...Option) *Scanner {
-	s := &Scanner{client: client, checks: c, concurrency: 8}
+	s := &Scanner{client: client, checks: c, concurrency: 8, level: checks.LevelDefault}
 	for _, o := range opts {
 		o(s)
 	}
@@ -153,7 +163,16 @@ func (s *Scanner) scanOne(ctx context.Context, target string, out chan<- checks.
 			if sem != nil {
 				defer func() { <-sem }()
 			}
-			found, err := c.Run(ctx, s.client, s.scope, target)
+			// Sub-probe errors that the check chooses to swallow are still
+			// surfaced through this reporter, so a flaky host leaves one
+			// onError event per failure even when the check returns findings.
+			runCtx := checks.WithLevel(ctx, s.level)
+			if s.onError != nil {
+				runCtx = checks.WithReporter(runCtx, func(err error) {
+					s.onError(target, c.Name(), err)
+				})
+			}
+			found, err := c.Run(runCtx, s.client, s.scope, target)
 			if err != nil {
 				if s.onError != nil {
 					s.onError(target, c.Name(), err)
@@ -205,4 +224,3 @@ func (s *Scanner) applies(c checks.Check, stack *fingerprint.Stack, target strin
 	}
 	return false
 }
-
