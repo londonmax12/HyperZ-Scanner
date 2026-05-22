@@ -24,19 +24,19 @@ import (
 )
 
 type scanConfig struct {
-	urls        []string
-	urlsFile    string
-	timeout     time.Duration
-	userAgent   string
-	format      string
-	mode        string
+	urls             []string
+	urlsFile         string
+	timeout          time.Duration
+	userAgent        string
+	format           string
+	mode             string
 	concurrency      int
 	checkConcurrency int
 	rps              float64
-	burst        int
-	maxRetries   int
-	maxRetryWait time.Duration
-	outputPath   string
+	burst            int
+	maxRetries       int
+	maxRetryWait     time.Duration
+	outputPath       string
 
 	logLevel  string
 	logFormat string
