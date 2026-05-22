@@ -537,10 +537,23 @@ func writeMarkdownStacks(w io.Writer, stacks map[string]*fingerprint.Stack) {
 	for _, host := range sortedHosts(stacks) {
 		s := stacks[host]
 		fmt.Fprintf(w, "| %s | %s | %s | %s | %s | %s | %s | %.0f%% |\n",
-			escapePipe(host), s.Server, s.Language, s.Framework,
-			s.CMS, s.CDN, s.WAF, s.Confidence*100)
+			escapePipe(host),
+			withVersion(s.Server, s.Versions["server"]),
+			withVersion(s.Language, s.Versions["language"]),
+			withVersion(s.Framework, s.Versions["framework"]),
+			withVersion(s.CMS, s.Versions["cms"]),
+			withVersion(s.CDN, s.Versions["cdn"]),
+			withVersion(s.WAF, s.Versions["waf"]),
+			s.Confidence*100)
 	}
 	fmt.Fprintln(w)
+}
+
+func withVersion(id, ver string) string {
+	if id == "" || ver == "" {
+		return id
+	}
+	return id + " " + ver
 }
 
 // ---------- helpers ----------

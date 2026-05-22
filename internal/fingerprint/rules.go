@@ -9,10 +9,29 @@ import (
 // (case-insensitive substring). An empty needle means "any non-empty
 // value matches". set populates the matching identifier fields on the
 // Stack; the rule's name reads back through label().
+//
+// When verField is non-empty, the first dotted-decimal version found in
+// the header value is stored in Stack.Versions under that key. Rules
+// for headers that don't carry a version (CF-Ray, X-Sucuri-ID, etc.)
+// leave verField empty.
 type headerRule struct {
-	header string
-	needle string
-	set    func(*Stack)
+	header   string
+	needle   string
+	set      func(*Stack)
+	verField string
+}
+
+// versionPattern matches the first dotted-decimal number in a string,
+// e.g. "1.25.0" in "nginx/1.25.0 (Ubuntu)" or "4.0.30319" alone. The
+// minimum of one dot rules out opaque single integers (build IDs, byte
+// counts, X-Runtime seconds-as-decimal-without-dot, etc.).
+var versionPattern = regexp.MustCompile(`[0-9]+(?:\.[0-9]+)+`)
+
+func setVersion(s *Stack, field, value string) {
+	if s.Versions == nil {
+		s.Versions = map[string]string{}
+	}
+	s.Versions[field] = value
 }
 
 func (r headerRule) label() string {
@@ -28,12 +47,12 @@ func (r headerRule) label() string {
 // but is reported as openresty).
 var headerRules = []headerRule{
 	// --- Server / language hints from Server header ---
-	{header: "Server", needle: "nginx", set: func(s *Stack) { s.Server = "nginx" }},
-	{header: "Server", needle: "openresty", set: func(s *Stack) { s.Server = "openresty" }},
-	{header: "Server", needle: "apache", set: func(s *Stack) { s.Server = "apache" }},
-	{header: "Server", needle: "caddy", set: func(s *Stack) { s.Server = "caddy" }},
-	{header: "Server", needle: "litespeed", set: func(s *Stack) { s.Server = "litespeed" }},
-	{header: "Server", needle: "microsoft-iis", set: func(s *Stack) {
+	{header: "Server", needle: "nginx", verField: "server", set: func(s *Stack) { s.Server = "nginx" }},
+	{header: "Server", needle: "openresty", verField: "server", set: func(s *Stack) { s.Server = "openresty" }},
+	{header: "Server", needle: "apache", verField: "server", set: func(s *Stack) { s.Server = "apache" }},
+	{header: "Server", needle: "caddy", verField: "server", set: func(s *Stack) { s.Server = "caddy" }},
+	{header: "Server", needle: "litespeed", verField: "server", set: func(s *Stack) { s.Server = "litespeed" }},
+	{header: "Server", needle: "microsoft-iis", verField: "server", set: func(s *Stack) {
 		s.Server = "iis"
 		s.Language = "dotnet"
 	}},
@@ -45,35 +64,35 @@ var headerRules = []headerRule{
 	{header: "Server", needle: "ecs", set: func(s *Stack) { s.CDN = "edgecast" }},
 
 	// --- Language hints from X-Powered-By ---
-	{header: "X-Powered-By", needle: "php", set: func(s *Stack) { s.Language = "php" }},
-	{header: "X-Powered-By", needle: "asp.net", set: func(s *Stack) {
+	{header: "X-Powered-By", needle: "php", verField: "language", set: func(s *Stack) { s.Language = "php" }},
+	{header: "X-Powered-By", needle: "asp.net", verField: "framework", set: func(s *Stack) {
 		s.Language = "dotnet"
 		s.Framework = "asp.net"
 	}},
-	{header: "X-Powered-By", needle: "express", set: func(s *Stack) {
+	{header: "X-Powered-By", needle: "express", verField: "framework", set: func(s *Stack) {
 		s.Language = "node"
 		s.Framework = "express"
 	}},
-	{header: "X-Powered-By", needle: "next.js", set: func(s *Stack) {
+	{header: "X-Powered-By", needle: "next.js", verField: "framework", set: func(s *Stack) {
 		s.Language = "node"
 		s.Framework = "nextjs"
 	}},
-	{header: "X-Powered-By", needle: "nuxt", set: func(s *Stack) {
+	{header: "X-Powered-By", needle: "nuxt", verField: "framework", set: func(s *Stack) {
 		s.Language = "node"
 		s.Framework = "nuxt"
 	}},
 	{header: "X-Powered-By", needle: "servlet", set: func(s *Stack) { s.Language = "java" }},
-	{header: "X-Powered-By", needle: "django", set: func(s *Stack) {
+	{header: "X-Powered-By", needle: "django", verField: "framework", set: func(s *Stack) {
 		s.Language = "python"
 		s.Framework = "django"
 	}},
 
 	// --- Framework / runtime hints ---
-	{header: "X-AspNet-Version", set: func(s *Stack) {
+	{header: "X-AspNet-Version", verField: "framework", set: func(s *Stack) {
 		s.Language = "dotnet"
 		s.Framework = "asp.net"
 	}},
-	{header: "X-AspNetMvc-Version", set: func(s *Stack) {
+	{header: "X-AspNetMvc-Version", verField: "framework", set: func(s *Stack) {
 		s.Language = "dotnet"
 		s.Framework = "asp.net-mvc"
 	}},
@@ -193,49 +212,57 @@ var cookieRules = []cookieRule{
 }
 
 // bodyRule matches against the HTML body (bounded by maxBodyBytes).
-// label is the short identifier used in Signals.
+// label is the short identifier used in Signals. When verField is set,
+// the first capture group in re (if non-empty) is stored as the version
+// for that Stack.Versions key.
 type bodyRule struct {
-	label string
-	re    *regexp.Regexp
-	set   func(*Stack)
+	label    string
+	re       *regexp.Regexp
+	set      func(*Stack)
+	verField string
 }
 
 var bodyRules = []bodyRule{
 	{
-		label: "meta-generator:wordpress",
-		re:    regexp.MustCompile(`(?i)<meta\s+name=["']generator["']\s+content=["']WordPress`),
+		label:    "meta-generator:wordpress",
+		re:       regexp.MustCompile(`(?i)<meta\s+name=["']generator["']\s+content=["']WordPress(?:\s+([0-9][0-9.]*))?`),
+		verField: "cms",
 		set: func(s *Stack) {
 			s.CMS = "wordpress"
 			s.Language = "php"
 		},
 	},
 	{
-		label: "meta-generator:drupal",
-		re:    regexp.MustCompile(`(?i)<meta\s+name=["']generator["']\s+content=["']Drupal`),
+		label:    "meta-generator:drupal",
+		re:       regexp.MustCompile(`(?i)<meta\s+name=["']generator["']\s+content=["']Drupal(?:\s+([0-9][0-9.]*))?`),
+		verField: "cms",
 		set: func(s *Stack) {
 			s.CMS = "drupal"
 			s.Language = "php"
 		},
 	},
 	{
-		label: "meta-generator:joomla",
-		re:    regexp.MustCompile(`(?i)<meta\s+name=["']generator["']\s+content=["']Joomla`),
+		label:    "meta-generator:joomla",
+		re:       regexp.MustCompile(`(?i)<meta\s+name=["']generator["']\s+content=["']Joomla(?:[!\s]+([0-9][0-9.]*))?`),
+		verField: "cms",
 		set: func(s *Stack) {
 			s.CMS = "joomla"
 			s.Language = "php"
 		},
 	},
 	{
-		label: "meta-generator:ghost",
-		re:    regexp.MustCompile(`(?i)<meta\s+name=["']generator["']\s+content=["']Ghost`),
+		label:    "meta-generator:ghost",
+		re:       regexp.MustCompile(`(?i)<meta\s+name=["']generator["']\s+content=["']Ghost(?:\s+([0-9][0-9.]*))?`),
+		verField: "cms",
 		set: func(s *Stack) {
 			s.CMS = "ghost"
 			s.Language = "node"
 		},
 	},
 	{
-		label: "meta-generator:magento",
-		re:    regexp.MustCompile(`(?i)<meta\s+name=["']generator["']\s+content=["']Magento`),
+		label:    "meta-generator:magento",
+		re:       regexp.MustCompile(`(?i)<meta\s+name=["']generator["']\s+content=["']Magento(?:\s+([0-9][0-9.]*))?`),
+		verField: "cms",
 		set: func(s *Stack) {
 			s.CMS = "magento"
 			s.Language = "php"

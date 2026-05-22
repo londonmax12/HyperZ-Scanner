@@ -12,6 +12,7 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -30,6 +31,13 @@ type Stack struct {
 	CMS       string `json:"cms,omitempty"`       // wordpress, drupal, joomla, magento, ghost
 	CDN       string `json:"cdn,omitempty"`       // cloudflare, akamai, fastly, cloudfront
 	WAF       string `json:"waf,omitempty"`       // cloudflare, akamai, sucuri, incapsula, aws
+
+	// Versions holds version strings extracted from response headers or
+	// body, keyed by the same lowercased category names Has accepts:
+	// "server", "language", "framework", "cms", "cdn", "waf". A missing
+	// or empty entry means "unknown" - gating checks must distinguish
+	// that from "confirmed safe" via CompareVersion's ok return.
+	Versions map[string]string `json:"versions,omitempty"`
 
 	// Signals lists the matched rule labels (e.g. "header:Server~nginx",
 	// "cookie:PHPSESSID") for inclusion in finding evidence and debug logs.
@@ -95,14 +103,94 @@ func (s Stack) Has(field string, values ...string) bool {
 	return false
 }
 
+// CompareVersion compares the version stored under field against other.
+// Returns (-1, true), (0, true), or (1, true) when the stored version is
+// less than, equal to, or greater than other. Returns (0, false) when
+// the version is unknown for that field or either side fails to parse.
+//
+// Gating callers should treat ok=false as "don't run" rather than "not
+// vulnerable" - absence of a version is not proof of safety.
+//
+// Parsing is loose: leading digits per dot-separated segment are
+// compared as integers, shorter versions are zero-padded, and any
+// non-numeric suffix on a segment (e.g. "-rc1", "ubuntu1") is dropped.
+// Suitable for header-emitted version strings; not full semver.
+func (s Stack) CompareVersion(field, other string) (cmp int, ok bool) {
+	have, exists := s.Versions[strings.ToLower(field)]
+	if !exists || have == "" {
+		return 0, false
+	}
+	a, ok1 := parseVersion(have)
+	b, ok2 := parseVersion(other)
+	if !ok1 || !ok2 {
+		return 0, false
+	}
+	return compareVersions(a, b), true
+}
+
+func parseVersion(v string) ([]int, bool) {
+	if v == "" {
+		return nil, false
+	}
+	parts := strings.Split(v, ".")
+	out := make([]int, 0, len(parts))
+	for _, p := range parts {
+		i := 0
+		for i < len(p) && p[i] >= '0' && p[i] <= '9' {
+			i++
+		}
+		if i == 0 {
+			return nil, false
+		}
+		n, err := strconv.Atoi(p[:i])
+		if err != nil {
+			return nil, false
+		}
+		out = append(out, n)
+	}
+	if len(out) == 0 {
+		return nil, false
+	}
+	return out, true
+}
+
+func compareVersions(a, b []int) int {
+	n := len(a)
+	if len(b) > n {
+		n = len(b)
+	}
+	for i := 0; i < n; i++ {
+		var av, bv int
+		if i < len(a) {
+			av = a[i]
+		}
+		if i < len(b) {
+			bv = b[i]
+		}
+		if av < bv {
+			return -1
+		}
+		if av > bv {
+			return 1
+		}
+	}
+	return 0
+}
+
 // Summary renders a one-line human-readable summary, "key=value key=value
-// ...", suitable for log output. Empty fields are omitted.
+// ...", suitable for log output. Empty fields are omitted. When a version
+// is known for a field, it's appended with a slash: "server=nginx/1.25.0".
 func (s Stack) Summary() string {
 	var parts []string
 	add := func(k, v string) {
-		if v != "" {
-			parts = append(parts, k+"="+v)
+		if v == "" {
+			return
 		}
+		if ver := s.Versions[k]; ver != "" {
+			parts = append(parts, k+"="+v+"/"+ver)
+			return
+		}
+		parts = append(parts, k+"="+v)
 	}
 	add("server", s.Server)
 	add("language", s.Language)
@@ -225,6 +313,11 @@ func classify(resp *http.Response, body []byte) *Stack {
 		}
 		r.set(s)
 		s.Signals = append(s.Signals, "header:"+r.header+"~"+r.label())
+		if r.verField != "" {
+			if m := versionPattern.FindString(v); m != "" {
+				setVersion(s, r.verField, m)
+			}
+		}
 	}
 
 	for _, c := range resp.Cookies() {
@@ -240,11 +333,15 @@ func classify(resp *http.Response, body []byte) *Stack {
 
 	if len(body) > 0 {
 		for _, r := range bodyRules {
-			if !r.re.Match(body) {
+			m := r.re.FindSubmatch(body)
+			if m == nil {
 				continue
 			}
 			r.set(s)
 			s.Signals = append(s.Signals, "body:"+r.label)
+			if r.verField != "" && len(m) > 1 && len(m[1]) > 0 {
+				setVersion(s, r.verField, string(m[1]))
+			}
 		}
 	}
 

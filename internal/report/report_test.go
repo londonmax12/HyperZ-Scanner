@@ -670,6 +670,64 @@ func TestPDFReporterRendersStacksSection(t *testing.T) {
 	}
 }
 
+// sampleStacksWithVersions extends sampleStacks with a Versions map, used
+// to verify that all reporter surfaces propagate the new field.
+func sampleStacksWithVersions() map[string]*fingerprint.Stack {
+	return map[string]*fingerprint.Stack{
+		"example.com": {
+			Server:   "nginx",
+			Language: "php",
+			CMS:      "wordpress",
+			Versions: map[string]string{
+				"server":   "1.25.0",
+				"language": "8.2.0",
+				"cms":      "6.4.2",
+			},
+			Confidence: 0.5,
+		},
+	}
+}
+
+func TestTextReporterIncludesVersions(t *testing.T) {
+	out := writeFormatWithMeta(t, "text", sampleFindings(), Metadata{Stacks: sampleStacksWithVersions()})
+	want := "example.com - server=nginx/1.25.0 language=php/8.2.0 cms=wordpress/6.4.2 (confidence=50%)"
+	if !strings.Contains(out, want) {
+		t.Errorf("text missing %q\nfull:\n%s", want, out)
+	}
+}
+
+func TestMarkdownReporterIncludesVersions(t *testing.T) {
+	out := writeFormatWithMeta(t, "markdown", sampleFindings(), Metadata{Stacks: sampleStacksWithVersions()})
+	// Each known identifier should be paired with its version in the table cell.
+	want := "| example.com | nginx 1.25.0 | php 8.2.0 |  | wordpress 6.4.2 |"
+	if !strings.Contains(out, want) {
+		t.Errorf("markdown missing %q\nfull:\n%s", want, out)
+	}
+}
+
+func TestPDFReporterIncludesVersions(t *testing.T) {
+	out := writeFormatWithMeta(t, "pdf", sampleFindings(), Metadata{Stacks: sampleStacksWithVersions()})
+	want := "server=nginx/1.25.0 language=php/8.2.0 cms=wordpress/6.4.2"
+	if !strings.Contains(out, want) {
+		t.Errorf("PDF missing %q", want)
+	}
+}
+
+func TestJSONReporterIncludesVersionsMap(t *testing.T) {
+	out := writeFormatWithMeta(t, "json", sampleFindings(), Metadata{Stacks: sampleStacksWithVersions()})
+	var got jsonEnvelope
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("decode: %v\n%s", err, out)
+	}
+	s := got.Stacks["example.com"]
+	if s == nil {
+		t.Fatalf("example.com stack missing")
+	}
+	if s.Versions["server"] != "1.25.0" || s.Versions["cms"] != "6.4.2" {
+		t.Errorf("versions = %v, want server=1.25.0 cms=6.4.2", s.Versions)
+	}
+}
+
 func TestReporterStacksOmittedWhenEmpty(t *testing.T) {
 	// Empty stacks should not produce headers/sections in any format.
 	for _, f := range []string{"text", "jsonl", "markdown"} {
