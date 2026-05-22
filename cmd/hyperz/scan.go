@@ -307,7 +307,9 @@ func runScan(ctx context.Context, cfg *scanConfig, level checks.Level) int {
 	} else {
 		go func() {
 			defer close(targets)
-			feedErr <- feedSeeds(ctx, targets, seeds)
+			feedErr <- feedSeeds(ctx, targets, seeds, sc, func(seed, reason string) {
+				log.Warn("seed skipped", "url", seed, "reason", reason)
+			})
 		}()
 	}
 

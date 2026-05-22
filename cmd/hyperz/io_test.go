@@ -7,8 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
+
+	"github.com/londonball/hyperz/internal/scope"
 )
 
 func writeTempFile(t *testing.T, name, body string) string {
@@ -99,6 +102,102 @@ func TestFeedMissingFileErrors(t *testing.T) {
 	err := feed(context.Background(), out, nil, filepath.Join(t.TempDir(), "missing"))
 	if err == nil {
 		t.Fatal("expected error for missing file")
+	}
+}
+
+// drainSeeds runs feedSeeds in a goroutine, closes the output channel when
+// feedSeeds returns, and collects the URLs it pushed onto out along with the
+// (seed, reason) pairs delivered to the skip handler. Used by the feedSeeds
+// scope-gating tests below.
+func drainSeeds(ctx context.Context, seeds []string, sc *scope.Scope) ([]string, [][2]string, error) {
+	out := make(chan string, len(seeds))
+	var skips [][2]string
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- feedSeeds(ctx, out, seeds, sc, func(seed, reason string) {
+			skips = append(skips, [2]string{seed, reason})
+		})
+		close(out)
+	}()
+	var got []string
+	for u := range out {
+		got = append(got, u)
+	}
+	return got, skips, <-errCh
+}
+
+func TestFeedSeedsDropsOutOfScopeURL(t *testing.T) {
+	// The headline safety case: --url evil.example --scope-host good.example
+	// (no --crawl). Before the gate, the evil host slipped past every active
+	// check because the no-crawl path never consulted Scope.Allows.
+	sc, err := scope.New(scope.Config{Hosts: []string{"good.example"}})
+	if err != nil {
+		t.Fatalf("scope.New: %v", err)
+	}
+	got, skips, err := drainSeeds(context.Background(),
+		[]string{"http://evil.example/x", "http://good.example/y"}, sc)
+	if err != nil {
+		t.Fatalf("feedSeeds: %v", err)
+	}
+	if !reflect.DeepEqual(got, []string{"http://good.example/y"}) {
+		t.Fatalf("delivered %v, want only the in-scope seed", got)
+	}
+	if len(skips) != 1 || skips[0][0] != "http://evil.example/x" {
+		t.Fatalf("skip handler saw %v, want one call for the evil host", skips)
+	}
+	if !strings.Contains(skips[0][1], "out of scope") {
+		t.Errorf("skip reason = %q, want it to mention scope", skips[0][1])
+	}
+}
+
+func TestFeedSeedsDropsNonHTTPScheme(t *testing.T) {
+	got, skips, err := drainSeeds(context.Background(),
+		[]string{"ftp://x/y", "javascript:alert(1)", "http://ok"}, nil)
+	if err != nil {
+		t.Fatalf("feedSeeds: %v", err)
+	}
+	if !reflect.DeepEqual(got, []string{"http://ok"}) {
+		t.Fatalf("delivered %v, want only http://ok", got)
+	}
+	sort.Slice(skips, func(i, j int) bool { return skips[i][0] < skips[j][0] })
+	if len(skips) != 2 {
+		t.Fatalf("skip handler saw %v, want 2 calls", skips)
+	}
+}
+
+func TestFeedSeedsPassesEverythingWithNilScope(t *testing.T) {
+	// Nil scope is permissive (it just means "no host/path restrictions"),
+	// so every parseable http(s) URL must still flow through.
+	got, skips, err := drainSeeds(context.Background(),
+		[]string{"http://a", "https://b"}, nil)
+	if err != nil {
+		t.Fatalf("feedSeeds: %v", err)
+	}
+	if !reflect.DeepEqual(got, []string{"http://a", "https://b"}) {
+		t.Fatalf("delivered %v, want both seeds", got)
+	}
+	if len(skips) != 0 {
+		t.Fatalf("nil scope skipped %v; want nothing skipped", skips)
+	}
+}
+
+func TestFeedSeedsNilSkipHandlerSafe(t *testing.T) {
+	// Calling with a nil skip handler must not panic even when seeds are
+	// dropped; the warn-on-skip is best-effort, not load-bearing.
+	sc, err := scope.New(scope.Config{Hosts: []string{"good.example"}})
+	if err != nil {
+		t.Fatalf("scope.New: %v", err)
+	}
+	out := make(chan string, 2)
+	done := make(chan error, 1)
+	go func() {
+		done <- feedSeeds(context.Background(), out, []string{"http://evil.example/x"}, sc, nil)
+		close(out)
+	}()
+	for range out {
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("feedSeeds: %v", err)
 	}
 }
 
