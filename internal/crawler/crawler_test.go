@@ -241,6 +241,85 @@ func TestCrawlDefaultWorkersAndBody(t *testing.T) {
 	}
 }
 
+func TestCrawlAPIDiscoveryProbesWellKnownPaths(t *testing.T) {
+	// Server exposes a tiny HTML page at / and an OpenAPI spec at
+	// /openapi.json. With APIDiscovery on, the crawler should fetch the
+	// spec from a well-known probe and enqueue every documented operation
+	// as a scan target.
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `<p>home</p>`)
+	})
+	mux.HandleFunc("/openapi.json", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{
+			"openapi":"3.0.0",
+			"paths":{
+				"/api/users":{"get":{}},
+				"/api/users/{id}":{"get":{}}
+			}
+		}`)
+	})
+	// Other well-known paths 404 - normal case.
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New(newCrawlerClient(), Config{
+		Scope:        seedScope(t, 2, srv.URL),
+		APIDiscovery: true,
+	})
+	out := make(chan string, 64)
+	if err := c.Crawl(context.Background(), []string{srv.URL + "/"}, out); err != nil {
+		t.Fatalf("Crawl: %v", err)
+	}
+	got := stripHost(collectAll(out))
+	wantContains := []string{"/api/users", "/api/users/1"}
+	for _, w := range wantContains {
+		found := false
+		for _, u := range got {
+			if u == w {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("missing %q in crawl output %v", w, got)
+		}
+	}
+}
+
+func TestCrawlAPIDiscoveryDisabledSkipsNonHTML(t *testing.T) {
+	// Same server as above but APIDiscovery=false. The spec endpoint must
+	// not contribute any documented operations; only the seed should land.
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `<a href="/openapi.json">spec</a>`)
+	})
+	mux.HandleFunc("/openapi.json", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"openapi":"3.0.0","paths":{"/api/x":{"get":{}}}}`)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New(newCrawlerClient(), Config{
+		Scope:        seedScope(t, 2, srv.URL),
+		APIDiscovery: false,
+	})
+	out := make(chan string, 32)
+	if err := c.Crawl(context.Background(), []string{srv.URL + "/"}, out); err != nil {
+		t.Fatalf("Crawl: %v", err)
+	}
+	got := stripHost(collectAll(out))
+	for _, u := range got {
+		if u == "/api/x" {
+			t.Fatalf("APIDiscovery off should not enqueue spec-derived endpoints, got %v", got)
+		}
+	}
+}
+
 func TestCrawlDedupesAcrossFragments(t *testing.T) {
 	// /home is linked from /, /a, /b → must still be emitted only once.
 	mux := http.NewServeMux()

@@ -44,6 +44,7 @@ type scanConfig struct {
 	crawl        bool
 	crawlPages   int
 	crawlWorkers int
+	apiDiscovery bool
 
 	noFingerprint bool
 
@@ -142,6 +143,8 @@ Modes:
 	f.BoolVar(&cfg.crawl, "crawl", false, "discover scan targets by crawling from each seed URL")
 	f.IntVar(&cfg.crawlPages, "max-pages", 100, "max unique pages to enqueue while crawling (0 = unlimited)")
 	f.IntVar(&cfg.crawlWorkers, "crawl-workers", 8, "number of parallel crawl fetchers")
+	f.BoolVar(&cfg.apiDiscovery, "api-discovery", true,
+		"probe well-known OpenAPI/Swagger paths on each seed origin and enqueue every documented endpoint (requires --crawl)")
 
 	f.BoolVar(&cfg.noFingerprint, "no-fingerprint", false,
 		"disable stack detection; runs every check against every target")
@@ -293,9 +296,10 @@ func runScan(ctx context.Context, cfg *scanConfig, level checks.Level) int {
 	feedErr := make(chan error, 1)
 	if cfg.crawl {
 		cr := crawler.New(client, crawler.Config{
-			Workers:  cfg.crawlWorkers,
-			MaxPages: cfg.crawlPages,
-			Scope:    sc,
+			Workers:      cfg.crawlWorkers,
+			MaxPages:     cfg.crawlPages,
+			Scope:        sc,
+			APIDiscovery: cfg.apiDiscovery,
 		}, crawler.WithErrorHandler(func(target string, err error) {
 			log.Warn("crawl error", "target", target, "err", err)
 		}))

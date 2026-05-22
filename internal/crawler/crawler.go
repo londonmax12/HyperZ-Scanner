@@ -24,6 +24,13 @@ type Config struct {
 	MaxPages     int          // 0 → unlimited
 	MaxBodyBytes int64        // per-page body cap; 0 → 5 MiB
 	Scope        *scope.Scope // nil → no host/port/path/depth gating
+	// APIDiscovery enables two behaviors: (1) probing a fixed list of
+	// well-known OpenAPI / Swagger paths against each seed origin at
+	// startup, and (2) when a fetched URL returns a JSON/YAML body that
+	// parses as a spec, queueing every documented operation as a target.
+	// Without this the crawler skips non-HTML responses and never sees
+	// API surface that isn't linked from a rendered page.
+	APIDiscovery bool
 }
 
 type Crawler struct {
@@ -126,8 +133,24 @@ func (c *Crawler) Crawl(ctx context.Context, seeds []string, out chan<- string) 
 	// Bootstrap: hold a virtual "submission in progress" slot so workers
 	// don't see pending=0 mid-seeding and close work prematurely.
 	pending.Add(1)
+	probedOrigins := map[string]struct{}{}
 	for _, s := range seeds {
 		submit(s, 0)
+		if !c.cfg.APIDiscovery {
+			continue
+		}
+		u, err := url.Parse(s)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+			continue
+		}
+		origin := u.Scheme + "://" + u.Host
+		if _, ok := probedOrigins[origin]; ok {
+			continue
+		}
+		probedOrigins[origin] = struct{}{}
+		for _, p := range wellKnownSpecPaths {
+			submit(origin+p, 0)
+		}
 	}
 	if pending.Add(-1) == 0 {
 		closeWork()
@@ -157,7 +180,28 @@ func (c *Crawler) process(ctx context.Context, it item, out chan<- string, submi
 	}
 	defer resp.Body.Close()
 
-	if !strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/html") {
+	ct := resp.Header.Get("Content-Type")
+	if !strings.Contains(strings.ToLower(ct), "text/html") {
+		if !c.cfg.APIDiscovery {
+			return
+		}
+		base, err := url.Parse(it.url)
+		if err != nil {
+			return
+		}
+		if !looksLikeSpec(ct, base.Path) {
+			return
+		}
+		body, err := httpclient.ReadBody(resp, c.cfg.MaxBodyBytes)
+		if err != nil {
+			if c.onError != nil {
+				c.onError(it.url, err)
+			}
+			return
+		}
+		for _, link := range extractAPIEndpoints(body, base) {
+			submit(link, it.depth+1)
+		}
 		return
 	}
 
