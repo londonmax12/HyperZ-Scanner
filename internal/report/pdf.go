@@ -275,7 +275,7 @@ func (d *pdfDoc) renderFinding(f checks.Finding) {
 	if f.Remediation != "" {
 		d.writeWrapped("fix:    "+f.Remediation, 0, fontReg, pdfSizeBase, 0.20, 0.35, 0.20)
 	}
-	if e := f.Evidence; e != nil && (e.Method != "" || e.Status != 0 || e.Snippet != "") {
+	if e := f.Evidence; e != nil && (e.Method != "" || e.Status != 0 || e.Snippet != "" || e.Exchange != nil) {
 		method := e.Method
 		if method == "" {
 			method = "GET"
@@ -293,11 +293,29 @@ func (d *pdfDoc) renderFinding(f checks.Finding) {
 			}
 			d.writeWrapped(line, 12, fontReg, pdfSizeChrome, 0.35, 0.35, 0.35)
 		}
+		if ex := e.Exchange; ex != nil {
+			d.renderExchangeBody("request body", ex.RequestBody, ex.RequestBodyTruncated)
+			d.renderExchangeBody("response body", ex.ResponseBody, ex.ResponseBodyTruncated)
+		}
 	}
 	if f.DedupeKey != "" {
 		d.writeLine("id: "+f.DedupeKey, fontReg, pdfSizeChrome, 0.55, 0.55, 0.55)
 	}
 	d.gap(4)
+}
+
+func (d *pdfDoc) renderExchangeBody(label, body string, truncated bool) {
+	if body == "" {
+		return
+	}
+	heading := label
+	if truncated {
+		heading += " (truncated)"
+	}
+	d.writeWrapped(heading+":", 0, fontBold, pdfSizeChrome, 0.30, 0.30, 0.30)
+	for _, line := range strings.Split(body, "\n") {
+		d.writeWrapped(line, 12, fontReg, pdfSizeChrome, 0.35, 0.35, 0.35)
+	}
 }
 
 func pdfJoinNonEmpty(sep string, parts ...string) string {

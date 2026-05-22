@@ -1,6 +1,7 @@
 package httpclient
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"net/http"
@@ -613,5 +614,134 @@ func TestClientDoHonorsCtxOverRequestCtx(t *testing.T) {
 	cancel()
 	if _, err := c.Do(ctx, req); err == nil {
 		t.Fatal("expected error from canceled ctx passed to Do")
+	}
+}
+
+func TestReadBodyCappedReturnsFullBodyWhenUnderCap(t *testing.T) {
+	resp := &http.Response{Body: io.NopCloser(strings.NewReader("hello"))}
+	got, truncated, err := ReadBodyCapped(resp, 100)
+	if err != nil {
+		t.Fatalf("ReadBodyCapped: %v", err)
+	}
+	if truncated {
+		t.Errorf("truncated = true, want false (body fit under cap)")
+	}
+	if string(got) != "hello" {
+		t.Errorf("body = %q, want %q", got, "hello")
+	}
+}
+
+func TestReadBodyCappedFlagsTruncation(t *testing.T) {
+	resp := &http.Response{Body: io.NopCloser(strings.NewReader("0123456789"))}
+	got, truncated, err := ReadBodyCapped(resp, 4)
+	if err != nil {
+		t.Fatalf("ReadBodyCapped: %v", err)
+	}
+	if !truncated {
+		t.Errorf("truncated = false, want true (body > cap)")
+	}
+	if string(got) != "0123" {
+		t.Errorf("body = %q, want %q", got, "0123")
+	}
+}
+
+func TestReadBodyCappedExactlyAtCapNotTruncated(t *testing.T) {
+	// Cap == body length is the boundary. The +1 read disambiguates: nothing
+	// past the cap, so truncated must be false.
+	resp := &http.Response{Body: io.NopCloser(strings.NewReader("abcd"))}
+	got, truncated, err := ReadBodyCapped(resp, 4)
+	if err != nil {
+		t.Fatalf("ReadBodyCapped: %v", err)
+	}
+	if truncated {
+		t.Errorf("truncated = true at exact cap, want false")
+	}
+	if string(got) != "abcd" {
+		t.Errorf("body = %q, want abcd", got)
+	}
+}
+
+func TestReadBodyCappedNilSafe(t *testing.T) {
+	got, truncated, err := ReadBodyCapped(nil, 10)
+	if err != nil || truncated || got != nil {
+		t.Errorf("nil resp: got=%v truncated=%v err=%v", got, truncated, err)
+	}
+	got, truncated, err = ReadBodyCapped(&http.Response{}, 10)
+	if err != nil || truncated || got != nil {
+		t.Errorf("nil body: got=%v truncated=%v err=%v", got, truncated, err)
+	}
+}
+
+func TestSnapshotRequestBodyReturnsCopyAndReinstallsBody(t *testing.T) {
+	const payload = "user=alice&token=abc"
+	req, err := http.NewRequest(http.MethodPost, "http://x/", strings.NewReader(payload))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	snap, truncated, err := SnapshotRequestBody(req, 1024)
+	if err != nil {
+		t.Fatalf("SnapshotRequestBody: %v", err)
+	}
+	if truncated {
+		t.Errorf("truncated = true, want false")
+	}
+	if string(snap) != payload {
+		t.Errorf("snapshot = %q, want %q", snap, payload)
+	}
+	// req.Body must be re-readable - that's the whole point of reinstalling it.
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		t.Fatalf("read reinstalled body: %v", err)
+	}
+	if string(body) != payload {
+		t.Errorf("reinstalled body = %q, want %q", body, payload)
+	}
+	if req.ContentLength != int64(len(payload)) {
+		t.Errorf("ContentLength = %d, want %d", req.ContentLength, len(payload))
+	}
+	// GetBody must also yield the full payload so client retries work.
+	if req.GetBody == nil {
+		t.Fatal("GetBody not installed - client retries on this request would fail")
+	}
+	rc, err := req.GetBody()
+	if err != nil {
+		t.Fatalf("GetBody: %v", err)
+	}
+	again, _ := io.ReadAll(rc)
+	if string(again) != payload {
+		t.Errorf("GetBody yielded %q, want %q", again, payload)
+	}
+}
+
+func TestSnapshotRequestBodyTruncatesSnapshotButPreservesFullBody(t *testing.T) {
+	full := bytes.Repeat([]byte("x"), 50)
+	req, _ := http.NewRequest(http.MethodPost, "http://x/", bytes.NewReader(full))
+	snap, truncated, err := SnapshotRequestBody(req, 10)
+	if err != nil {
+		t.Fatalf("SnapshotRequestBody: %v", err)
+	}
+	if !truncated {
+		t.Errorf("truncated = false, want true (body > cap)")
+	}
+	if len(snap) != 10 {
+		t.Errorf("snapshot len = %d, want 10", len(snap))
+	}
+	// The reinstalled body must still carry the full payload so the request
+	// the server sees isn't itself truncated.
+	body, _ := io.ReadAll(req.Body)
+	if len(body) != 50 {
+		t.Errorf("reinstalled body len = %d, want 50 (truncation is for snapshot only)", len(body))
+	}
+}
+
+func TestSnapshotRequestBodyNilSafe(t *testing.T) {
+	snap, truncated, err := SnapshotRequestBody(nil, 10)
+	if err != nil || truncated || snap != nil {
+		t.Errorf("nil req: snap=%v truncated=%v err=%v", snap, truncated, err)
+	}
+	req, _ := http.NewRequest(http.MethodGet, "http://x/", nil)
+	snap, truncated, err = SnapshotRequestBody(req, 10)
+	if err != nil || truncated || snap != nil {
+		t.Errorf("nil body: snap=%v truncated=%v err=%v", snap, truncated, err)
 	}
 }

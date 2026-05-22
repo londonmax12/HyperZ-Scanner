@@ -500,6 +500,22 @@ func (markdownReporter) Write(ctx context.Context, w io.Writer, in <-chan checks
 			if e.Snippet != "" {
 				fmt.Fprintf(w, "\n```\n%s\n```\n", e.Snippet)
 			}
+			if ex := e.Exchange; ex != nil {
+				if ex.RequestBody != "" {
+					label := "Request body"
+					if ex.RequestBodyTruncated {
+						label += " (truncated)"
+					}
+					fmt.Fprintf(w, "\n**%s**\n\n```\n%s\n```\n", label, ex.RequestBody)
+				}
+				if ex.ResponseBody != "" {
+					label := "Response body"
+					if ex.ResponseBodyTruncated {
+						label += " (truncated)"
+					}
+					fmt.Fprintf(w, "\n**%s**\n\n```\n%s\n```\n", label, ex.ResponseBody)
+				}
+			}
 		}
 		if f.DedupeKey != "" {
 			fmt.Fprintf(w, "- **Fingerprint:** `%s`\n", f.DedupeKey)

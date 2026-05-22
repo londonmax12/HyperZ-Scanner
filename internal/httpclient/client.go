@@ -1,6 +1,7 @@
 package httpclient
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"net"
@@ -283,6 +284,55 @@ func ReadBody(resp *http.Response, max int64) ([]byte, error) {
 		return nil, nil
 	}
 	return io.ReadAll(io.LimitReader(resp.Body, max))
+}
+
+// ReadBodyCapped is like ReadBody but additionally reports whether the
+// response body would have exceeded max. It reads one extra byte past max
+// to disambiguate "fits exactly" from "was cut off"; on truncation the
+// returned slice is trimmed back to max. Useful when recording bodies into
+// Evidence so reports can flag a snippet as a partial capture.
+func ReadBodyCapped(resp *http.Response, max int64) ([]byte, bool, error) {
+	if resp == nil || resp.Body == nil {
+		return nil, false, nil
+	}
+	buf, err := io.ReadAll(io.LimitReader(resp.Body, max+1))
+	if err != nil {
+		return nil, false, err
+	}
+	if int64(len(buf)) > max {
+		return buf[:max], true, nil
+	}
+	return buf, false, nil
+}
+
+// SnapshotRequestBody buffers req.Body and reinstalls req.Body / req.GetBody
+// so the request remains sendable, returning the captured bytes. The
+// truncated flag fires when the body exceeded max; the snapshot is then
+// trimmed to max but req.Body still carries the full payload so the actual
+// request goes out intact.
+//
+// Use this from active checks that want to record the exact payload they
+// sent into Evidence (the body is consumed by the time Do returns, so the
+// snapshot has to be taken before sending). Safe on a nil request or nil
+// body - returns (nil, false, nil) in both cases.
+func SnapshotRequestBody(req *http.Request, max int64) ([]byte, bool, error) {
+	if req == nil || req.Body == nil {
+		return nil, false, nil
+	}
+	full, err := io.ReadAll(req.Body)
+	_ = req.Body.Close()
+	if err != nil {
+		return nil, false, err
+	}
+	req.Body = io.NopCloser(bytes.NewReader(full))
+	req.GetBody = func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(full)), nil
+	}
+	req.ContentLength = int64(len(full))
+	if int64(len(full)) > max {
+		return full[:max], true, nil
+	}
+	return full, false, nil
 }
 
 func drainAndClose(body io.ReadCloser) {

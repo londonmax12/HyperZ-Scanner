@@ -5,6 +5,7 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
+	"net/http"
 	"net/url"
 	"sort"
 	"strings"
@@ -75,11 +76,95 @@ func ParseLevel(s string) (Level, error) {
 // Snippet is a short, human-readable excerpt; request line, response status,
 // a few headers, and/or a body fragment. kept small enough to fit inline in
 // reports.
+//
+// Exchange, when populated, carries the structured request/response pair the
+// check observed. Passive checks that only need headers can stick with
+// Snippet; active checks that probe with a crafted payload should set
+// Exchange so the report can show exactly what was sent and returned.
 type Evidence struct {
-	Method     string `json:"method,omitempty"`
-	RequestURL string `json:"request_url,omitempty"`
-	Status     int    `json:"status,omitempty"`
-	Snippet    string `json:"snippet,omitempty"`
+	Method     string    `json:"method,omitempty"`
+	RequestURL string    `json:"request_url,omitempty"`
+	Status     int       `json:"status,omitempty"`
+	Snippet    string    `json:"snippet,omitempty"`
+	Exchange   *Exchange `json:"exchange,omitempty"`
+}
+
+// Exchange is a self-contained snapshot of one HTTP request/response pair
+// that triggered a finding. It is safe to retain after the underlying
+// *http.Response has been closed: headers are deep-copied and bodies are
+// stored as strings.
+//
+// Bodies are captured up to the cap the recorder used; the *Truncated
+// flags fire when that cap was hit so reports can call out a cut-off
+// snippet rather than presenting it as a full payload.
+//
+// Build one with RecordExchange. Use httpclient.SnapshotRequestBody if a
+// check needs to capture its outgoing request body (the body is consumed
+// by the time the response returns, so a snapshot has to be taken before
+// the request is sent).
+type Exchange struct {
+	Method                string      `json:"method,omitempty"`
+	URL                   string      `json:"url,omitempty"`
+	Proto                 string      `json:"proto,omitempty"`
+	RequestHeaders        http.Header `json:"request_headers,omitempty"`
+	RequestBody           string      `json:"request_body,omitempty"`
+	RequestBodyTruncated  bool        `json:"request_body_truncated,omitempty"`
+	Status                int         `json:"status,omitempty"`
+	ResponseHeaders       http.Header `json:"response_headers,omitempty"`
+	ResponseBody          string      `json:"response_body,omitempty"`
+	ResponseBodyTruncated bool        `json:"response_body_truncated,omitempty"`
+}
+
+// RecordExchange snapshots req and resp into an Exchange. reqBody is the
+// outgoing body bytes the check sent (pass nil for GET/HEAD or any request
+// without a body); reqTruncated reports whether reqBody was clipped by the
+// recorder. respBody is the already-read response body (typically via
+// httpclient.ReadBodyCapped) and respTruncated reports whether that read
+// hit its cap.
+//
+// req may be nil, in which case method/URL/request-headers are filled from
+// resp.Request when available. resp may also be nil (e.g. a network error
+// after the request was sent), in which case only the request side is
+// populated. Returns nil only if both req and resp are nil.
+func RecordExchange(req *http.Request, reqBody []byte, reqTruncated bool, resp *http.Response, respBody []byte, respTruncated bool) *Exchange {
+	if req == nil && resp == nil {
+		return nil
+	}
+	ex := &Exchange{}
+	if req != nil {
+		ex.Method = req.Method
+		if req.URL != nil {
+			ex.URL = req.URL.String()
+		}
+		ex.RequestHeaders = req.Header.Clone()
+	}
+	if len(reqBody) > 0 {
+		ex.RequestBody = string(reqBody)
+		ex.RequestBodyTruncated = reqTruncated
+	}
+	if resp != nil {
+		ex.Status = resp.StatusCode
+		ex.Proto = resp.Proto
+		ex.ResponseHeaders = resp.Header.Clone()
+		// Fill missing request-side fields from resp.Request - useful when
+		// the caller only kept the response (e.g. client.Get returned).
+		if resp.Request != nil {
+			if ex.Method == "" {
+				ex.Method = resp.Request.Method
+			}
+			if ex.URL == "" && resp.Request.URL != nil {
+				ex.URL = resp.Request.URL.String()
+			}
+			if ex.RequestHeaders == nil {
+				ex.RequestHeaders = resp.Request.Header.Clone()
+			}
+		}
+	}
+	if len(respBody) > 0 {
+		ex.ResponseBody = string(respBody)
+		ex.ResponseBodyTruncated = respTruncated
+	}
+	return ex
 }
 
 // Finding is the report-facing record of one issue at one location.

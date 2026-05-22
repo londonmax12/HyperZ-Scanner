@@ -682,6 +682,68 @@ func TestReporterStacksOmittedWhenEmpty(t *testing.T) {
 	}
 }
 
+func TestMarkdownReporterRendersExchangeBodies(t *testing.T) {
+	findings := []checks.Finding{{
+		Check: "active-xss", Target: "http://t", URL: "http://t/q",
+		Severity: checks.SeverityHigh, Title: "reflected XSS",
+		Evidence: &checks.Evidence{
+			Method: "GET", RequestURL: "http://t/q?x=<script>", Status: 200,
+			Exchange: &checks.Exchange{
+				Method:                "GET",
+				URL:                   "http://t/q?x=<script>",
+				Status:                200,
+				RequestBody:           "user=alice",
+				RequestBodyTruncated:  true,
+				ResponseBody:          "<html><script>alert(1)</script>",
+				ResponseBodyTruncated: false,
+			},
+		},
+	}}
+	out := writeFormat(t, "markdown", findings)
+	for _, want := range []string{
+		"**Request body (truncated)**",
+		"user=alice",
+		"**Response body**",
+		"<script>alert(1)</script>",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("markdown missing %q\nfull:\n%s", want, out)
+		}
+	}
+	// Response wasn't truncated - must not be labelled as such.
+	if strings.Contains(out, "Response body (truncated)") {
+		t.Errorf("markdown wrongly labelled response body as truncated:\n%s", out)
+	}
+}
+
+func TestPDFReporterRendersExchangeBodies(t *testing.T) {
+	findings := []checks.Finding{{
+		Check: "active-sqli", Target: "http://t", URL: "http://t/q",
+		Severity: checks.SeverityHigh, Title: "SQLi",
+		Evidence: &checks.Evidence{
+			Method: "POST", RequestURL: "http://t/q", Status: 500,
+			Exchange: &checks.Exchange{
+				RequestBody:           "id=1 OR 1=1",
+				ResponseBody:          "syntax error near OR",
+				ResponseBodyTruncated: true,
+			},
+		},
+	}}
+	out := writeFormat(t, "pdf", findings)
+	for _, want := range []string{
+		"request body:",
+		"id=1 OR 1=1",
+		// '(' and ')' are escaped in PDF content streams, so we look for the
+		// raw escaped form rather than the rendered "(truncated)".
+		`response body \(truncated\):`,
+		"syntax error near OR",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("PDF missing %q", want)
+		}
+	}
+}
+
 func TestPDFReporterMultiPage(t *testing.T) {
 	// Generate enough findings to force pagination.
 	var many []checks.Finding
