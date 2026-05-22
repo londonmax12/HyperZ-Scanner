@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/londonball/hyperz/internal/httpclient"
+	"github.com/londonball/hyperz/internal/page"
 	"github.com/londonball/hyperz/internal/scope"
 )
 
@@ -41,7 +42,8 @@ var tlsAuditDial = func(ctx context.Context, addr string, cfg *tls.Config) (*tls
 // tlsAuditNow lets tests freeze "now" when evaluating expiry windows.
 var tlsAuditNow = time.Now
 
-func (c TLSAudit) Run(ctx context.Context, _ *httpclient.Client, _ *scope.Scope, target string) ([]Finding, error) {
+func (c TLSAudit) Run(ctx context.Context, _ *httpclient.Client, _ *scope.Scope, p page.Page) ([]Finding, error) {
+	target := p.URL
 	u, err := url.Parse(target)
 	if err != nil {
 		return nil, fmt.Errorf("parse target: %w", err)

@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 
 	"github.com/londonball/hyperz/internal/httpclient"
+	"github.com/londonball/hyperz/internal/page"
 	"github.com/londonball/hyperz/internal/scope"
 )
 
@@ -65,9 +66,16 @@ type item struct {
 }
 
 // Crawl visits seeds and any reachable links permitted by the configured
-// Scope, emitting every unique URL it queues onto out. out is closed when
-// crawling completes or ctx is canceled.
-func (c *Crawler) Crawl(ctx context.Context, seeds []string, out chan<- string) error {
+// Scope, emitting one page.Page per unique URL onto out. The Page carries
+// the fetched URL's status, headers, body (capped at MaxBodyBytes), and
+// extracted forms so downstream checks don't have to re-fetch. out is
+// closed when crawling completes or ctx is canceled.
+//
+// A Page is also emitted for URLs that couldn't be fetched (network
+// error, scope-permitted-but-redirect-only, etc.); those carry the URL
+// only and leave Status / Headers / Body / Forms zero-valued. Checks
+// that need the body must tolerate the empty case (or fetch themselves).
+func (c *Crawler) Crawl(ctx context.Context, seeds []string, out chan<- page.Page) error {
 	defer close(out)
 
 	work := make(chan item, c.cfg.Workers*2)
@@ -160,15 +168,16 @@ func (c *Crawler) Crawl(ctx context.Context, seeds []string, out chan<- string) 
 	return ctx.Err()
 }
 
-func (c *Crawler) process(ctx context.Context, it item, out chan<- string, submit func(string, int)) {
-	select {
-	case <-ctx.Done():
-		return
-	case out <- it.url:
-	}
-
-	if !c.cfg.Scope.AllowsDepth(it.depth + 1) {
-		return
+func (c *Crawler) process(ctx context.Context, it item, out chan<- page.Page, submit func(string, int)) {
+	// emit drops a Page onto out, respecting ctx cancellation. Returns
+	// false if the send was abandoned so the caller can stop processing.
+	emit := func(p page.Page) bool {
+		select {
+		case <-ctx.Done():
+			return false
+		case out <- p:
+			return true
+		}
 	}
 
 	resp, err := c.client.Get(ctx, it.url)
@@ -176,48 +185,76 @@ func (c *Crawler) process(ctx context.Context, it item, out chan<- string, submi
 		if c.onError != nil {
 			c.onError(it.url, err)
 		}
+		// Surface the URL anyway so the scanner / passive checks still see
+		// it - matches the pre-Page behavior where every queued URL was
+		// emitted before fetching.
+		emit(page.Page{URL: it.url})
 		return
 	}
 	defer resp.Body.Close()
-
-	ct := resp.Header.Get("Content-Type")
-	if !strings.Contains(strings.ToLower(ct), "text/html") {
-		if !c.cfg.APIDiscovery {
-			return
-		}
-		base, err := url.Parse(it.url)
-		if err != nil {
-			return
-		}
-		if !looksLikeSpec(ct, base.Path) {
-			return
-		}
-		body, err := httpclient.ReadBody(resp, c.cfg.MaxBodyBytes)
-		if err != nil {
-			if c.onError != nil {
-				c.onError(it.url, err)
-			}
-			return
-		}
-		for _, link := range extractAPIEndpoints(body, base) {
-			submit(link, it.depth+1)
-		}
-		return
-	}
 
 	body, err := httpclient.ReadBody(resp, c.cfg.MaxBodyBytes)
 	if err != nil {
 		if c.onError != nil {
 			c.onError(it.url, err)
 		}
+		emit(page.Page{
+			URL:     it.url,
+			Status:  resp.StatusCode,
+			Headers: resp.Header,
+		})
 		return
 	}
 
 	base, err := url.Parse(it.url)
 	if err != nil {
+		emit(page.Page{
+			URL:     it.url,
+			Status:  resp.StatusCode,
+			Headers: resp.Header,
+			Body:    body,
+		})
 		return
 	}
-	for _, link := range extractLinks(base, body) {
+
+	ct := resp.Header.Get("Content-Type")
+	p := page.Page{
+		URL:     it.url,
+		Status:  resp.StatusCode,
+		Headers: resp.Header,
+		Body:    body,
+	}
+
+	if strings.Contains(strings.ToLower(ct), "text/html") {
+		links, forms := extractAll(base, body)
+		p.Forms = forms
+		if !emit(p) {
+			return
+		}
+		if !c.cfg.Scope.AllowsDepth(it.depth + 1) {
+			return
+		}
+		for _, link := range links {
+			submit(link, it.depth+1)
+		}
+		return
+	}
+
+	// Non-HTML: emit unchanged (no forms), then optionally feed the body
+	// to the OpenAPI / Swagger extractor when API discovery is on.
+	if !emit(p) {
+		return
+	}
+	if !c.cfg.APIDiscovery {
+		return
+	}
+	if !looksLikeSpec(ct, base.Path) {
+		return
+	}
+	if !c.cfg.Scope.AllowsDepth(it.depth + 1) {
+		return
+	}
+	for _, link := range extractAPIEndpoints(body, base) {
 		submit(link, it.depth+1)
 	}
 }

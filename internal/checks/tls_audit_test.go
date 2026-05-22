@@ -16,6 +16,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/londonball/hyperz/internal/page"
 )
 
 func TestTLSAuditName(t *testing.T) {
@@ -33,7 +35,7 @@ func TestTLSAuditLevel(t *testing.T) {
 func TestTLSAuditSkipsHTTP(t *testing.T) {
 	// http:// is a valid scan input but has no TLS. The check must return
 	// cleanly without dialing anything.
-	findings, err := TLSAudit{}.Run(context.Background(), nil, nil, "http://example.com/")
+	findings, err := TLSAudit{}.Run(context.Background(), nil, nil, page.FromURL("http://example.com/"))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -43,7 +45,7 @@ func TestTLSAuditSkipsHTTP(t *testing.T) {
 }
 
 func TestTLSAuditRejectsHostlessTarget(t *testing.T) {
-	_, err := TLSAudit{}.Run(context.Background(), nil, nil, "https:///path")
+	_, err := TLSAudit{}.Run(context.Background(), nil, nil, page.FromURL("https:///path"))
 	if err == nil {
 		t.Fatal("expected error for target with no host")
 	}
@@ -57,7 +59,7 @@ func TestTLSAuditHappyPath(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	findings, err := TLSAudit{}.Run(context.Background(), nil, nil, srv.URL)
+	findings, err := TLSAudit{}.Run(context.Background(), nil, nil, page.FromURL(srv.URL))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -216,7 +218,7 @@ func TestTLSAuditHostnameMismatchEndToEnd(t *testing.T) {
 	go acceptOne(ln)
 
 	u := &url.URL{Scheme: "https", Host: ln.Addr().String()}
-	findings, err := TLSAudit{}.Run(context.Background(), nil, nil, u.String())
+	findings, err := TLSAudit{}.Run(context.Background(), nil, nil, page.FromURL(u.String()))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}

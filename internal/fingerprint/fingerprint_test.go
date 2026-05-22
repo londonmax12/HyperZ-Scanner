@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/londonball/hyperz/internal/httpclient"
+	"github.com/londonball/hyperz/internal/page"
 )
 
 func newTestClient(t *testing.T) *httpclient.Client {
@@ -28,7 +29,7 @@ func TestDetectFromServerAndPoweredBy(t *testing.T) {
 	defer srv.Close()
 
 	d := New(newTestClient(t))
-	stack, err := d.Detect(context.Background(), srv.URL)
+	stack, err := d.Detect(context.Background(), page.FromURL(srv.URL))
 	if err != nil {
 		t.Fatalf("Detect: %v", err)
 	}
@@ -50,7 +51,7 @@ func TestDetectFromCookie(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	stack, err := New(newTestClient(t)).Detect(context.Background(), srv.URL)
+	stack, err := New(newTestClient(t)).Detect(context.Background(), page.FromURL(srv.URL))
 	if err != nil {
 		t.Fatalf("Detect: %v", err)
 	}
@@ -72,7 +73,7 @@ func TestDetectFromHTMLBody(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	stack, err := New(newTestClient(t)).Detect(context.Background(), srv.URL)
+	stack, err := New(newTestClient(t)).Detect(context.Background(), page.FromURL(srv.URL))
 	if err != nil {
 		t.Fatalf("Detect: %v", err)
 	}
@@ -92,7 +93,7 @@ func TestDetectCDNAndWAF(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	stack, err := New(newTestClient(t)).Detect(context.Background(), srv.URL)
+	stack, err := New(newTestClient(t)).Detect(context.Background(), page.FromURL(srv.URL))
 	if err != nil {
 		t.Fatalf("Detect: %v", err)
 	}
@@ -115,7 +116,7 @@ func TestDetectCachesByHost(t *testing.T) {
 
 	d := New(newTestClient(t))
 	for i := 0; i < 5; i++ {
-		if _, err := d.Detect(context.Background(), srv.URL+"/page"); err != nil {
+		if _, err := d.Detect(context.Background(), page.FromURL(srv.URL+"/page")); err != nil {
 			t.Fatalf("Detect: %v", err)
 		}
 	}
@@ -136,8 +137,8 @@ func TestDetectOnDetectFiresOncePerHost(t *testing.T) {
 		calls.Add(1)
 	}))
 	for i := 0; i < 3; i++ {
-		_, _ = d.Detect(context.Background(), srv.URL+"/a")
-		_, _ = d.Detect(context.Background(), srv.URL+"/b")
+		_, _ = d.Detect(context.Background(), page.FromURL(srv.URL+"/a"))
+		_, _ = d.Detect(context.Background(), page.FromURL(srv.URL+"/b"))
 	}
 	if got := calls.Load(); got != 1 {
 		t.Fatalf("OnDetect calls = %d, want 1", got)
@@ -147,7 +148,7 @@ func TestDetectOnDetectFiresOncePerHost(t *testing.T) {
 func TestDetectReturnsErrorOnUnreachableHost(t *testing.T) {
 	c := httpclient.New(httpclient.Config{Timeout: 1 * time.Second, UserAgent: "test"})
 	d := New(c)
-	stack, err := d.Detect(context.Background(), "http://hyperz-fp-test-no-such-host.invalid")
+	stack, err := d.Detect(context.Background(), page.FromURL("http://hyperz-fp-test-no-such-host.invalid"))
 	if err == nil {
 		t.Fatal("expected error from unreachable host")
 	}
@@ -228,7 +229,7 @@ func TestDetectExtractsVersionsFromHeaders(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	stack, err := New(newTestClient(t)).Detect(context.Background(), srv.URL)
+	stack, err := New(newTestClient(t)).Detect(context.Background(), page.FromURL(srv.URL))
 	if err != nil {
 		t.Fatalf("Detect: %v", err)
 	}
@@ -253,7 +254,7 @@ func TestDetectExtractsVersionFromMetaGenerator(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	stack, err := New(newTestClient(t)).Detect(context.Background(), srv.URL)
+	stack, err := New(newTestClient(t)).Detect(context.Background(), page.FromURL(srv.URL))
 	if err != nil {
 		t.Fatalf("Detect: %v", err)
 	}
@@ -277,7 +278,7 @@ func TestDetectNoVersionWhenAbsent(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	stack, err := New(newTestClient(t)).Detect(context.Background(), srv.URL)
+	stack, err := New(newTestClient(t)).Detect(context.Background(), page.FromURL(srv.URL))
 	if err != nil {
 		t.Fatalf("Detect: %v", err)
 	}
@@ -301,7 +302,7 @@ func TestDetectIgnoresXRuntimeAsVersion(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	stack, err := New(newTestClient(t)).Detect(context.Background(), srv.URL)
+	stack, err := New(newTestClient(t)).Detect(context.Background(), page.FromURL(srv.URL))
 	if err != nil {
 		t.Fatalf("Detect: %v", err)
 	}

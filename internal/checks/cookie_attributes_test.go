@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/londonball/hyperz/internal/httpclient"
+	"github.com/londonball/hyperz/internal/page"
 )
 
 // httpsTestClient skips cert verification so httptest.NewTLSServer's
@@ -42,7 +43,7 @@ func TestCookieAttributesNoCookiesNoFindings(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	findings, err := CookieAttributes{}.Run(context.Background(), newTestClient(t), nil, srv.URL)
+	findings, err := CookieAttributes{}.Run(context.Background(), newTestClient(t), nil, page.FromURL(srv.URL))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -61,7 +62,7 @@ func TestCookieAttributesFullyHardenedHTTPS(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	findings, err := CookieAttributes{}.Run(context.Background(), httpsTestClient(t), nil, srv.URL)
+	findings, err := CookieAttributes{}.Run(context.Background(), httpsTestClient(t), nil, page.FromURL(srv.URL))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -78,7 +79,7 @@ func TestCookieAttributesAllMissingOnHTTPS(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	findings, err := CookieAttributes{}.Run(context.Background(), httpsTestClient(t), nil, srv.URL)
+	findings, err := CookieAttributes{}.Run(context.Background(), httpsTestClient(t), nil, page.FromURL(srv.URL))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -118,7 +119,7 @@ func TestCookieAttributesHTTPSkipsSecure(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	findings, err := CookieAttributes{}.Run(context.Background(), newTestClient(t), nil, srv.URL)
+	findings, err := CookieAttributes{}.Run(context.Background(), newTestClient(t), nil, page.FromURL(srv.URL))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -139,7 +140,7 @@ func TestCookieAttributesSeverityMapping(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	findings, err := CookieAttributes{}.Run(context.Background(), httpsTestClient(t), nil, srv.URL)
+	findings, err := CookieAttributes{}.Run(context.Background(), httpsTestClient(t), nil, page.FromURL(srv.URL))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -181,7 +182,7 @@ func TestCookieAttributesPopulatesEnrichedFields(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	findings, err := CookieAttributes{}.Run(context.Background(), httpsTestClient(t), nil, srv.URL)
+	findings, err := CookieAttributes{}.Run(context.Background(), httpsTestClient(t), nil, page.FromURL(srv.URL))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -223,7 +224,7 @@ func TestCookieAttributesDedupePerCookieAndAttribute(t *testing.T) {
 	defer srv.Close()
 
 	run := func() []Finding {
-		fs, err := CookieAttributes{}.Run(context.Background(), httpsTestClient(t), nil, srv.URL)
+		fs, err := CookieAttributes{}.Run(context.Background(), httpsTestClient(t), nil, page.FromURL(srv.URL))
 		if err != nil {
 			t.Fatalf("Run: %v", err)
 		}
@@ -260,7 +261,7 @@ func TestCookieAttributesReturnsErrorOnNetworkFailure(t *testing.T) {
 		Timeout:   1 * time.Second,
 		UserAgent: "test",
 	})
-	_, err := CookieAttributes{}.Run(context.Background(), c, nil, "http://hyperz-test-no-such-host.invalid")
+	_, err := CookieAttributes{}.Run(context.Background(), c, nil, page.FromURL("http://hyperz-test-no-such-host.invalid"))
 	if err == nil {
 		t.Fatal("expected error from unreachable host")
 	}

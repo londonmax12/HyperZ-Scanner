@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/londonball/hyperz/internal/httpclient"
+	"github.com/londonball/hyperz/internal/page"
 	"github.com/londonball/hyperz/internal/scope"
 )
 
@@ -64,44 +65,32 @@ var (
 	}
 )
 
-func (c MixedContent) Run(ctx context.Context, client *httpclient.Client, _ *scope.Scope, target string) ([]Finding, error) {
-	resp, err := client.Get(ctx, target)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	finalURL := target
-	isHTTPS := false
-	if resp.Request != nil && resp.Request.URL != nil {
-		finalURL = resp.Request.URL.String()
-		isHTTPS = resp.Request.URL.Scheme == "https"
-	}
+func (c MixedContent) Run(ctx context.Context, client *httpclient.Client, _ *scope.Scope, p page.Page) ([]Finding, error) {
 	// Mixed content only exists on an HTTPS page. On http:// the bigger fix
 	// is moving the page itself to HTTPS, surfaced by the missing-HSTS
 	// finding from security-headers.
-	if !isHTTPS {
+	if !strings.HasPrefix(strings.ToLower(p.URL), "https://") {
 		return nil, nil
+	}
+
+	snap, err := ensureResponse(ctx, client, p, mixedContentBodyCap)
+	if err != nil {
+		return nil, err
 	}
 	// Skip non-HTML responses (images, JSON, binary). Absent Content-Type is
 	// treated as possibly-HTML; we'd rather scan an unlabeled HTML page than
 	// silently miss it.
-	if ct := strings.ToLower(resp.Header.Get("Content-Type")); ct != "" && !strings.Contains(ct, "html") {
+	if ct := strings.ToLower(snap.Headers.Get("Content-Type")); ct != "" && !strings.Contains(ct, "html") {
 		return nil, nil
 	}
-
-	body, err := httpclient.ReadBody(resp, mixedContentBodyCap)
-	if err != nil {
-		return nil, err
-	}
-	if len(body) == 0 {
+	if len(snap.Body) == 0 {
 		return nil, nil
 	}
 	// Strip comments first so commented-out tags don't produce false positives.
-	html := mixedCommentRE.ReplaceAllString(string(body), "")
+	html := mixedCommentRE.ReplaceAllString(string(snap.Body), "")
 
-	hostScope := HostScope(finalURL)
-	evidence := BuildEvidence("GET", finalURL, resp.StatusCode, resp.Header, "")
+	hostScope := HostScope(p.URL)
+	evidence := BuildEvidence("GET", p.URL, snap.Status, snap.Headers, "")
 
 	// Group by offending URL so a resource referenced N times on the page
 	// produces one finding. If both an active and a passive tag reference
@@ -155,11 +144,11 @@ func (c MixedContent) Run(ctx context.Context, client *httpclient.Client, _ *sco
 		}
 		findings = append(findings, Finding{
 			Check:       c.Name(),
-			Target:      target,
-			URL:         finalURL,
+			Target:      p.URL,
+			URL:         p.URL,
 			Severity:    severity,
 			Title:       fmt.Sprintf("%s mixed content: <%s> loads %s", kind, r.tag, u),
-			Detail:      fmt.Sprintf("HTTPS page %s loads %s subresource over plaintext via <%s>: %s", finalURL, kind, r.tag, u),
+			Detail:      fmt.Sprintf("HTTPS page %s loads %s subresource over plaintext via <%s>: %s", p.URL, kind, r.tag, u),
 			CWE:         "CWE-319",
 			OWASP:       "A02:2021 Cryptographic Failures",
 			Remediation: "Serve the referenced resource over HTTPS, host it locally on the same origin, or remove the reference.",

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/londonball/hyperz/internal/page"
 	"github.com/londonball/hyperz/internal/scope"
 )
 
@@ -110,7 +111,7 @@ func TestFeedMissingFileErrors(t *testing.T) {
 // (seed, reason) pairs delivered to the skip handler. Used by the feedSeeds
 // scope-gating tests below.
 func drainSeeds(ctx context.Context, seeds []string, sc *scope.Scope) ([]string, [][2]string, error) {
-	out := make(chan string, len(seeds))
+	out := make(chan page.Page, len(seeds))
 	var skips [][2]string
 	errCh := make(chan error, 1)
 	go func() {
@@ -120,8 +121,8 @@ func drainSeeds(ctx context.Context, seeds []string, sc *scope.Scope) ([]string,
 		close(out)
 	}()
 	var got []string
-	for u := range out {
-		got = append(got, u)
+	for p := range out {
+		got = append(got, p.URL)
 	}
 	return got, skips, <-errCh
 }
@@ -188,7 +189,7 @@ func TestFeedSeedsNilSkipHandlerSafe(t *testing.T) {
 	if err != nil {
 		t.Fatalf("scope.New: %v", err)
 	}
-	out := make(chan string, 2)
+	out := make(chan page.Page, 2)
 	done := make(chan error, 1)
 	go func() {
 		done <- feedSeeds(context.Background(), out, []string{"http://evil.example/x"}, sc, nil)

@@ -6,6 +6,7 @@ import (
 	"sort"
 
 	"github.com/londonball/hyperz/internal/httpclient"
+	"github.com/londonball/hyperz/internal/page"
 	"github.com/londonball/hyperz/internal/scope"
 )
 
@@ -23,19 +24,13 @@ func (ServerLeak) Level() Level { return LevelPassive }
 // CWE-200 (Exposure of Sensitive Information) and OWASP A05:2021.
 var serverLeakHeaders = []string{"Server", "X-Powered-By"}
 
-func (c ServerLeak) Run(ctx context.Context, client *httpclient.Client, _ *scope.Scope, target string) ([]Finding, error) {
-	resp, err := client.Get(ctx, target)
+func (c ServerLeak) Run(ctx context.Context, client *httpclient.Client, _ *scope.Scope, p page.Page) ([]Finding, error) {
+	snap, err := ensureResponse(ctx, client, p, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
-
-	finalURL := target
-	if resp.Request != nil && resp.Request.URL != nil {
-		finalURL = resp.Request.URL.String()
-	}
-	hostScope := HostScope(finalURL)
-	evidence := BuildEvidence("GET", finalURL, resp.StatusCode, resp.Header, "")
+	hostScope := HostScope(p.URL)
+	evidence := BuildEvidence("GET", p.URL, snap.Status, snap.Headers, "")
 
 	// Sorted iteration so multi-header responses produce stable output.
 	names := append([]string(nil), serverLeakHeaders...)
@@ -43,17 +38,17 @@ func (c ServerLeak) Run(ctx context.Context, client *httpclient.Client, _ *scope
 
 	var findings []Finding
 	for _, header := range names {
-		value := resp.Header.Get(header)
+		value := snap.Headers.Get(header)
 		if value == "" {
 			continue
 		}
 		findings = append(findings, Finding{
 			Check:       c.Name(),
-			Target:      target,
-			URL:         finalURL,
+			Target:      p.URL,
+			URL:         p.URL,
 			Severity:    SeverityInfo,
 			Title:       "server software disclosed via " + header,
-			Detail:      fmt.Sprintf("%s responded with %s: %s", finalURL, header, value),
+			Detail:      fmt.Sprintf("%s responded with %s: %s", p.URL, header, value),
 			CWE:         "CWE-200",
 			OWASP:       "A05:2021 Security Misconfiguration",
 			Remediation: "Suppress or generalize the " + header + " header at the server/proxy layer so version details aren't advertised.",

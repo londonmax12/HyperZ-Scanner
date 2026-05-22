@@ -8,37 +8,9 @@ import (
 	"strings"
 
 	"golang.org/x/net/html"
+
+	"github.com/londonball/hyperz/internal/page"
 )
-
-// Form captures one <form> element discovered on a crawled page.
-//
-// Method is uppercase ("GET" or "POST"; the HTML default is "GET" when the
-// attribute is missing or unrecognized). Action is resolved to an absolute
-// http(s) URL against the page's base; forms whose action resolves to a
-// non-http(s) scheme are dropped from the extractor output. Inputs is every
-// named control inside the form - text, hidden, password, email, number,
-// checkbox, radio, file, select, textarea, button - so input-fuzzing checks
-// (XSS POST, SQLi POST, CSRF, IDOR) can fuzz one field at a time without
-// re-walking the DOM.
-type Form struct {
-	Method string
-	Action string
-	Inputs []FormInput
-}
-
-// FormInput is one named control extracted from a <form>. Name is the
-// HTML `name` attribute (controls without a name are skipped since the
-// browser won't submit them). Type is the lowercased HTML `type` for
-// <input>; for non-input elements it's the tag name ("select", "textarea",
-// "button"). Value is the default value the browser would submit, taken
-// from the `value` attribute for inputs/options/buttons, or the inner
-// text for <textarea>. Empty Value is fine and common; checks supply
-// their own payload anyway.
-type FormInput struct {
-	Name  string
-	Type  string
-	Value string
-}
 
 // extractLinks pulls every navigable http(s) URL out of body, resolved
 // against base, and returns the deduped set. Sources covered: href on
@@ -56,7 +28,7 @@ func extractLinks(base *url.URL, body []byte) []string {
 // extractForms returns every <form> in body with action resolved against
 // base and inputs collected. Use this from the crawler to hand checks a
 // first-class form artifact instead of letting each check re-parse HTML.
-func extractForms(base *url.URL, body []byte) []Form {
+func extractForms(base *url.URL, body []byte) []page.Form {
 	_, forms := extractAll(base, body)
 	return forms
 }
@@ -64,7 +36,7 @@ func extractForms(base *url.URL, body []byte) []Form {
 // extractAll is the single tokenizer pass that produces both link and form
 // artifacts. Walking the document once keeps cost predictable on the
 // MaxBodyBytes-capped buffers the crawler hands us.
-func extractAll(base *url.URL, body []byte) ([]string, []Form) {
+func extractAll(base *url.URL, body []byte) ([]string, []page.Form) {
 	if len(body) == 0 || base == nil {
 		return nil, nil
 	}
@@ -73,8 +45,8 @@ func extractAll(base *url.URL, body []byte) ([]string, []Form) {
 	// want to keep.
 	links := newLinkSink(base)
 	var (
-		forms      []Form
-		current    *Form
+		forms      []page.Form
+		current    *page.Form
 		formBase   = base
 		inTextarea bool
 		taName     string
@@ -145,7 +117,7 @@ func extractAll(base *url.URL, body []byte) ([]string, []Form) {
 			case "select":
 				if current != nil {
 					if name := attrs["name"]; name != "" {
-						current.Inputs = append(current.Inputs, FormInput{
+						current.Inputs = append(current.Inputs, page.FormInput{
 							Name: name, Type: "select", Value: attrs["value"],
 						})
 					}
@@ -163,7 +135,7 @@ func extractAll(base *url.URL, body []byte) ([]string, []Form) {
 						if t == "" {
 							t = "submit"
 						}
-						current.Inputs = append(current.Inputs, FormInput{
+						current.Inputs = append(current.Inputs, page.FormInput{
 							Name: name, Type: t, Value: attrs["value"],
 						})
 					}
@@ -180,7 +152,7 @@ func extractAll(base *url.URL, body []byte) ([]string, []Form) {
 				}
 			case "textarea":
 				if current != nil && inTextarea && taName != "" {
-					current.Inputs = append(current.Inputs, FormInput{
+					current.Inputs = append(current.Inputs, page.FormInput{
 						Name: taName, Type: "textarea", Value: taBuf.String(),
 					})
 				}
@@ -315,7 +287,7 @@ func metaRefreshURL(content string) string {
 // action against base. Forms whose action resolves to a non-http(s)
 // scheme are still returned (with Action empty) so checks can decide
 // whether to skip; this keeps the extractor's contract simple.
-func newForm(base *url.URL, attrs map[string]string) *Form {
+func newForm(base *url.URL, attrs map[string]string) *page.Form {
 	method := strings.ToUpper(strings.TrimSpace(attrs["method"]))
 	if method == "" {
 		method = "GET"
@@ -341,7 +313,7 @@ func newForm(base *url.URL, attrs map[string]string) *Form {
 		clone.Fragment = ""
 		action = clone.String()
 	}
-	return &Form{Method: method, Action: action}
+	return &page.Form{Method: method, Action: action}
 }
 
 // inputFromAttrs builds a FormInput from an <input> tag. Returns ok=false
@@ -349,14 +321,14 @@ func newForm(base *url.URL, attrs map[string]string) *Form {
 // the scanner has no business poking at - submit/reset/image/hidden are
 // kept (hidden is high-signal for CSRF/IDOR), button/file we still pass
 // through so checks can decide what to do with them.
-func inputFromAttrs(attrs map[string]string) (FormInput, bool) {
+func inputFromAttrs(attrs map[string]string) (page.FormInput, bool) {
 	name := attrs["name"]
 	if name == "" {
-		return FormInput{}, false
+		return page.FormInput{}, false
 	}
 	t := strings.ToLower(strings.TrimSpace(attrs["type"]))
 	if t == "" {
 		t = "text"
 	}
-	return FormInput{Name: name, Type: t, Value: attrs["value"]}, true
+	return page.FormInput{Name: name, Type: t, Value: attrs["value"]}, true
 }

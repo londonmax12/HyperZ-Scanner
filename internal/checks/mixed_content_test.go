@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/londonball/hyperz/internal/httpclient"
+	"github.com/londonball/hyperz/internal/page"
 )
 
 func TestMixedContentName(t *testing.T) {
@@ -32,7 +33,7 @@ func TestMixedContentSkippedOnHTTP(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	findings, err := MixedContent{}.Run(context.Background(), newTestClient(t), nil, srv.URL)
+	findings, err := MixedContent{}.Run(context.Background(), newTestClient(t), nil, page.FromURL(srv.URL))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -48,7 +49,7 @@ func TestMixedContentSkippedOnNonHTMLContentType(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	findings, err := MixedContent{}.Run(context.Background(), httpsTestClient(t), nil, srv.URL)
+	findings, err := MixedContent{}.Run(context.Background(), httpsTestClient(t), nil, page.FromURL(srv.URL))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -68,7 +69,7 @@ func TestMixedContentCleanPageNoFindings(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	findings, err := MixedContent{}.Run(context.Background(), httpsTestClient(t), nil, srv.URL)
+	findings, err := MixedContent{}.Run(context.Background(), httpsTestClient(t), nil, page.FromURL(srv.URL))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -86,7 +87,7 @@ func TestMixedContentActiveSeverityHigh(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	findings, err := MixedContent{}.Run(context.Background(), httpsTestClient(t), nil, srv.URL)
+	findings, err := MixedContent{}.Run(context.Background(), httpsTestClient(t), nil, page.FromURL(srv.URL))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -117,7 +118,7 @@ func TestMixedContentPassiveSeverityLow(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	findings, err := MixedContent{}.Run(context.Background(), httpsTestClient(t), nil, srv.URL)
+	findings, err := MixedContent{}.Run(context.Background(), httpsTestClient(t), nil, page.FromURL(srv.URL))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -150,7 +151,7 @@ func TestMixedContentMultipleTagsAndDedupePerURL(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	findings, err := MixedContent{}.Run(context.Background(), httpsTestClient(t), nil, srv.URL)
+	findings, err := MixedContent{}.Run(context.Background(), httpsTestClient(t), nil, page.FromURL(srv.URL))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -186,7 +187,7 @@ func TestMixedContentIgnoresCommentedTags(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	findings, err := MixedContent{}.Run(context.Background(), httpsTestClient(t), nil, srv.URL)
+	findings, err := MixedContent{}.Run(context.Background(), httpsTestClient(t), nil, page.FromURL(srv.URL))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -206,7 +207,7 @@ func TestMixedContentDedupeStableAcrossRuns(t *testing.T) {
 	defer srv.Close()
 
 	run := func() map[string]string {
-		fs, err := MixedContent{}.Run(context.Background(), httpsTestClient(t), nil, srv.URL)
+		fs, err := MixedContent{}.Run(context.Background(), httpsTestClient(t), nil, page.FromURL(srv.URL))
 		if err != nil {
 			t.Fatalf("Run: %v", err)
 		}
@@ -241,7 +242,7 @@ func TestMixedContentPopulatesEnrichedFields(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	findings, err := MixedContent{}.Run(context.Background(), httpsTestClient(t), nil, srv.URL)
+	findings, err := MixedContent{}.Run(context.Background(), httpsTestClient(t), nil, page.FromURL(srv.URL))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -281,7 +282,7 @@ func TestMixedContentSingleQuotedAndUppercaseScheme(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	findings, err := MixedContent{}.Run(context.Background(), httpsTestClient(t), nil, srv.URL)
+	findings, err := MixedContent{}.Run(context.Background(), httpsTestClient(t), nil, page.FromURL(srv.URL))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -295,7 +296,10 @@ func TestMixedContentReturnsErrorOnNetworkFailure(t *testing.T) {
 		Timeout:   1 * time.Second,
 		UserAgent: "test",
 	})
-	_, err := MixedContent{}.Run(context.Background(), c, nil, "http://hyperz-test-no-such-host.invalid")
+	// HTTPS URL because the check now short-circuits on non-HTTPS pages
+	// (mixed content only exists on HTTPS); the test still exercises the
+	// "fetch fails, error propagates" branch.
+	_, err := MixedContent{}.Run(context.Background(), c, nil, page.FromURL("https://hyperz-test-no-such-host.invalid"))
 	if err == nil {
 		t.Fatal("expected error from unreachable host")
 	}

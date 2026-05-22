@@ -14,6 +14,7 @@ import (
 	"github.com/londonball/hyperz/internal/checks"
 	"github.com/londonball/hyperz/internal/fingerprint"
 	"github.com/londonball/hyperz/internal/httpclient"
+	"github.com/londonball/hyperz/internal/page"
 	"github.com/londonball/hyperz/internal/scope"
 )
 
@@ -28,7 +29,7 @@ type stubCheck struct {
 
 func (s *stubCheck) Name() string        { return s.name }
 func (s *stubCheck) Level() checks.Level { return checks.LevelPassive }
-func (s *stubCheck) Run(ctx context.Context, _ *httpclient.Client, _ *scope.Scope, target string) ([]checks.Finding, error) {
+func (s *stubCheck) Run(ctx context.Context, _ *httpclient.Client, _ *scope.Scope, p page.Page) ([]checks.Finding, error) {
 	s.hits.Add(1)
 	if s.delay > 0 {
 		select {
@@ -42,7 +43,7 @@ func (s *stubCheck) Run(ctx context.Context, _ *httpclient.Client, _ *scope.Scop
 	}
 	out := make([]checks.Finding, len(s.findings))
 	for i, f := range s.findings {
-		f.Target = target
+		f.Target = p.URL
 		out[i] = f
 	}
 	return out, nil
@@ -57,13 +58,13 @@ func newNilClient() *httpclient.Client {
 // Production code uses ScanAll directly; this helper exists so tests don't
 // have to reproduce the channel boilerplate.
 func runOne(ctx context.Context, s *Scanner, target string) ([]checks.Finding, error) {
-	targets := make(chan string, 1)
-	targets <- target
-	close(targets)
+	pages := make(chan page.Page, 1)
+	pages <- page.FromURL(target)
+	close(pages)
 
 	out := make(chan checks.Finding, 16)
 	errCh := make(chan error, 1)
-	go func() { errCh <- s.ScanAll(ctx, targets, out) }()
+	go func() { errCh <- s.ScanAll(ctx, pages, out) }()
 
 	var all []checks.Finding
 	for f := range out {
@@ -99,13 +100,13 @@ func TestScanAllRunsCheckPerTarget(t *testing.T) {
 	c := &stubCheck{name: "stub", findings: []checks.Finding{{Title: "f"}}}
 	s := New(newNilClient(), []checks.Check{c}, WithConcurrency(4))
 
-	targets := make(chan string, 3)
+	pages := make(chan page.Page, 3)
 	for _, u := range []string{"http://a", "http://b", "http://c"} {
-		targets <- u
+		pages <- page.FromURL(u)
 	}
-	close(targets)
+	close(pages)
 	out := make(chan checks.Finding, 16)
-	if err := s.ScanAll(context.Background(), targets, out); err != nil {
+	if err := s.ScanAll(context.Background(), pages, out); err != nil {
 		t.Fatalf("ScanAll: %v", err)
 	}
 	var findings []checks.Finding
@@ -169,15 +170,15 @@ func TestScanCancellationFlushesInFlightFindings(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	targets := make(chan string, 1)
-	targets <- "http://t"
-	close(targets)
+	pages := make(chan page.Page, 1)
+	pages <- page.FromURL("http://t")
+	close(pages)
 	// Unbuffered so the sender parks between each send - that's the window
 	// where the old code dropped findings on cancel.
 	out := make(chan checks.Finding)
 
 	scanDone := make(chan error, 1)
-	go func() { scanDone <- s.ScanAll(ctx, targets, out) }()
+	go func() { scanDone <- s.ScanAll(ctx, pages, out) }()
 
 	var got []checks.Finding
 	got = append(got, <-out)
@@ -204,13 +205,13 @@ func TestScanContextCancellationStopsWork(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // pre-canceled
 
-	targets := make(chan string, 5)
+	pages := make(chan page.Page, 5)
 	for i := 0; i < 5; i++ {
-		targets <- "http://t"
+		pages <- page.FromURL("http://t")
 	}
-	close(targets)
+	close(pages)
 	out := make(chan checks.Finding, 16)
-	err := s.ScanAll(ctx, targets, out)
+	err := s.ScanAll(ctx, pages, out)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("ScanAll err = %v, want context.Canceled", err)
 	}

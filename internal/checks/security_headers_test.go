@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/londonball/hyperz/internal/httpclient"
+	"github.com/londonball/hyperz/internal/page"
 )
 
 func newTestClient(t *testing.T) *httpclient.Client {
@@ -32,7 +33,7 @@ func TestSecurityHeadersAllPresent(t *testing.T) {
 	defer srv.Close()
 
 	c := SecurityHeaders{}
-	findings, err := c.Run(context.Background(), newTestClient(t), nil, srv.URL)
+	findings, err := c.Run(context.Background(), newTestClient(t), nil, page.FromURL(srv.URL))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -47,7 +48,7 @@ func TestSecurityHeadersAllMissing(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	findings, err := SecurityHeaders{}.Run(context.Background(), newTestClient(t), nil, srv.URL)
+	findings, err := SecurityHeaders{}.Run(context.Background(), newTestClient(t), nil, page.FromURL(srv.URL))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -92,7 +93,7 @@ func TestSecurityHeadersSeverityMapping(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	findings, err := SecurityHeaders{}.Run(context.Background(), newTestClient(t), nil, srv.URL)
+	findings, err := SecurityHeaders{}.Run(context.Background(), newTestClient(t), nil, page.FromURL(srv.URL))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -113,7 +114,7 @@ func TestSecurityHeadersReturnsErrorOnNetworkFailure(t *testing.T) {
 		Timeout:   1 * time.Second,
 		UserAgent: "test",
 	})
-	_, err := SecurityHeaders{}.Run(context.Background(), c, nil, "http://hyperz-test-no-such-host.invalid")
+	_, err := SecurityHeaders{}.Run(context.Background(), c, nil, page.FromURL("http://hyperz-test-no-such-host.invalid"))
 	if err == nil {
 		t.Fatal("expected error from unreachable host")
 	}
@@ -137,7 +138,7 @@ func TestSecurityHeadersPopulatesEnrichedFields(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	findings, err := SecurityHeaders{}.Run(context.Background(), newTestClient(t), nil, srv.URL)
+	findings, err := SecurityHeaders{}.Run(context.Background(), newTestClient(t), nil, page.FromURL(srv.URL))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -181,7 +182,7 @@ func TestSecurityHeadersDedupeKeysAreStableAndPerHeader(t *testing.T) {
 	defer srv.Close()
 
 	run := func() map[string]string {
-		findings, err := SecurityHeaders{}.Run(context.Background(), newTestClient(t), nil, srv.URL)
+		findings, err := SecurityHeaders{}.Run(context.Background(), newTestClient(t), nil, page.FromURL(srv.URL))
 		if err != nil {
 			t.Fatalf("Run: %v", err)
 		}

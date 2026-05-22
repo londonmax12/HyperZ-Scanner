@@ -17,6 +17,7 @@ import (
 	"sync"
 
 	"github.com/londonball/hyperz/internal/httpclient"
+	"github.com/londonball/hyperz/internal/page"
 )
 
 const defaultMaxBodyBytes = 256 << 10 // 256 KiB - enough for <head> in practice
@@ -257,12 +258,18 @@ func New(client *httpclient.Client, opts ...Option) *Detector {
 	return d
 }
 
-// Detect fingerprints the host of target. Repeat calls for the same
-// host:port return the cached stack. An unparseable URL yields an empty
-// stack and a non-nil error. Network failures are returned as-is - the
-// caller decides whether to soft-fail.
-func (d *Detector) Detect(ctx context.Context, target string) (*Stack, error) {
-	u, err := url.Parse(target)
+// Detect fingerprints the host of p. Repeat calls for the same host:port
+// return the cached stack. An unparseable URL yields an empty stack and a
+// non-nil error. Network failures are returned as-is - the caller decides
+// whether to soft-fail.
+//
+// When p already carries the response (p.Headers non-nil), Detect classifies
+// from that snapshot rather than issuing a fresh GET. This is the load-
+// bearing optimization on a crawl: every Page from a host shares one
+// fingerprint cache slot, and the slot is populated from whichever Page
+// arrives first - no extra request needed.
+func (d *Detector) Detect(ctx context.Context, p page.Page) (*Stack, error) {
+	u, err := url.Parse(p.URL)
 	if err != nil || u.Host == "" {
 		return &Stack{}, err
 	}
@@ -271,7 +278,7 @@ func (d *Detector) Detect(ctx context.Context, target string) (*Stack, error) {
 	v, _ := d.cache.LoadOrStore(key, &cacheEntry{})
 	entry := v.(*cacheEntry)
 	entry.once.Do(func() {
-		entry.stack, entry.err = d.detect(ctx, target)
+		entry.stack, entry.err = d.detect(ctx, p)
 		if entry.err == nil && d.onDetect != nil {
 			d.onDetect(u.Host, entry.stack)
 		}
@@ -279,8 +286,14 @@ func (d *Detector) Detect(ctx context.Context, target string) (*Stack, error) {
 	return entry.stack, entry.err
 }
 
-func (d *Detector) detect(ctx context.Context, target string) (*Stack, error) {
-	resp, err := d.client.Get(ctx, target)
+// detect runs classification on p. If p has no captured headers (e.g. the
+// caller built it from a bare URL) we fetch the URL ourselves; otherwise
+// we reuse what the crawler already saw, which is the common case.
+func (d *Detector) detect(ctx context.Context, p page.Page) (*Stack, error) {
+	if p.Headers != nil {
+		return classifyHeaders(p.Headers, p.Status, p.Body), nil
+	}
+	resp, err := d.client.Get(ctx, p.URL)
 	if err != nil {
 		return &Stack{}, err
 	}
@@ -291,6 +304,23 @@ func (d *Detector) detect(ctx context.Context, target string) (*Stack, error) {
 		body, _ = httpclient.ReadBody(resp, d.maxBodyBytes)
 	}
 	return classify(resp, body), nil
+}
+
+// classifyHeaders is the response-less classify path: when we already have
+// the response (from the crawler's Page) we can walk the same rule tables
+// without a live *http.Response.
+func classifyHeaders(headers http.Header, status int, body []byte) *Stack {
+	resp := &http.Response{
+		StatusCode: status,
+		Header:     headers,
+	}
+	if !isHTML(headers.Get("Content-Type")) {
+		// Mirror the live-fetch path: only HTML bodies are passed through
+		// the body rules. Other content (JSON, images) carries no useful
+		// fingerprint signal here.
+		body = nil
+	}
+	return classify(resp, body)
 }
 
 func isHTML(contentType string) bool {

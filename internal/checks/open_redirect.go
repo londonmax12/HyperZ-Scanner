@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/londonball/hyperz/internal/httpclient"
+	"github.com/londonball/hyperz/internal/page"
 	"github.com/londonball/hyperz/internal/scope"
 )
 
@@ -68,7 +69,8 @@ var openRedirectParams = []string{
 	"url",
 }
 
-func (c OpenRedirect) Run(ctx context.Context, client *httpclient.Client, sc *scope.Scope, target string) ([]Finding, error) {
+func (c OpenRedirect) Run(ctx context.Context, client *httpclient.Client, sc *scope.Scope, p page.Page) ([]Finding, error) {
+	target := p.URL
 	u, err := url.Parse(target)
 	if err != nil || u.Scheme == "" || u.Host == "" {
 		// Nothing actionable: an unparseable target isn't a finding, and

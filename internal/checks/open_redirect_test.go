@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/londonball/hyperz/internal/httpclient"
+	"github.com/londonball/hyperz/internal/page"
 	"github.com/londonball/hyperz/internal/scope"
 )
 
@@ -47,7 +48,7 @@ func TestOpenRedirectDetectsVulnerableNextParam(t *testing.T) {
 	srv := httptest.NewServer(vulnRedirectHandler(t))
 	defer srv.Close()
 
-	findings, err := OpenRedirect{}.Run(context.Background(), newTestClient(t), nil, srv.URL+"/login")
+	findings, err := OpenRedirect{}.Run(context.Background(), newTestClient(t), nil, page.FromURL(srv.URL+"/login"))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -79,7 +80,7 @@ func TestOpenRedirectEvidenceCapturesExchange(t *testing.T) {
 	srv := httptest.NewServer(vulnRedirectHandler(t))
 	defer srv.Close()
 
-	findings, err := OpenRedirect{}.Run(context.Background(), newTestClient(t), nil, srv.URL+"/login")
+	findings, err := OpenRedirect{}.Run(context.Background(), newTestClient(t), nil, page.FromURL(srv.URL+"/login"))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -119,7 +120,7 @@ func TestOpenRedirectMatchesProtocolRelative(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	findings, err := OpenRedirect{}.Run(context.Background(), newTestClient(t), nil, srv.URL+"/login")
+	findings, err := OpenRedirect{}.Run(context.Background(), newTestClient(t), nil, page.FromURL(srv.URL+"/login"))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -136,7 +137,7 @@ func TestOpenRedirectNoFindingOnSafeRedirect(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	findings, err := OpenRedirect{}.Run(context.Background(), newTestClient(t), nil, srv.URL+"/login")
+	findings, err := OpenRedirect{}.Run(context.Background(), newTestClient(t), nil, page.FromURL(srv.URL+"/login"))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -154,7 +155,7 @@ func TestOpenRedirectNoFindingWhenNo3xx(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	findings, err := OpenRedirect{}.Run(context.Background(), newTestClient(t), nil, srv.URL+"/login")
+	findings, err := OpenRedirect{}.Run(context.Background(), newTestClient(t), nil, page.FromURL(srv.URL+"/login"))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -174,7 +175,7 @@ func TestOpenRedirectNoFindingOnDifferentExternalHost(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	findings, err := OpenRedirect{}.Run(context.Background(), newTestClient(t), nil, srv.URL+"/login")
+	findings, err := OpenRedirect{}.Run(context.Background(), newTestClient(t), nil, page.FromURL(srv.URL+"/login"))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -198,7 +199,7 @@ func TestOpenRedirectRespectsScope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("scope.New: %v", err)
 	}
-	findings, err := OpenRedirect{}.Run(context.Background(), newTestClient(t), sc, srv.URL+"/")
+	findings, err := OpenRedirect{}.Run(context.Background(), newTestClient(t), sc, page.FromURL(srv.URL+"/"))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -229,7 +230,7 @@ func TestOpenRedirectPreservesOtherQueryParamsAndOverridesProbedParam(t *testing
 	// the strength of URL-present params (a, b, next) alone, proving they're
 	// probed regardless of the path heuristic.
 	_, err := OpenRedirect{}.Run(context.Background(), newTestClient(t),
-		nil, srv.URL+"/r?a=1&b=2&next=original")
+		nil, page.FromURL(srv.URL+"/r?a=1&b=2&next=original"))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -282,7 +283,7 @@ func TestOpenRedirectProbesCanonicalParamNames(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	findings, err := OpenRedirect{}.Run(context.Background(), newTestClient(t), nil, srv.URL+"/login")
+	findings, err := OpenRedirect{}.Run(context.Background(), newTestClient(t), nil, page.FromURL(srv.URL+"/login"))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -309,7 +310,7 @@ func TestOpenRedirectProbesExistingNonStandardParam(t *testing.T) {
 	defer srv.Close()
 
 	findings, err := OpenRedirect{}.Run(context.Background(), newTestClient(t),
-		nil, srv.URL+"/r?weirdname=foo")
+		nil, page.FromURL(srv.URL+"/r?weirdname=foo"))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -340,7 +341,7 @@ func TestOpenRedirectMultipleVulnerableParamsProduceDistinctFindings(t *testing.
 
 	// /login is redirect-ish, so the canonical sweep fires and all three names
 	// get probed at LevelDefault.
-	findings, err := OpenRedirect{}.Run(context.Background(), newTestClient(t), nil, srv.URL+"/login")
+	findings, err := OpenRedirect{}.Run(context.Background(), newTestClient(t), nil, page.FromURL(srv.URL+"/login"))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -361,7 +362,7 @@ func TestOpenRedirectDedupeKeyStableAndPerPath(t *testing.T) {
 	defer srv.Close()
 
 	run := func(path string) string {
-		fs, err := OpenRedirect{}.Run(context.Background(), newTestClient(t), nil, srv.URL+path)
+		fs, err := OpenRedirect{}.Run(context.Background(), newTestClient(t), nil, page.FromURL(srv.URL+path))
 		if err != nil {
 			t.Fatalf("Run %q: %v", path, err)
 		}
@@ -404,7 +405,7 @@ func TestOpenRedirectDoesNotFollowRedirect(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, _ = OpenRedirect{}.Run(context.Background(), newTestClient(t), nil, srv.URL+"/login")
+	_, _ = OpenRedirect{}.Run(context.Background(), newTestClient(t), nil, page.FromURL(srv.URL+"/login"))
 
 	if got := followHit.Load(); got != 0 {
 		t.Errorf("server saw %d follow-up requests, want 0 (no follow)", got)
@@ -415,7 +416,7 @@ func TestOpenRedirectIgnoresUnparseableTarget(t *testing.T) {
 	// Garbage target: not an error worth surfacing to scan summary; just
 	// silently no-op. The crawler/seed loader is responsible for input
 	// validation.
-	findings, err := OpenRedirect{}.Run(context.Background(), newTestClient(t), nil, "::not-a-url::")
+	findings, err := OpenRedirect{}.Run(context.Background(), newTestClient(t), nil, page.FromURL("::not-a-url::"))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -432,7 +433,7 @@ func TestOpenRedirectReturnsErrorOnNetworkFailure(t *testing.T) {
 	// /login is redirect-ish so the canonical sweep fires; with the host
 	// unreachable every probe errors and the wholesale-failure path returns
 	// the first error.
-	_, err := OpenRedirect{}.Run(context.Background(), c, nil, "http://hyperz-test-no-such-host.invalid/login")
+	_, err := OpenRedirect{}.Run(context.Background(), c, nil, page.FromURL("http://hyperz-test-no-such-host.invalid/login"))
 	if err == nil {
 		t.Fatal("expected error from unreachable host")
 	}
@@ -460,7 +461,7 @@ func TestOpenRedirectReportsEveryProbeFailureAsBreadcrumb(t *testing.T) {
 
 	// /login earns the full canonical sweep; with the host unreachable every
 	// probe fails, so the reporter sees one breadcrumb per canonical param.
-	_, runErr := OpenRedirect{}.Run(ctx, c, nil, "http://hyperz-test-no-such-host.invalid/login")
+	_, runErr := OpenRedirect{}.Run(ctx, c, nil, page.FromURL("http://hyperz-test-no-such-host.invalid/login"))
 	if runErr == nil {
 		t.Fatal("expected wholesale-failure error to propagate")
 	}
@@ -493,7 +494,7 @@ func TestOpenRedirectSkipsCanonicalSweepOnNonRedirectishPath(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	findings, err := OpenRedirect{}.Run(context.Background(), newTestClient(t), nil, srv.URL+"/products")
+	findings, err := OpenRedirect{}.Run(context.Background(), newTestClient(t), nil, page.FromURL(srv.URL+"/products"))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -520,7 +521,7 @@ func TestOpenRedirectProbesUrlParamsEvenOnNonRedirectishPath(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	findings, err := OpenRedirect{}.Run(context.Background(), newTestClient(t), nil, srv.URL+"/products?next=original")
+	findings, err := OpenRedirect{}.Run(context.Background(), newTestClient(t), nil, page.FromURL(srv.URL+"/products?next=original"))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -546,7 +547,7 @@ func TestOpenRedirectSkipsNonUrlCanonicalNamesOnNonRedirectishPath(t *testing.T)
 	}))
 	defer srv.Close()
 
-	findings, err := OpenRedirect{}.Run(context.Background(), newTestClient(t), nil, srv.URL+"/products?next=original")
+	findings, err := OpenRedirect{}.Run(context.Background(), newTestClient(t), nil, page.FromURL(srv.URL+"/products?next=original"))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -571,7 +572,7 @@ func TestOpenRedirectAggressiveLevelSweepsEverywhere(t *testing.T) {
 	defer srv.Close()
 
 	ctx := WithLevel(context.Background(), LevelAggressive)
-	findings, err := OpenRedirect{}.Run(ctx, newTestClient(t), nil, srv.URL+"/products")
+	findings, err := OpenRedirect{}.Run(ctx, newTestClient(t), nil, page.FromURL(srv.URL+"/products"))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}

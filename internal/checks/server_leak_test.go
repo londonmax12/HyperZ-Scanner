@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/londonball/hyperz/internal/httpclient"
+	"github.com/londonball/hyperz/internal/page"
 )
 
 func TestServerLeakName(t *testing.T) {
@@ -34,7 +35,7 @@ func TestServerLeakNoHeadersNoFindings(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	findings, err := ServerLeak{}.Run(context.Background(), newTestClient(t), nil, srv.URL)
+	findings, err := ServerLeak{}.Run(context.Background(), newTestClient(t), nil, page.FromURL(srv.URL))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -51,7 +52,7 @@ func TestServerLeakBothHeadersPresent(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	findings, err := ServerLeak{}.Run(context.Background(), newTestClient(t), nil, srv.URL)
+	findings, err := ServerLeak{}.Run(context.Background(), newTestClient(t), nil, page.FromURL(srv.URL))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -98,7 +99,7 @@ func TestServerLeakPopulatesEnrichedFields(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	findings, err := ServerLeak{}.Run(context.Background(), newTestClient(t), nil, srv.URL)
+	findings, err := ServerLeak{}.Run(context.Background(), newTestClient(t), nil, page.FromURL(srv.URL))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -141,7 +142,7 @@ func TestServerLeakDedupeStableAndPerHeader(t *testing.T) {
 	defer srv.Close()
 
 	run := func() map[string]string {
-		fs, err := ServerLeak{}.Run(context.Background(), newTestClient(t), nil, srv.URL)
+		fs, err := ServerLeak{}.Run(context.Background(), newTestClient(t), nil, page.FromURL(srv.URL))
 		if err != nil {
 			t.Fatalf("Run: %v", err)
 		}
@@ -174,7 +175,7 @@ func TestServerLeakReturnsErrorOnNetworkFailure(t *testing.T) {
 		Timeout:   1 * time.Second,
 		UserAgent: "test",
 	})
-	_, err := ServerLeak{}.Run(context.Background(), c, nil, "http://hyperz-test-no-such-host.invalid")
+	_, err := ServerLeak{}.Run(context.Background(), c, nil, page.FromURL("http://hyperz-test-no-such-host.invalid"))
 	if err == nil {
 		t.Fatal("expected error from unreachable host")
 	}

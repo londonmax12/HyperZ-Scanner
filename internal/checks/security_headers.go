@@ -6,6 +6,7 @@ import (
 	"sort"
 
 	"github.com/londonball/hyperz/internal/httpclient"
+	"github.com/londonball/hyperz/internal/page"
 	"github.com/londonball/hyperz/internal/scope"
 )
 
@@ -62,21 +63,13 @@ var headerRules = map[string]headerRule{
 	},
 }
 
-func (c SecurityHeaders) Run(ctx context.Context, client *httpclient.Client, _ *scope.Scope, target string) ([]Finding, error) {
-	resp, err := client.Get(ctx, target)
+func (c SecurityHeaders) Run(ctx context.Context, client *httpclient.Client, _ *scope.Scope, p page.Page) ([]Finding, error) {
+	snap, err := ensureResponse(ctx, client, p, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
-
-	// resp.Request reflects the final request after redirects, so URL and
-	// evidence match what was actually observed.
-	finalURL := target
-	if resp.Request != nil && resp.Request.URL != nil {
-		finalURL = resp.Request.URL.String()
-	}
-	scope := HostScope(finalURL)
-	evidence := BuildEvidence("GET", finalURL, resp.StatusCode, resp.Header, "")
+	hostScope := HostScope(p.URL)
+	evidence := BuildEvidence("GET", p.URL, snap.Status, snap.Headers, "")
 
 	// Iterate in sorted header order so the output is stable across runs.
 	names := make([]string, 0, len(headerRules))
@@ -87,17 +80,17 @@ func (c SecurityHeaders) Run(ctx context.Context, client *httpclient.Client, _ *
 
 	var findings []Finding
 	for _, header := range names {
-		if resp.Header.Get(header) != "" {
+		if snap.Headers.Get(header) != "" {
 			continue
 		}
 		rule := headerRules[header]
 		findings = append(findings, Finding{
 			Check:       c.Name(),
-			Target:      target,
-			URL:         finalURL,
+			Target:      p.URL,
+			URL:         p.URL,
 			Severity:    rule.severity,
 			Title:       "missing security header: " + header,
-			Detail:      fmt.Sprintf("response from %s did not include %s", finalURL, header),
+			Detail:      fmt.Sprintf("response from %s did not include %s", p.URL, header),
 			CWE:         rule.cwe,
 			OWASP:       rule.owasp,
 			Remediation: rule.remediation,
@@ -105,7 +98,7 @@ func (c SecurityHeaders) Run(ctx context.Context, client *httpclient.Client, _ *
 			// Per-host: missing CSP on example.com is one issue, not one per
 			// crawled page. Including the header name prevents collisions
 			// between rules at the same scope.
-			DedupeKey: MakeDedupeKey(c.Name(), scope, "missing-header:"+header),
+			DedupeKey: MakeDedupeKey(c.Name(), hostScope, "missing-header:"+header),
 		})
 	}
 	return findings, nil

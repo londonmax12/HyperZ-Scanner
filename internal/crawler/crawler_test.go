@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/londonball/hyperz/internal/httpclient"
+	"github.com/londonball/hyperz/internal/page"
 	"github.com/londonball/hyperz/internal/scope"
 )
 
@@ -75,10 +76,10 @@ func newCrawlerClient() *httpclient.Client {
 	})
 }
 
-func collectAll(out <-chan string) []string {
+func collectAll(out <-chan page.Page) []string {
 	var got []string
-	for u := range out {
-		got = append(got, u)
+	for p := range out {
+		got = append(got, p.URL)
 	}
 	sort.Strings(got)
 	return got
@@ -105,7 +106,7 @@ func TestCrawlDepthZeroOnlyEmitsSeeds(t *testing.T) {
 	defer srv.Close()
 
 	c := New(newCrawlerClient(), Config{Scope: seedScope(t, 0, srv.URL)})
-	out := make(chan string, 16)
+	out := make(chan page.Page, 16)
 	if err := c.Crawl(context.Background(), []string{srv.URL + "/"}, out); err != nil {
 		t.Fatalf("Crawl: %v", err)
 	}
@@ -120,7 +121,7 @@ func TestCrawlReachesAllLinkedPages(t *testing.T) {
 	defer srv.Close()
 
 	c := New(newCrawlerClient(), Config{Scope: seedScope(t, 5, srv.URL)})
-	out := make(chan string, 32)
+	out := make(chan page.Page, 32)
 	if err := c.Crawl(context.Background(), []string{srv.URL + "/"}, out); err != nil {
 		t.Fatalf("Crawl: %v", err)
 	}
@@ -136,7 +137,7 @@ func TestCrawlMaxPagesCaps(t *testing.T) {
 	defer srv.Close()
 
 	c := New(newCrawlerClient(), Config{Scope: seedScope(t, 5, srv.URL), MaxPages: 3})
-	out := make(chan string, 16)
+	out := make(chan page.Page, 16)
 	if err := c.Crawl(context.Background(), []string{srv.URL + "/"}, out); err != nil {
 		t.Fatalf("Crawl: %v", err)
 	}
@@ -166,7 +167,7 @@ func TestCrawlSameHostRestrictsToSeeds(t *testing.T) {
 	sc := mustScope(t, scope.Config{MaxDepth: 3, Ports: intURL.Port()})
 	sc.AllowHost(intURL.Hostname())
 	c := New(newCrawlerClient(), Config{Scope: sc})
-	out := make(chan string, 16)
+	out := make(chan page.Page, 16)
 	if err := c.Crawl(context.Background(), []string{internal.URL + "/"}, out); err != nil {
 		t.Fatalf("Crawl: %v", err)
 	}
@@ -188,7 +189,7 @@ func TestCrawlSkipsNonHTMLContent(t *testing.T) {
 	defer srv.Close()
 
 	c := New(newCrawlerClient(), Config{Scope: seedScope(t, 3, srv.URL)})
-	out := make(chan string, 8)
+	out := make(chan page.Page, 8)
 	if err := c.Crawl(context.Background(), []string{srv.URL + "/"}, out); err != nil {
 		t.Fatalf("Crawl: %v", err)
 	}
@@ -221,7 +222,7 @@ func TestCrawlInvokesErrorHandlerOnFetchFailure(t *testing.T) {
 	var errs int
 	c := New(newCrawlerClient(), Config{Scope: seedScope(t, 3, srv.URL)},
 		WithErrorHandler(func(target string, err error) { errs++ }))
-	out := make(chan string, 8)
+	out := make(chan page.Page, 8)
 	if err := c.Crawl(context.Background(), []string{srv.URL + "/"}, out); err != nil {
 		t.Fatalf("Crawl: %v", err)
 	}
@@ -269,7 +270,7 @@ func TestCrawlAPIDiscoveryProbesWellKnownPaths(t *testing.T) {
 		Scope:        seedScope(t, 2, srv.URL),
 		APIDiscovery: true,
 	})
-	out := make(chan string, 64)
+	out := make(chan page.Page, 64)
 	if err := c.Crawl(context.Background(), []string{srv.URL + "/"}, out); err != nil {
 		t.Fatalf("Crawl: %v", err)
 	}
@@ -308,7 +309,7 @@ func TestCrawlAPIDiscoveryDisabledSkipsNonHTML(t *testing.T) {
 		Scope:        seedScope(t, 2, srv.URL),
 		APIDiscovery: false,
 	})
-	out := make(chan string, 32)
+	out := make(chan page.Page, 32)
 	if err := c.Crawl(context.Background(), []string{srv.URL + "/"}, out); err != nil {
 		t.Fatalf("Crawl: %v", err)
 	}
@@ -343,7 +344,7 @@ func TestCrawlDedupesAcrossFragments(t *testing.T) {
 	defer srv.Close()
 
 	c := New(newCrawlerClient(), Config{Scope: seedScope(t, 5, srv.URL)})
-	out := make(chan string, 16)
+	out := make(chan page.Page, 16)
 	if err := c.Crawl(context.Background(), []string{srv.URL + "/"}, out); err != nil {
 		t.Fatalf("Crawl: %v", err)
 	}

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/londonball/hyperz/internal/httpclient"
+	"github.com/londonball/hyperz/internal/page"
 	"github.com/londonball/hyperz/internal/scope"
 )
 
@@ -15,7 +16,7 @@ type fakeCheck struct {
 
 func (f fakeCheck) Name() string { return f.name }
 func (f fakeCheck) Level() Level { return f.level }
-func (fakeCheck) Run(context.Context, *httpclient.Client, *scope.Scope, string) ([]Finding, error) {
+func (fakeCheck) Run(context.Context, *httpclient.Client, *scope.Scope, page.Page) ([]Finding, error) {
 	return nil, nil
 }
 

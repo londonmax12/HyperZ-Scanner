@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 
 	"github.com/londonball/hyperz/internal/httpclient"
+	"github.com/londonball/hyperz/internal/page"
 	"github.com/londonball/hyperz/internal/scope"
 )
 
@@ -51,24 +53,20 @@ var cookieAttrRules = map[string]attrRule{
 	},
 }
 
-func (c CookieAttributes) Run(ctx context.Context, client *httpclient.Client, _ *scope.Scope, target string) ([]Finding, error) {
-	resp, err := client.Get(ctx, target)
+func (c CookieAttributes) Run(ctx context.Context, client *httpclient.Client, _ *scope.Scope, p page.Page) ([]Finding, error) {
+	snap, err := ensureResponse(ctx, client, p, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
 
-	finalURL := target
-	isHTTPS := false
-	if resp.Request != nil && resp.Request.URL != nil {
-		finalURL = resp.Request.URL.String()
-		isHTTPS = resp.Request.URL.Scheme == "https"
-	}
-	hostScope := HostScope(finalURL)
-	evidence := BuildEvidence("GET", finalURL, resp.StatusCode, resp.Header, "")
+	isHTTPS := strings.HasPrefix(strings.ToLower(p.URL), "https://")
+	hostScope := HostScope(p.URL)
+	evidence := BuildEvidence("GET", p.URL, snap.Status, snap.Headers, "")
 
-	// Sort cookies by name so multi-cookie responses produce stable output.
-	cookies := resp.Cookies()
+	// http.Response.Cookies parses Set-Cookie headers; build a synthetic
+	// Response so we get the same parsing whether snap came from a live
+	// fetch or from the crawler's Page.
+	cookies := (&http.Response{Header: snap.Headers}).Cookies()
 	sort.SliceStable(cookies, func(i, j int) bool { return cookies[i].Name < cookies[j].Name })
 
 	var findings []Finding
@@ -79,10 +77,10 @@ func (c CookieAttributes) Run(ctx context.Context, client *httpclient.Client, _ 
 		// avoid noise. The Secure-requires-HTTPS guidance shows up via the
 		// HSTS missing-header check instead.
 		if !ck.Secure && isHTTPS {
-			findings = append(findings, c.finding(target, finalURL, hostScope, ck.Name, "Secure", evidence))
+			findings = append(findings, c.finding(p.URL, hostScope, ck.Name, "Secure", evidence))
 		}
 		if !ck.HttpOnly {
-			findings = append(findings, c.finding(target, finalURL, hostScope, ck.Name, "HttpOnly", evidence))
+			findings = append(findings, c.finding(p.URL, hostScope, ck.Name, "HttpOnly", evidence))
 		}
 		// Flag anything that isn't an explicit Lax/Strict/None. Two cases
 		// both fall here: the SameSite attribute was absent (parser leaves
@@ -93,21 +91,21 @@ func (c CookieAttributes) Run(ctx context.Context, client *httpclient.Client, _ 
 		if ck.SameSite != http.SameSiteLaxMode &&
 			ck.SameSite != http.SameSiteStrictMode &&
 			ck.SameSite != http.SameSiteNoneMode {
-			findings = append(findings, c.finding(target, finalURL, hostScope, ck.Name, "SameSite", evidence))
+			findings = append(findings, c.finding(p.URL, hostScope, ck.Name, "SameSite", evidence))
 		}
 	}
 	return findings, nil
 }
 
-func (c CookieAttributes) finding(target, finalURL, hostScope, cookieName, attr string, ev *Evidence) Finding {
+func (c CookieAttributes) finding(targetURL, hostScope, cookieName, attr string, ev *Evidence) Finding {
 	rule := cookieAttrRules[attr]
 	return Finding{
 		Check:       c.Name(),
-		Target:      target,
-		URL:         finalURL,
+		Target:      targetURL,
+		URL:         targetURL,
 		Severity:    rule.severity,
 		Title:       fmt.Sprintf("cookie %q missing %s attribute", cookieName, attr),
-		Detail:      fmt.Sprintf("Set-Cookie for %q at %s did not include %s", cookieName, finalURL, attr),
+		Detail:      fmt.Sprintf("Set-Cookie for %q at %s did not include %s", cookieName, targetURL, attr),
 		CWE:         rule.cwe,
 		OWASP:       rule.owasp,
 		Remediation: rule.remediation,

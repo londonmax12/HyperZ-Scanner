@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"sort"
 	"testing"
+
+	"github.com/londonball/hyperz/internal/page"
 )
 
 func mustParseURL(t *testing.T, s string) *url.URL {
@@ -193,7 +195,7 @@ func TestExtractFormsBasicGetForm(t *testing.T) {
 	if f.Action != "http://example.com/search" {
 		t.Errorf("Action = %q, want http://example.com/search", f.Action)
 	}
-	want := []FormInput{
+	want := []page.FormInput{
 		{Name: "q", Type: "text", Value: "default"},
 		{Name: "csrf", Type: "hidden", Value: "abc123"},
 		{Name: "submit", Type: "submit", Value: "go"},
@@ -248,18 +250,18 @@ func TestExtractFormsTextareaAndSelectInputs(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("got %d forms, want 1", len(got))
 	}
-	want := []FormInput{
+	want := []page.FormInput{
 		{Name: "country", Type: "select", Value: ""},
 		{Name: "comment", Type: "textarea", Value: "hello world"},
 	}
 	// The walker emits inputs in document order: <textarea>'s close
 	// triggers its FormInput, but <select>'s FormInput is appended at
 	// the start tag. Compare as sets to avoid pinning that detail.
-	gotSet := map[string]FormInput{}
+	gotSet := map[string]page.FormInput{}
 	for _, in := range got[0].Inputs {
 		gotSet[in.Name] = in
 	}
-	wantSet := map[string]FormInput{}
+	wantSet := map[string]page.FormInput{}
 	for _, in := range want {
 		wantSet[in.Name] = in
 	}

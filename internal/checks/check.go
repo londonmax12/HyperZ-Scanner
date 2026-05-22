@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/londonball/hyperz/internal/httpclient"
+	"github.com/londonball/hyperz/internal/page"
 	"github.com/londonball/hyperz/internal/scope"
 )
 
@@ -311,16 +312,25 @@ func LevelFrom(ctx context.Context) Level {
 type Check interface {
 	Name() string
 	Level() Level
-	// Run inspects target and returns findings.
+	// Run inspects p and returns findings.
 	//
-	// scope is the user-authorized boundary of the scan. Passive checks may
-	// ignore it (they only look at target, which is already in scope by the
-	// time the scanner dispatches). Non-passive checks MUST consult scope
-	// before probing sub-resources discovered on the page - a form on
-	// /admin is only safe to fuzz if /admin is itself in scope.
+	// p is the artifact the crawler (or no-crawl feeder) already fetched
+	// for this URL: status, headers, body, and any forms it found. Passive
+	// checks should read these directly rather than re-fetching - on a
+	// 200-page crawl with five passive checks this is roughly the
+	// difference between 200 GETs and 1000. p.URL is the live URL and
+	// always non-empty. p.Headers and p.Body may be nil (no fetch yet, or
+	// fetch failed); checks that need them must tolerate the empty case
+	// or fetch via client themselves.
+	//
+	// scope is the user-authorized boundary of the scan. Passive checks
+	// may ignore it (they only look at p.URL, which is already in scope
+	// by the time the scanner dispatches). Non-passive checks MUST
+	// consult scope before probing sub-resources discovered on the page -
+	// a form on /admin is only safe to fuzz if /admin is itself in scope.
 	//
 	// A nil scope means "no restrictions"; treat it as permissive.
-	Run(ctx context.Context, client *httpclient.Client, scope *scope.Scope, target string) ([]Finding, error)
+	Run(ctx context.Context, client *httpclient.Client, scope *scope.Scope, p page.Page) ([]Finding, error)
 }
 
 // Filter returns the subset of checks that should run at the given level.

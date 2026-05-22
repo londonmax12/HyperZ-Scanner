@@ -7,6 +7,7 @@ import (
 	"github.com/londonball/hyperz/internal/checks"
 	"github.com/londonball/hyperz/internal/fingerprint"
 	"github.com/londonball/hyperz/internal/httpclient"
+	"github.com/londonball/hyperz/internal/page"
 	"github.com/londonball/hyperz/internal/scope"
 )
 
@@ -92,14 +93,14 @@ func New(client *httpclient.Client, c []checks.Check, opts ...Option) *Scanner {
 	return s
 }
 
-// ScanAll consumes targets from `targets` and emits findings on `out` until
-// targets is closed and all in-flight work drains. It closes `out` on return.
+// ScanAll consumes Pages from `pages` and emits findings on `out` until
+// pages is closed and all in-flight work drains. It closes `out` on return.
 //
-// On ctx cancel, workers stop picking up new targets and scanOne stops
+// On ctx cancel, workers stop picking up new pages and scanOne stops
 // scheduling new checks, but any check whose Run has already returned will
 // have its findings flushed to `out`. The reader of `out` must keep
 // draining until close, or those senders will block.
-func (s *Scanner) ScanAll(ctx context.Context, targets <-chan string, out chan<- checks.Finding) error {
+func (s *Scanner) ScanAll(ctx context.Context, pages <-chan page.Page, out chan<- checks.Finding) error {
 	defer close(out)
 
 	var wg sync.WaitGroup
@@ -111,11 +112,11 @@ func (s *Scanner) ScanAll(ctx context.Context, targets <-chan string, out chan<-
 				select {
 				case <-ctx.Done():
 					return
-				case target, ok := <-targets:
+				case p, ok := <-pages:
 					if !ok {
 						return
 					}
-					s.scanOne(ctx, target, out)
+					s.scanOne(ctx, p, out)
 				}
 			}
 		}()
@@ -124,15 +125,16 @@ func (s *Scanner) ScanAll(ctx context.Context, targets <-chan string, out chan<-
 	return ctx.Err()
 }
 
-// scanOne fingerprints target then runs every applicable check in parallel.
+// scanOne fingerprints p then runs every applicable check in parallel.
 // When a check's Run returns, its findings are sent unconditionally - they
 // already exist in memory, so we flush them even if ctx cancels mid-send.
 // New checks are not scheduled after ctx cancels (the loop bails on
 // ctx.Err()), so the post-cancel send burst is bounded by checks already
 // in flight. The caller (the report side) must drain `out` until it closes
 // or the senders will deadlock.
-func (s *Scanner) scanOne(ctx context.Context, target string, out chan<- checks.Finding) {
-	stack := s.fingerprint(ctx, target)
+func (s *Scanner) scanOne(ctx context.Context, p page.Page, out chan<- checks.Finding) {
+	stack := s.fingerprint(ctx, p)
+	target := p.URL
 
 	// sem caps in-flight checks per target. A nil sem means no cap.
 	var sem chan struct{}
@@ -172,7 +174,7 @@ func (s *Scanner) scanOne(ctx context.Context, target string, out chan<- checks.
 					s.onError(target, c.Name(), err)
 				})
 			}
-			found, err := c.Run(runCtx, s.client, s.scope, target)
+			found, err := c.Run(runCtx, s.client, s.scope, p)
 			if err != nil {
 				if s.onError != nil {
 					s.onError(target, c.Name(), err)
@@ -187,18 +189,18 @@ func (s *Scanner) scanOne(ctx context.Context, target string, out chan<- checks.
 	wg.Wait()
 }
 
-// fingerprint resolves the stack for target, or returns nil when
+// fingerprint resolves the stack for p's host, or returns nil when
 // fingerprinting is disabled or fails. A nil stack means "skip gating" -
 // every check runs, which is the safer default than silently dropping a
 // check because we couldn't reach the host.
-func (s *Scanner) fingerprint(ctx context.Context, target string) *fingerprint.Stack {
+func (s *Scanner) fingerprint(ctx context.Context, p page.Page) *fingerprint.Stack {
 	if s.detector == nil {
 		return nil
 	}
-	stack, err := s.detector.Detect(ctx, target)
+	stack, err := s.detector.Detect(ctx, p)
 	if err != nil {
 		if s.onError != nil {
-			s.onError(target, "fingerprint", err)
+			s.onError(p.URL, "fingerprint", err)
 		}
 		return nil
 	}

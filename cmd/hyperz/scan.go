@@ -17,6 +17,7 @@ import (
 	"github.com/londonball/hyperz/internal/crawler"
 	"github.com/londonball/hyperz/internal/fingerprint"
 	"github.com/londonball/hyperz/internal/httpclient"
+	"github.com/londonball/hyperz/internal/page"
 	"github.com/londonball/hyperz/internal/proxy"
 	"github.com/londonball/hyperz/internal/report"
 	"github.com/londonball/hyperz/internal/scanner"
@@ -290,7 +291,7 @@ func runScan(ctx context.Context, cfg *scanConfig, level checks.Level) int {
 	}))
 	s := scanner.New(client, enabled, scannerOpts...)
 
-	targets := make(chan string, cfg.concurrency)
+	pages := make(chan page.Page, cfg.concurrency)
 	findings := make(chan checks.Finding, 64)
 
 	feedErr := make(chan error, 1)
@@ -303,18 +304,18 @@ func runScan(ctx context.Context, cfg *scanConfig, level checks.Level) int {
 		}, crawler.WithErrorHandler(func(target string, err error) {
 			log.Warn("crawl error", "target", target, "err", err)
 		}))
-		go func() { feedErr <- cr.Crawl(ctx, seeds, targets) }()
+		go func() { feedErr <- cr.Crawl(ctx, seeds, pages) }()
 	} else {
 		go func() {
-			defer close(targets)
-			feedErr <- feedSeeds(ctx, targets, seeds, sc, func(seed, reason string) {
+			defer close(pages)
+			feedErr <- feedSeeds(ctx, pages, seeds, sc, func(seed, reason string) {
 				log.Warn("seed skipped", "url", seed, "reason", reason)
 			})
 		}()
 	}
 
 	scanErr := make(chan error, 1)
-	go func() { scanErr <- s.ScanAll(ctx, targets, findings) }()
+	go func() { scanErr <- s.ScanAll(ctx, pages, findings) }()
 
 	// Dedupe before reporting so site-wide issues (e.g. missing security
 	// headers) don't fire once per crawled page. Checks opt in by setting

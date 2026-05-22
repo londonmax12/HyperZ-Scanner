@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/londonball/hyperz/internal/page"
 	"github.com/londonball/hyperz/internal/scope"
 )
 
@@ -45,9 +46,9 @@ func collectSeeds(urls []string, urlsFile string) ([]string, error) {
 	return out, nil
 }
 
-// feedSeeds streams a pre-collected seed list onto out, honoring ctx
-// cancellation. Used by the no-crawl path now that the scope builder needs
-// the seed list up front.
+// feedSeeds wraps each seed URL in a bare page.Page and streams it onto
+// out, honoring ctx cancellation. Used by the no-crawl path now that the
+// scanner consumes Pages rather than URL strings.
 //
 // Seeds that fail to parse, carry a non-http(s) scheme, or fall outside sc
 // are dropped before they reach the scanner. This matches the crawl path
@@ -55,10 +56,18 @@ func collectSeeds(urls []string, urlsFile string) ([]string, error) {
 // the gate, `--url evil.example --scope-host good.example` would scan
 // evil.example, defeating the scope flag for active checks.
 //
+// The emitted Pages carry only the URL - no fetched body/headers - so
+// checks fall back to fetching for themselves via the helper that
+// reuses crawler-provided responses when available. The no-crawl path
+// deliberately doesn't preload responses: most no-crawl usage is a
+// handful of seeds where the duplicate-fetch tax is negligible, and
+// skipping the preload keeps this path one ctx-aware loop instead of a
+// concurrent fetch pool.
+//
 // onSkip, when non-nil, fires once per dropped seed with the reason so the
 // caller can surface a warning. A nil sc means "no scope restriction" and
 // passes every parseable http(s) URL through.
-func feedSeeds(ctx context.Context, out chan<- string, seeds []string, sc *scope.Scope, onSkip func(seed, reason string)) error {
+func feedSeeds(ctx context.Context, out chan<- page.Page, seeds []string, sc *scope.Scope, onSkip func(seed, reason string)) error {
 	skip := func(seed, reason string) {
 		if onSkip != nil {
 			onSkip(seed, reason)
@@ -81,7 +90,7 @@ func feedSeeds(ctx context.Context, out chan<- string, seeds []string, sc *scope
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case out <- s:
+		case out <- page.FromURL(s):
 		}
 	}
 	return nil
