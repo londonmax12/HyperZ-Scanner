@@ -30,8 +30,9 @@ type scanConfig struct {
 	userAgent   string
 	format      string
 	mode        string
-	concurrency  int
-	rps          float64
+	concurrency      int
+	checkConcurrency int
+	rps              float64
 	burst        int
 	maxRetries   int
 	maxRetryWait time.Duration
@@ -80,8 +81,11 @@ discovered page becomes a scan target.
 
 Modes:
   passive (default) - observation-only; safe to run anywhere you may look.
-  active            - adds intrusive probes (XSS, SQLi, traversal, ...);
-                      only run against systems you are authorized to test.`,
+  default           - adds low-risk crafted probes (XSS, SQLi, traversal,
+                      ...); only run against systems you are authorized to
+                      test.
+  aggressive        - adds noisy or heavy fuzzing on top of default; likely
+                      to trip rate limits or WAFs.`,
 		Example: `  hyperz scan --url https://example.com
   hyperz scan --url https://example.com --format json -o report.json
   hyperz scan --url https://example.com --mode aggressive
@@ -121,6 +125,8 @@ Modes:
 		"scan level: passive (safe, observation-only) | default (low-risk crafted probes) | aggressive (heavy fuzzing). "+
 			"Higher levels include everything below; checks above the requested level are skipped.")
 	f.IntVar(&cfg.concurrency, "concurrency", 8, "number of targets scanned in parallel")
+	f.IntVar(&cfg.checkConcurrency, "check-concurrency", 16,
+		"max checks running in parallel per target (0 = unlimited)")
 	f.Float64Var(&cfg.rps, "rate", 5, "max requests per second per host")
 	f.IntVar(&cfg.burst, "burst", 5, "per-host rate limiter burst")
 	f.IntVar(&cfg.maxRetries, "max-retries", 2,
@@ -245,6 +251,7 @@ func runScan(ctx context.Context, cfg *scanConfig, level checks.Level) int {
 
 	scannerOpts := []scanner.Option{
 		scanner.WithConcurrency(cfg.concurrency),
+		scanner.WithCheckConcurrency(cfg.checkConcurrency),
 		scanner.WithScope(sc),
 		scanner.WithSkipHandler(func(target, check, reason string) {
 			log.Debug("check skipped", "check", check, "target", target, "reason", reason)

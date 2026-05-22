@@ -12,13 +12,14 @@ import (
 )
 
 type Scanner struct {
-	client      *httpclient.Client
-	checks      []checks.Check
-	scope       *scope.Scope
-	detector    *fingerprint.Detector
-	concurrency int
-	onError     func(target, check string, err error)
-	onSkip      func(target, check, reason string)
+	client           *httpclient.Client
+	checks           []checks.Check
+	scope            *scope.Scope
+	detector         *fingerprint.Detector
+	concurrency      int
+	checkConcurrency int
+	onError          func(target, check string, err error)
+	onSkip           func(target, check, reason string)
 }
 
 type Option func(*Scanner)
@@ -27,6 +28,19 @@ func WithConcurrency(n int) Option {
 	return func(s *Scanner) {
 		if n > 0 {
 			s.concurrency = n
+		}
+	}
+}
+
+// WithCheckConcurrency caps how many checks run in parallel against a single
+// target. 0 (the default) means "no cap" - every applicable check is launched
+// at once, which is fine for a handful of passive checks but blows up once
+// dozens of active probes ship. Set this to a small number (8-16) to keep
+// fanout bounded as the catalog grows.
+func WithCheckConcurrency(n int) Option {
+	return func(s *Scanner) {
+		if n > 0 {
+			s.checkConcurrency = n
 		}
 	}
 }
@@ -111,17 +125,35 @@ func (s *Scanner) ScanAll(ctx context.Context, targets <-chan string, out chan<-
 func (s *Scanner) scanOne(ctx context.Context, target string, out chan<- checks.Finding) {
 	stack := s.fingerprint(ctx, target)
 
+	// sem caps in-flight checks per target. A nil sem means no cap.
+	var sem chan struct{}
+	if s.checkConcurrency > 0 {
+		sem = make(chan struct{}, s.checkConcurrency)
+	}
+
 	var wg sync.WaitGroup
 	for _, c := range s.checks {
 		if ctx.Err() != nil {
-			return
+			break
 		}
 		if !s.applies(c, stack, target) {
 			continue
 		}
+		if sem != nil {
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+			}
+			if ctx.Err() != nil {
+				break
+			}
+		}
 		wg.Add(1)
 		go func(c checks.Check) {
 			defer wg.Done()
+			if sem != nil {
+				defer func() { <-sem }()
+			}
 			found, err := c.Run(ctx, s.client, s.scope, target)
 			if err != nil {
 				if s.onError != nil {
