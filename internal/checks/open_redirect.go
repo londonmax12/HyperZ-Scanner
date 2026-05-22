@@ -14,17 +14,18 @@ import (
 )
 
 // OpenRedirect probes whether a target page reflects an attacker-controlled
-// URL parameter into its redirect Location. For each candidate param name
-// the check issues a single no-follow GET with the param set to a canary on
-// a reserved (.example) domain; a 3xx response whose Location points at the
-// canary host means the param is unvalidated.
+// URL parameter into its redirect Location. For each candidate Sink the
+// check issues a single no-follow request with the param set to a canary
+// on a reserved (.example) domain; a 3xx response whose Location points at
+// the canary host means the param is unvalidated.
 //
 // Candidates are chosen to keep blast radius bounded on large crawls:
-//   - params already present on the target URL are always probed (high
-//     signal; the app is already passing them, so they're worth testing).
-//   - the canonical redirect names (next, url, redirect, ...) only fire on
-//     URLs whose path looks redirect-related (login/logout/auth/sso/redirect),
-//     OR on any URL when running at LevelAggressive.
+//   - sinks already present on the target URL or its forms are always
+//     probed (high signal; the app is already passing them, so they're
+//     worth testing).
+//   - the canonical redirect names (next, url, redirect, ...) only fire
+//     on URLs whose path looks redirect-related (login/logout/auth/sso/
+//     redirect), OR on any URL when running at LevelAggressive.
 //
 // Without this gating, a 200-page crawl would fan out len(openRedirectParams)
 // probes per page regardless of whether the page accepts redirect params.
@@ -86,21 +87,28 @@ func (c OpenRedirect) Run(ctx context.Context, client *httpclient.Client, sc *sc
 	}
 
 	sweep := LevelFrom(ctx) >= LevelAggressive || looksRedirectish(u.Path)
-	candidates := openRedirectCandidates(u, sweep)
+	candidates := openRedirectSinks(p, u, sweep)
 
 	var findings []Finding
 	var firstErr error
-	for _, name := range candidates {
+	for _, sink := range candidates {
 		if ctx.Err() != nil {
 			break
 		}
-		f, err := c.probe(ctx, client, target, u, name)
+		// Sub-scope check: a Sink discovered on a form whose action is
+		// off-host (or off-scope) must not be probed even though the Run
+		// scope check above passed for p.URL. Skip silently rather than
+		// erroring - off-scope sinks aren't probe failures.
+		if u2, err := url.Parse(sink.URL); err == nil && !sc.Allows(u2) {
+			continue
+		}
+		f, err := c.probe(ctx, client, target, sink)
 		if err != nil {
 			// Every per-probe failure is breadcrumbed through the scanner's
 			// error handler so a flaky host doesn't go silent when only a
 			// subset of probes succeed. firstErr is retained for the
 			// wholesale-failure return path below.
-			Report(ctx, fmt.Errorf("probe param %q: %w", name, err))
+			Report(ctx, fmt.Errorf("probe param %q: %w", sink.Name, err))
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -120,30 +128,67 @@ func (c OpenRedirect) Run(ctx context.Context, client *httpclient.Client, sc *sc
 	return findings, nil
 }
 
-// openRedirectCandidates returns the deduped, sorted set of param names to
-// probe. Params already on the URL are always included (highest signal: the
-// app is actively passing them). When sweep is true the canonical list is
-// folded in as well - gated this way to avoid 14 probes per crawled page
-// when the page has no redirect surface to begin with. Sorted output keeps
-// probe order (and therefore finding order) stable across runs.
-func openRedirectCandidates(u *url.URL, sweep bool) []string {
-	set := make(map[string]struct{})
+// openRedirectSinks returns the deduped, sorted set of Sinks to probe.
+//
+// The base sink list comes from SinksFor(p), which surfaces every query
+// param on the page URL plus every named input on every form. When sweep
+// is true the canonical openRedirectParams list is folded in as
+// synthetic LocQuery sinks on the page URL itself - gated this way to
+// avoid 14 probes per crawled page when the page has no redirect
+// surface to begin with.
+//
+// Sorted output keeps probe order (and therefore finding order) stable
+// across runs.
+func openRedirectSinks(p page.Page, u *url.URL, sweep bool) []Sink {
+	type key struct {
+		method string
+		url    string
+		loc    Loc
+		name   string
+	}
+	seen := map[key]struct{}{}
+	add := func(out []Sink, s Sink) []Sink {
+		if s.Name == "" || s.URL == "" {
+			return out
+		}
+		k := key{s.Method, s.URL, s.Loc, s.Name}
+		if _, ok := seen[k]; ok {
+			return out
+		}
+		seen[k] = struct{}{}
+		return append(out, s)
+	}
+
+	var out []Sink
+	for _, s := range SinksFor(p) {
+		out = add(out, s)
+	}
 	if sweep {
-		for _, p := range openRedirectParams {
-			set[p] = struct{}{}
+		// Synthetic LocQuery sinks for the canonical names. They land on
+		// the page URL itself with empty Value because they may not
+		// actually exist on the request; the probe overlays a value
+		// regardless.
+		for _, name := range openRedirectParams {
+			out = add(out, Sink{
+				Method: http.MethodGet,
+				URL:    p.URL,
+				Loc:    LocQuery,
+				Name:   name,
+			})
 		}
 	}
-	for k := range u.Query() {
-		if k == "" {
-			continue
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].URL != out[j].URL {
+			return out[i].URL < out[j].URL
 		}
-		set[k] = struct{}{}
-	}
-	out := make([]string, 0, len(set))
-	for k := range set {
-		out = append(out, k)
-	}
-	sort.Strings(out)
+		if out[i].Method != out[j].Method {
+			return out[i].Method < out[j].Method
+		}
+		if out[i].Loc != out[j].Loc {
+			return out[i].Loc < out[j].Loc
+		}
+		return out[i].Name < out[j].Name
+	})
 	return out
 }
 
@@ -171,17 +216,14 @@ func looksRedirectish(path string) bool {
 	return false
 }
 
-// probe issues one no-follow GET with `param` overlaid to the canary value;
-// other query params on the target URL are preserved. Returns a finding
-// when the response is a 3xx whose Location echoes the canary host, or
-// (nil, nil) when the param isn't reflected.
-func (c OpenRedirect) probe(ctx context.Context, client *httpclient.Client, target string, u *url.URL, param string) (*Finding, error) {
-	q := u.Query()
-	q.Set(param, openRedirectCanary)
-	probeURL := *u
-	probeURL.RawQuery = q.Encode()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL.String(), nil)
+// probe issues one no-follow request with the canary overlaid onto
+// sink.Name. The request shape (GET-with-query, POST form, header,
+// cookie) is decided by Sink.MutateRequest, so this function stays
+// loc-agnostic and works the same for future LocForm sinks discovered
+// on POST login forms. Returns a finding when the response is a 3xx
+// whose Location echoes the canary host, or (nil, nil) otherwise.
+func (c OpenRedirect) probe(ctx context.Context, client *httpclient.Client, target string, sink Sink) (*Finding, error) {
+	req, err := sink.MutateRequest(ctx, openRedirectCanary)
 	if err != nil {
 		return nil, err
 	}
@@ -203,31 +245,33 @@ func (c OpenRedirect) probe(ctx context.Context, client *httpclient.Client, targ
 	if err != nil {
 		return nil, err
 	}
+	probeURL := req.URL.String()
+	scopeURL, _ := url.Parse(probeURL)
 	return &Finding{
 		Check:    c.Name(),
 		Target:   target,
-		URL:      probeURL.String(),
+		URL:      probeURL,
 		Severity: SeverityHigh,
-		Title:    fmt.Sprintf("Open redirect via ?%s=", param),
+		Title:    fmt.Sprintf("Open redirect via %s ?%s=", sink.Loc, sink.Name),
 		Detail: fmt.Sprintf(
-			"Parameter %q is reflected unvalidated into the Location header. "+
+			"Parameter %q (%s) is reflected unvalidated into the Location header. "+
 				"Probe %s=%s produced Location: %s - an attacker can craft a link to %s that bounces victims to any external host.",
-			param, param, openRedirectCanary, loc, probeURL.String()),
+			sink.Name, sink.Loc, sink.Name, openRedirectCanary, loc, probeURL),
 		CWE:   "CWE-601",
 		OWASP: "A01:2021 Broken Access Control",
 		Remediation: "Validate the redirect target against an allowlist of trusted hosts (or restrict to same-origin paths). " +
 			"Never use unvalidated user input as a Location value; map opaque tokens to known destinations instead.",
 		Evidence: &Evidence{
-			Method:     http.MethodGet,
-			RequestURL: probeURL.String(),
+			Method:     req.Method,
+			RequestURL: probeURL,
 			Status:     resp.StatusCode,
 			Exchange:   RecordExchange(req, nil, false, resp, body, truncated),
 		},
-		// Dedupe per (page, param): the same vulnerable page hit by the
+		// Dedupe per (page, loc, param): the same vulnerable page hit by the
 		// crawler from many entry points is one issue per param. Including
-		// the param name keeps distinct vulnerabilities (e.g. both `next`
-		// and `redirect`) from collapsing into a single finding.
-		DedupeKey: MakeDedupeKey(c.Name(), pageScope(&probeURL), "param:"+param),
+		// the param name + loc keeps distinct vulnerabilities (e.g. both
+		// `next` query and `next` form) from collapsing into a single finding.
+		DedupeKey: MakeDedupeKey(c.Name(), pageScope(scopeURL), "loc:"+string(sink.Loc), "param:"+sink.Name),
 	}, nil
 }
 
@@ -274,6 +318,9 @@ func openRedirectMatches(location, canary string) bool {
 // dedupe scope. Open redirect on /foo and /bar are separate issues; the
 // query string shouldn't fragment the key (the probe always rewrites it).
 func pageScope(u *url.URL) string {
+	if u == nil {
+		return ""
+	}
 	path := u.EscapedPath()
 	if path == "" {
 		path = "/"
