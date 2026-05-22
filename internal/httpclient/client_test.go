@@ -745,3 +745,70 @@ func TestSnapshotRequestBodyNilSafe(t *testing.T) {
 		t.Errorf("nil body: snap=%v truncated=%v err=%v", snap, truncated, err)
 	}
 }
+
+func TestDoNoFollowReturnsRedirectVerbatim(t *testing.T) {
+	// Two-handler server: /start issues a 302 to /landed; /landed must NEVER
+	// be hit by DoNoFollow.
+	var landed atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/start", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", "/landed")
+		w.WriteHeader(http.StatusFound)
+	})
+	mux.HandleFunc("/landed", func(w http.ResponseWriter, r *http.Request) {
+		landed.Add(1)
+		w.WriteHeader(http.StatusOK)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New(Config{Timeout: 5 * time.Second, UserAgent: "test"})
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/start", nil)
+	resp, err := c.DoNoFollow(context.Background(), req)
+	if err != nil {
+		t.Fatalf("DoNoFollow: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusFound {
+		t.Errorf("StatusCode = %d, want 302", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Location"); got != "/landed" {
+		t.Errorf("Location = %q, want /landed", got)
+	}
+	if n := landed.Load(); n != 0 {
+		t.Errorf("/landed was hit %d times; DoNoFollow must not chase redirects", n)
+	}
+}
+
+func TestDoStillFollowsRedirects(t *testing.T) {
+	// Guard against the refactor that introduced DoNoFollow accidentally
+	// disabling follow on plain Do.
+	var landed atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/start", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", "/landed")
+		w.WriteHeader(http.StatusFound)
+	})
+	mux.HandleFunc("/landed", func(w http.ResponseWriter, r *http.Request) {
+		landed.Add(1)
+		w.WriteHeader(http.StatusOK)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New(Config{Timeout: 5 * time.Second, UserAgent: "test"})
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/start", nil)
+	resp, err := c.Do(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("StatusCode = %d, want 200 after follow", resp.StatusCode)
+	}
+	if n := landed.Load(); n != 1 {
+		t.Errorf("/landed was hit %d times, want 1 (Do should follow)", n)
+	}
+}

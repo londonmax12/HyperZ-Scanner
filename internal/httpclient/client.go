@@ -14,6 +14,7 @@ import (
 
 type Client struct {
 	http         *http.Client
+	httpNoFollow *http.Client // shares transport/jar/timeout with http; CheckRedirect short-circuits the chain
 	userAgent    string
 	limiter      *HostLimiter
 	maxRetries   int
@@ -108,6 +109,14 @@ func New(cfg Config) *Client {
 			Transport: transport,
 			Jar:       cfg.Jar,
 		},
+		httpNoFollow: &http.Client{
+			Timeout:   cfg.Timeout,
+			Transport: transport,
+			Jar:       cfg.Jar,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
 		userAgent:    cfg.UserAgent,
 		limiter:      cfg.Limiter,
 		maxRetries:   cfg.MaxRetries,
@@ -134,6 +143,21 @@ func (c *Client) Jar() http.CookieJar { return c.http.Jar }
 // Each such response also penalizes the host limiter so subsequent requests
 // to that host slow down.
 func (c *Client) Do(ctx context.Context, req *http.Request) (*http.Response, error) {
+	return c.doWith(ctx, req, c.http)
+}
+
+// DoNoFollow is like Do but returns the first response verbatim instead of
+// chasing 3xx Location headers. Active checks that need to inspect a
+// redirect target - open redirect, SSRF guards, auth-bypass probes - want
+// the original response, not the destination it points at.
+//
+// All other behavior (UA, extra headers, auth, host rate limiter,
+// retry-on-429/503) is identical to Do.
+func (c *Client) DoNoFollow(ctx context.Context, req *http.Request) (*http.Response, error) {
+	return c.doWith(ctx, req, c.httpNoFollow)
+}
+
+func (c *Client) doWith(ctx context.Context, req *http.Request, h *http.Client) (*http.Response, error) {
 	req = req.WithContext(ctx)
 	if c.userAgent != "" && req.Header.Get("User-Agent") == "" {
 		req.Header.Set("User-Agent", c.userAgent)
@@ -168,7 +192,7 @@ func (c *Client) Do(ctx context.Context, req *http.Request) (*http.Response, err
 				return nil, werr
 			}
 		}
-		resp, err = c.http.Do(req)
+		resp, err = h.Do(req)
 		if err != nil {
 			// Network/transport error: proxy pool already scored this;
 			// don't retry here (avoid double-counting against the proxy).
