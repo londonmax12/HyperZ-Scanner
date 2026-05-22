@@ -4,11 +4,26 @@ A web vulnerability scanner, written in Go.
 
 > Only scan systems you have explicit authorization to test.
 
-## Status
+## Features
 
-Minimal skeleton: CLI + HTTP client + one example check (missing security
-response headers). The check engine is plugin-shaped so more checks can be added
-without touching the orchestrator.
+- Tiered scan modes (`passive` / `default` / `aggressive`) so you choose how
+  invasive the run is - each level is a superset of the cheaper ones.
+- Plugin-shaped check engine - drop in a new `checks.Check` implementation
+  and register it without touching the orchestrator.
+- Optional crawler (`--crawl --max-depth N`) for multi-page scans.
+- Cookie jar, HTTP Basic / Bearer auth, and arbitrary custom headers for
+  authenticated targets.
+- Proxy pool with epsilon-greedy selection on per-proxy success rate, plus
+  optional auto-scraping of public proxy lists.
+- PDF, JSON, Markdown, Sarif, and CSV report formats (`--format`, `-o`).
+
+Built-in checks:
+
+- `security-headers` - missing or weak security response headers (HSTS, CSP, etc.)
+- `cookie-attributes` - cookies missing `Secure`, `HttpOnly`, or `SameSite`
+- `server-leak` - banner disclosure via `Server` / `X-Powered-By`
+- `tls-audit` - TLS version, certificate expiry, hostname mismatch
+- `mixed-content` - passive mixed content referenced from HTTPS pages
 
 ## Build
 
