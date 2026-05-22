@@ -121,7 +121,7 @@ func (c OpenRedirect) Run(ctx context.Context, client *httpclient.Client, sc *sc
 // openRedirectCandidates returns the deduped, sorted set of param names to
 // probe. Params already on the URL are always included (highest signal: the
 // app is actively passing them). When sweep is true the canonical list is
-// folded in as well — gated this way to avoid 14 probes per crawled page
+// folded in as well - gated this way to avoid 14 probes per crawled page
 // when the page has no redirect surface to begin with. Sorted output keeps
 // probe order (and therefore finding order) stable across runs.
 func openRedirectCandidates(u *url.URL, sweep bool) []string {
@@ -149,7 +149,7 @@ func openRedirectCandidates(u *url.URL, sweep bool) []string {
 // "probably handles a redirect" and earn it the full canonical sweep at
 // LevelDefault. Matched as case-insensitive substrings against the URL path,
 // so /api/auth/callback, /admin/sso-init, and /go/redirect/123 all qualify.
-// Loose by design — false positives just cost extra probes on a few pages
+// Loose by design - false positives just cost extra probes on a few pages
 // per scan, where a missed real path costs a missed finding.
 var openRedirectPathKeywords = []string{
 	"login",
@@ -209,7 +209,7 @@ func (c OpenRedirect) probe(ctx context.Context, client *httpclient.Client, targ
 		Title:    fmt.Sprintf("Open redirect via ?%s=", param),
 		Detail: fmt.Sprintf(
 			"Parameter %q is reflected unvalidated into the Location header. "+
-				"Probe %s=%s produced Location: %s — an attacker can craft a link to %s that bounces victims to any external host.",
+				"Probe %s=%s produced Location: %s - an attacker can craft a link to %s that bounces victims to any external host.",
 			param, param, openRedirectCanary, loc, probeURL.String()),
 		CWE:   "CWE-601",
 		OWASP: "A01:2021 Broken Access Control",

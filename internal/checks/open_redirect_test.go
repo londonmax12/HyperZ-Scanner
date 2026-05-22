@@ -147,7 +147,7 @@ func TestOpenRedirectNoFindingOnSafeRedirect(t *testing.T) {
 
 func TestOpenRedirectNoFindingWhenNo3xx(t *testing.T) {
 	// Path is redirect-ish so the canonical sweep actually fires and exercises
-	// the 200-response rejection branch — without that, candidates would be
+	// the 200-response rejection branch - without that, candidates would be
 	// empty for / and the test would trivially pass by skipping all probes.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -373,7 +373,7 @@ func TestOpenRedirectDedupeKeyStableAndPerPath(t *testing.T) {
 	loginA := run("/login")
 	loginB := run("/login") // same path, must dedupe to same key
 	// /logout is also redirect-ish (different keyword), so the canonical
-	// sweep fires there too — exercising "different path, different key".
+	// sweep fires there too - exercising "different path, different key".
 	logout := run("/logout")
 	if loginA == "" {
 		t.Fatal("DedupeKey empty")
@@ -484,7 +484,7 @@ func TestOpenRedirectReportsEveryProbeFailureAsBreadcrumb(t *testing.T) {
 func TestOpenRedirectSkipsCanonicalSweepOnNonRedirectishPath(t *testing.T) {
 	// /products has no redirect-ish keyword and the URL carries no params,
 	// so candidate set is empty: the check must not send any probes. This
-	// is the central blast-radius guarantee — on a 200-page crawl the
+	// is the central blast-radius guarantee - on a 200-page crawl the
 	// product/article pages stay un-probed.
 	var hits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -507,7 +507,7 @@ func TestOpenRedirectSkipsCanonicalSweepOnNonRedirectishPath(t *testing.T) {
 
 func TestOpenRedirectProbesUrlParamsEvenOnNonRedirectishPath(t *testing.T) {
 	// `next` is canonical but the path /products doesn't earn the canonical
-	// sweep. Because `next` is already in the URL it still gets probed — the
+	// sweep. Because `next` is already in the URL it still gets probed - the
 	// app is actively passing it, so it's the highest-signal candidate.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		v := r.URL.Query().Get("next")
@@ -532,7 +532,7 @@ func TestOpenRedirectProbesUrlParamsEvenOnNonRedirectishPath(t *testing.T) {
 func TestOpenRedirectSkipsNonUrlCanonicalNamesOnNonRedirectishPath(t *testing.T) {
 	// The page has `next` present (so `next` IS probed) but reflects only
 	// `redirect`. Since /products isn't redirect-ish, `redirect` is NOT in
-	// the candidate set and the bug stays uncaught at LevelDefault — by
+	// the candidate set and the bug stays uncaught at LevelDefault - by
 	// design. This pins the blast-radius trade-off: cheap default scans
 	// trade away coverage on non-redirect-ish pages.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -556,7 +556,7 @@ func TestOpenRedirectSkipsNonUrlCanonicalNamesOnNonRedirectishPath(t *testing.T)
 }
 
 func TestOpenRedirectAggressiveLevelSweepsEverywhere(t *testing.T) {
-	// At LevelAggressive the canonical sweep fires regardless of path —
+	// At LevelAggressive the canonical sweep fires regardless of path -
 	// the user has explicitly opted into the noisier scan. /products is
 	// not redirect-ish but `redirect` still gets probed and the bug fires.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -591,7 +591,7 @@ func TestLooksRedirectish(t *testing.T) {
 		{"/api/auth/callback", true},
 		{"/admin/sso-init", true},
 		{"/go/redirect/123", true},
-		{"/authentication", true}, // substring match by design — loose
+		{"/authentication", true}, // substring match by design - loose
 		{"/products", false},
 		{"/articles/2024", false},
 		{"/", false},
