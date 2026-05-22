@@ -18,6 +18,7 @@ func registry() []checks.Check {
 		checks.ServerLeak{},
 		checks.TLSAudit{},
 		checks.MixedContent{},
+		checks.OpenRedirect{},
 	}
 }
 
