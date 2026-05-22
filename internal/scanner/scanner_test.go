@@ -52,6 +52,26 @@ func newNilClient() *httpclient.Client {
 	return httpclient.New(httpclient.Config{Timeout: time.Second, UserAgent: "test"})
 }
 
+// runOne drives the scanner against a single target via the streaming
+// ScanAll API, collecting findings into a slice for assertion convenience.
+// Production code uses ScanAll directly; this helper exists so tests don't
+// have to reproduce the channel boilerplate.
+func runOne(ctx context.Context, s *Scanner, target string) ([]checks.Finding, error) {
+	targets := make(chan string, 1)
+	targets <- target
+	close(targets)
+
+	out := make(chan checks.Finding, 16)
+	errCh := make(chan error, 1)
+	go func() { errCh <- s.ScanAll(ctx, targets, out) }()
+
+	var all []checks.Finding
+	for f := range out {
+		all = append(all, f)
+	}
+	return all, <-errCh
+}
+
 func TestScanSingleTargetCollectsFindings(t *testing.T) {
 	c := &stubCheck{
 		name: "stub",
@@ -61,7 +81,7 @@ func TestScanSingleTargetCollectsFindings(t *testing.T) {
 		},
 	}
 	s := New(newNilClient(), []checks.Check{c})
-	got, err := s.Scan(context.Background(), "http://t")
+	got, err := runOne(context.Background(), s,"http://t")
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
@@ -118,7 +138,7 @@ func TestScanErrorHandlerInvoked(t *testing.T) {
 			gotName = check
 		}),
 	)
-	findings, err := s.Scan(context.Background(), "http://t")
+	findings, err := runOne(context.Background(), s,"http://t")
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
@@ -240,7 +260,7 @@ func TestScanGatedCheckRunsWhenStackMatches(t *testing.T) {
 	}
 	s := New(client, []checks.Check{gated}, WithFingerprint(det))
 
-	got, err := s.Scan(context.Background(), srv.URL)
+	got, err := runOne(context.Background(), s,srv.URL)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
@@ -272,7 +292,7 @@ func TestScanGatedCheckSkippedWhenStackDoesNotMatch(t *testing.T) {
 		WithSkipHandler(func(target, check, reason string) { skips.Add(1) }),
 	)
 
-	got, err := s.Scan(context.Background(), srv.URL)
+	got, err := runOne(context.Background(), s,srv.URL)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
@@ -295,7 +315,7 @@ func TestScanWithoutFingerprintAlwaysRunsGatedChecks(t *testing.T) {
 		wantValue: "wordpress",
 	}
 	s := New(newNilClient(), []checks.Check{gated})
-	got, err := s.Scan(context.Background(), "http://example.invalid")
+	got, err := runOne(context.Background(), s,"http://example.invalid")
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
@@ -309,7 +329,7 @@ func TestScanMultipleChecksParallel(t *testing.T) {
 	a := &stubCheck{name: "a", findings: []checks.Finding{{Title: "fa"}}}
 	b := &stubCheck{name: "b", findings: []checks.Finding{{Title: "fb"}}}
 	s := New(newNilClient(), []checks.Check{a, b})
-	got, err := s.Scan(context.Background(), "http://t")
+	got, err := runOne(context.Background(), s,"http://t")
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}

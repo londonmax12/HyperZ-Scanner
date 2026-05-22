@@ -2,7 +2,6 @@ package scanner
 
 import (
 	"context"
-	"fmt"
 	"sync"
 
 	"github.com/londonball/hyperz/internal/checks"
@@ -207,23 +206,3 @@ func (s *Scanner) applies(c checks.Check, stack *fingerprint.Stack, target strin
 	return false
 }
 
-// Scan is a convenience wrapper for the single-target case. It collects all
-// findings into a slice before returning.
-func (s *Scanner) Scan(ctx context.Context, target string) ([]checks.Finding, error) {
-	targets := make(chan string, 1)
-	targets <- target
-	close(targets)
-
-	out := make(chan checks.Finding, 16)
-	errCh := make(chan error, 1)
-	go func() { errCh <- s.ScanAll(ctx, targets, out) }()
-
-	var all []checks.Finding
-	for f := range out {
-		all = append(all, f)
-	}
-	if err := <-errCh; err != nil {
-		return all, fmt.Errorf("scan: %w", err)
-	}
-	return all, nil
-}
