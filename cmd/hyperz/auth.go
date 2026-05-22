@@ -144,7 +144,7 @@ func parseCookieSpecs(specs []string) ([]*http.Cookie, error) {
 //     Cookie File' is treated as a comment too).
 //   - Plain `name=value` per line, optionally with a leading `domain ` token
 //     (space-separated) to scope it. No `domain ` prefix means "apply to all
-//     seed hosts" — same as --cookie.
+//     seed hosts" - same as --cookie.
 //
 // Blank lines and '#' comments are skipped in both formats.
 func loadCookiesFile(path string) ([]*http.Cookie, []*http.Cookie, error) {
@@ -225,7 +225,7 @@ func netscapeCookie(fields []string) (*http.Cookie, error) {
 		Path:   path,
 		Secure: secure,
 	}
-	// expires=0 means "session" — leave Expires zero.
+	// expires=0 means "session" - leave Expires zero.
 	if exp := strings.TrimSpace(fields[4]); exp != "" && exp != "0" {
 		if secs, err := strconv.ParseInt(exp, 10, 64); err == nil && secs > 0 {
 			c.Expires = time.Unix(secs, 0)

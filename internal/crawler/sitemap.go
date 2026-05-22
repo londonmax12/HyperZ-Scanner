@@ -6,7 +6,7 @@ import (
 )
 
 // sitemapDoc matches both <urlset> (regular sitemap with <url><loc>) and
-// <sitemapindex> (with <sitemap><loc>) — encoding/xml ignores the root name
+// <sitemapindex> (with <sitemap><loc>) - encoding/xml ignores the root name
 // and picks children by their element name, so one struct handles both.
 type sitemapDoc struct {
 	URLs []struct {
@@ -18,7 +18,7 @@ type sitemapDoc struct {
 }
 
 // parseSitemap returns concrete page URLs and any nested sitemap URLs found.
-// Gzipped sitemaps (.xml.gz) are not handled — caller must decompress.
+// Gzipped sitemaps (.xml.gz) are not handled - caller must decompress.
 func parseSitemap(r io.Reader) (urls []string, nested []string, err error) {
 	var doc sitemapDoc
 	if err := xml.NewDecoder(r).Decode(&doc); err != nil {

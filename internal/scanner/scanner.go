@@ -36,7 +36,7 @@ func WithErrorHandler(fn func(target, check string, err error)) Option {
 }
 
 // WithScope sets the scan scope handed to each check. A nil scope (the
-// default) means checks run unconstrained — fine for ad-hoc single-target
+// default) means checks run unconstrained - fine for ad-hoc single-target
 // scans, not for active probes against untrusted infrastructure.
 func WithScope(sc *scope.Scope) Option {
 	return func(s *Scanner) { s.scope = sc }
@@ -47,7 +47,7 @@ func WithScope(sc *scope.Scope) Option {
 // stack; if it returns false, the check is skipped for that target.
 // Checks without StackGated always run.
 //
-// Detection failures are soft — when Detect returns an error the
+// Detection failures are soft - when Detect returns an error the
 // scanner skips gating for that target and runs every check, so a flaky
 // fingerprint request can't silently disable findings.
 func WithFingerprint(d *fingerprint.Detector) Option {
@@ -102,7 +102,7 @@ func (s *Scanner) ScanAll(ctx context.Context, targets <-chan string, out chan<-
 }
 
 // scanOne fingerprints target then runs every applicable check in parallel.
-// When a check's Run returns, its findings are sent unconditionally — they
+// When a check's Run returns, its findings are sent unconditionally - they
 // already exist in memory, so we flush them even if ctx cancels mid-send.
 // New checks are not scheduled after ctx cancels (the loop bails on
 // ctx.Err()), so the post-cancel send burst is bounded by checks already
@@ -138,7 +138,7 @@ func (s *Scanner) scanOne(ctx context.Context, target string, out chan<- checks.
 }
 
 // fingerprint resolves the stack for target, or returns nil when
-// fingerprinting is disabled or fails. A nil stack means "skip gating" —
+// fingerprinting is disabled or fails. A nil stack means "skip gating" -
 // every check runs, which is the safer default than silently dropping a
 // check because we couldn't reach the host.
 func (s *Scanner) fingerprint(ctx context.Context, target string) *fingerprint.Stack {

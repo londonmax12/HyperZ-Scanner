@@ -152,7 +152,7 @@ func TestScanCancellationFlushesInFlightFindings(t *testing.T) {
 	targets := make(chan string, 1)
 	targets <- "http://t"
 	close(targets)
-	// Unbuffered so the sender parks between each send — that's the window
+	// Unbuffered so the sender parks between each send - that's the window
 	// where the old code dropped findings on cancel.
 	out := make(chan checks.Finding)
 

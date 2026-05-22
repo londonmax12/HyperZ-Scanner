@@ -77,7 +77,7 @@ func parseProxy(raw string) (*url.URL, error) {
 	return u, nil
 }
 
-// hostPortRE matches host:port tokens — used by the scraper to pull proxies
+// hostPortRE matches host:port tokens - used by the scraper to pull proxies
 // out of mixed-format response bodies. Hostnames are 1..255 chars of letters,
 // digits, dots, or hyphens; port is 1..5 digits.
 var hostPortRE = regexp.MustCompile(`(?m)\b([a-zA-Z0-9][a-zA-Z0-9.\-]{0,253}):(\d{1,5})\b`)

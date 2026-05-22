@@ -184,7 +184,7 @@ func (c TLSAudit) expiryFindings(target, hostScope string, leaf *x509.Certificat
 		URL:         target,
 		Severity:    severity,
 		Title:       fmt.Sprintf("TLS certificate expires in %d days", days),
-		Detail:      fmt.Sprintf("leaf certificate (CN=%s) expires on %s — within %s", cn, leaf.NotAfter.UTC().Format(time.RFC3339), window),
+		Detail:      fmt.Sprintf("leaf certificate (CN=%s) expires on %s - within %s", cn, leaf.NotAfter.UTC().Format(time.RFC3339), window),
 		CWE:         "CWE-298",
 		OWASP:       "A02:2021 Cryptographic Failures",
 		Remediation: "Renew the certificate ahead of expiry and verify automated renewal jobs are healthy.",

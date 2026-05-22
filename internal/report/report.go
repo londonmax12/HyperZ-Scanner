@@ -35,7 +35,7 @@ type Metadata struct {
 // continue ranging over `in` to a no-op, and return the saved error at the end.
 //
 // meta is read after the findings channel closes, so it's safe for the caller
-// to keep populating the underlying maps while the scan is in flight — every
+// to keep populating the underlying maps while the scan is in flight - every
 // in-tree reporter touches meta only at the end.
 type Reporter interface {
 	Write(ctx context.Context, w io.Writer, in <-chan checks.Finding, meta Metadata) error
@@ -69,7 +69,7 @@ func New(format string) (Reporter, error) {
 
 // Dedupe forwards findings from in to a new channel, dropping any whose
 // DedupeKey has already been seen. Findings without a DedupeKey are always
-// forwarded — checks opt into dedupe by setting a key. The returned channel
+// forwarded - checks opt into dedupe by setting a key. The returned channel
 // is closed when in is closed, preserving the stream contract.
 func Dedupe(in <-chan checks.Finding) <-chan checks.Finding {
 	out := make(chan checks.Finding, cap(in))
@@ -125,7 +125,7 @@ func writeTextStacks(w io.Writer, stacks map[string]*fingerprint.Stack) error {
 		return err
 	}
 	for _, host := range sortedHosts(stacks) {
-		if _, err := fmt.Fprintf(w, "  %s — %s (confidence=%.0f%%)\n",
+		if _, err := fmt.Fprintf(w, "  %s - %s (confidence=%.0f%%)\n",
 			host, stacks[host].Summary(), stacks[host].Confidence*100); err != nil {
 			return err
 		}
@@ -138,7 +138,7 @@ func writeTextFinding(w io.Writer, f checks.Finding) error {
 	if loc == "" {
 		loc = f.Target
 	}
-	if _, err := fmt.Fprintf(w, "[%s] %s — %s — %s\n", f.Severity, f.Check, loc, f.Title); err != nil {
+	if _, err := fmt.Fprintf(w, "[%s] %s - %s - %s\n", f.Severity, f.Check, loc, f.Title); err != nil {
 		return err
 	}
 	if f.Detail != "" {
@@ -412,7 +412,7 @@ func ifDetail(d string) string {
 	if d == "" {
 		return ""
 	}
-	return " — " + d
+	return " - " + d
 }
 
 // cweURL maps a "CWE-123" id to its mitre.org page so SARIF viewers can link
@@ -483,7 +483,7 @@ func (markdownReporter) Write(ctx context.Context, w io.Writer, in <-chan checks
 		if loc == "" {
 			loc = f.Target
 		}
-		fmt.Fprintf(w, "### [%s] %s — %s\n\n", f.Severity, f.Check, escapePipe(f.Title))
+		fmt.Fprintf(w, "### [%s] %s - %s\n\n", f.Severity, f.Check, escapePipe(f.Title))
 		fmt.Fprintf(w, "- **URL:** %s\n", loc)
 		if tags := joinNonEmpty(", ", f.CWE, f.OWASP); tags != "" {
 			fmt.Fprintf(w, "- **Refs:** %s\n", tags)

@@ -46,10 +46,10 @@ hyperz checks list   # list built-in checks and their level
 ### Scan levels
 
 `--mode` selects how invasive the scan is. Each level includes every check
-at or below it — an aggressive scan is a superset of a passive one, so you
+at or below it - an aggressive scan is a superset of a passive one, so you
 never silently drop the cheap observations.
 
-`--mode passive` (default) runs only observation-only checks — it inspects
+`--mode passive` (default) runs only observation-only checks - it inspects
 responses to normal-looking requests and never sends payloads designed to
 trigger vulnerabilities. Safe to point at anything you're allowed to look at.
 
@@ -58,7 +58,7 @@ on top of the passive set. These can be logged as attacks; only run them
 against systems you have explicit authorization to test.
 
 `--mode aggressive` adds noisy or heavy fuzzing (long wordlists, many
-requests) on top of default. Likely to trip rate limits or WAFs — reserve
+requests) on top of default. Likely to trip rate limits or WAFs - reserve
 for explicit deep scans.
 
 ### Authentication & cookies
@@ -86,7 +86,7 @@ sources.
 When more than one proxy is in play, requests go through a smart pool that
 picks proxies via epsilon-greedy on per-proxy success rate. Bad proxies fade
 out automatically; promising ones get used more. The pool distinguishes
-target blocks (HTTP 403/429) from proxy errors (5xx, network) — at scan end,
+target blocks (HTTP 403/429) from proxy errors (5xx, network) - at scan end,
 hyperz prints per-proxy stats and an overall block rate so you can tell
 whether the scan itself is being rejected. Tune visible rows with
 `--proxy-stats-top` (default 10, 0 to hide).

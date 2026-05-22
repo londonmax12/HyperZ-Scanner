@@ -15,7 +15,7 @@ import (
 // PDF reporter emits a minimal, dependency-free PDF 1.4 document using
 // Helvetica and Helvetica-Bold from the 14 standard fonts every viewer
 // ships, so no font embedding is required. Streams are uncompressed so
-// the rendered text stays greppable in the raw bytes — useful for tests.
+// the rendered text stays greppable in the raw bytes - useful for tests.
 
 const (
 	pdfPageW      = 612.0 // US Letter, points
@@ -180,7 +180,7 @@ func (d *pdfDoc) renderReport(findings []checks.Finding, stacks map[string]*fing
 }
 
 // renderStacks adds a "Detected stacks" page after the cover. Each row is
-// "host — server=… language=… …" so the PDF stays single-column without
+// "host - server=… language=… …" so the PDF stays single-column without
 // reaching for table primitives we don't have.
 func (d *pdfDoc) renderStacks(stacks map[string]*fingerprint.Stack) {
 	if len(stacks) == 0 {
@@ -348,7 +348,7 @@ func approxWidth(s string, size float64) float64 {
 }
 
 // serialize lays out the PDF as: catalog, pages tree, two fonts, then
-// alternating (page, contents) objects — one pair per logical page. Object
+// alternating (page, contents) objects - one pair per logical page. Object
 // IDs are assigned in order of writing so the page tree can reference them
 // by formula (page i lives at object 5+2i, its content stream at 6+2i).
 func (d *pdfDoc) serialize(w io.Writer) error {

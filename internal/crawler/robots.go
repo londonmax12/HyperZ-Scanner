@@ -15,7 +15,7 @@ type robotsRules struct {
 // parseRobots reads a robots.txt body and returns rules for the User-agent: *
 // group plus all Sitemap directives (which are agent-independent).
 // Extended wildcard syntax ("*", "$") is captured literally; blocked() does a
-// prefix match, so wildcard patterns won't match real URLs — acceptable as a
+// prefix match, so wildcard patterns won't match real URLs - acceptable as a
 // conservative default since we err on the side of *not* blocking.
 func parseRobots(r io.Reader) robotsRules {
 	var rules robotsRules

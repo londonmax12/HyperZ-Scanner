@@ -126,6 +126,6 @@ func TestEpsilonGreedyPrefersBetterProxy(t *testing.T) {
 		t.Fatalf("good proxy picked %d/%d, want >= 800", goodPicks, trials)
 	}
 	if goodPicks > trials*98/100 {
-		t.Fatalf("good proxy picked %d/%d — explore branch seems broken", goodPicks, trials)
+		t.Fatalf("good proxy picked %d/%d - explore branch seems broken", goodPicks, trials)
 	}
 }

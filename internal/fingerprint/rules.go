@@ -149,7 +149,7 @@ var cookieRules = []cookieRule{
 		s.Framework = "laravel"
 	}},
 	{name: "XSRF-TOKEN", set: func(s *Stack) {
-		// Used by Laravel, Angular, AdonisJS, others. Only a hint — don't
+		// Used by Laravel, Angular, AdonisJS, others. Only a hint - don't
 		// pin a framework on this alone; we just record the signal.
 	}},
 	{name: "ci_session", set: func(s *Stack) {
@@ -269,7 +269,7 @@ var bodyRules = []bodyRule{
 		label: "csrf-meta",
 		re:    regexp.MustCompile(`(?i)<meta\s+name=["']csrf-token["']`),
 		// Both Rails and Laravel emit csrf-token meta. Only weakly hint at
-		// "framework with CSRF protection" — don't overwrite a real match.
+		// "framework with CSRF protection" - don't overwrite a real match.
 		set: func(s *Stack) {},
 	},
 }

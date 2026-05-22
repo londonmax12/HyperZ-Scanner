@@ -17,7 +17,7 @@ import (
 const defaultMaxBodyBytes = 5 << 20 // 5 MiB
 
 // Config controls how the crawler walks links. The host allowlist and depth
-// cap live on the Scope, not here — pass the same Scope to the scanner so
+// cap live on the Scope, not here - pass the same Scope to the scanner so
 // crawl boundaries and check boundaries can't drift apart.
 type Config struct {
 	Workers      int          // concurrent fetchers; 0 → 8

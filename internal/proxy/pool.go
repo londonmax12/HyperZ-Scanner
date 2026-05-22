@@ -17,7 +17,7 @@ type Outcome int
 const (
 	OutcomeSuccess Outcome = iota
 	// OutcomeBlock means the target server rejected the request (403, 429).
-	// It signals scan health, not proxy health — but still counts against
+	// It signals scan health, not proxy health - but still counts against
 	// the proxy's score since a blocked proxy is useless for further work.
 	OutcomeBlock
 	// OutcomeError means the proxy or network failed (5xx-from-proxy,
@@ -154,7 +154,7 @@ func (p *SmartPool) Stats() []ProxyStat {
 }
 
 // OverallBlockRate aggregates blocks / (blocks + successes) across all
-// proxies — answers "how often is the scan getting rejected overall."
+// proxies - answers "how often is the scan getting rejected overall."
 func (p *SmartPool) OverallBlockRate() float64 {
 	if p == nil {
 		return 0

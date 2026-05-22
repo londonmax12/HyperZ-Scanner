@@ -79,8 +79,8 @@ reads stdin). With --crawl, each seed URL is recursively crawled and every
 discovered page becomes a scan target.
 
 Modes:
-  passive (default) — observation-only; safe to run anywhere you may look.
-  active            — adds intrusive probes (XSS, SQLi, traversal, ...);
+  passive (default) - observation-only; safe to run anywhere you may look.
+  active            - adds intrusive probes (XSS, SQLi, traversal, ...);
                       only run against systems you are authorized to test.`,
 		Example: `  hyperz scan --url https://example.com
   hyperz scan --url https://example.com --format json -o report.json

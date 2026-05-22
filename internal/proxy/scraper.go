@@ -12,7 +12,7 @@ import (
 )
 
 // DefaultSources is a small built-in list of public proxy aggregators. They
-// can rot — users can override or extend via -proxy-source.
+// can rot - users can override or extend via -proxy-source.
 var DefaultSources = []string{
 	"https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt",
 	"https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=10000",
@@ -38,7 +38,7 @@ type ScrapeConfig struct {
 // Scrape fetches each source concurrently, extracts host:port entries from
 // each response body, and returns deduped proxy URLs (scheme defaults to
 // http). Per-source failures are reported via OnError but do not abort the
-// scrape — partial results are returned.
+// scrape - partial results are returned.
 func Scrape(ctx context.Context, cfg ScrapeConfig) ([]*url.URL, error) {
 	if len(cfg.Sources) == 0 {
 		return nil, nil

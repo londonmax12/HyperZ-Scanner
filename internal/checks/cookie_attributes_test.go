@@ -193,7 +193,7 @@ func TestCookieAttributesPopulatesEnrichedFields(t *testing.T) {
 		t.Errorf("Target = %q, want %q", f.Target, srv.URL)
 	}
 	if f.URL == "" {
-		t.Errorf("URL empty — should be the observed request URL")
+		t.Errorf("URL empty - should be the observed request URL")
 	}
 	if f.OWASP == "" {
 		t.Errorf("OWASP empty")

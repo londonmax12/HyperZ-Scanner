@@ -18,7 +18,7 @@ import (
 	"github.com/londonball/hyperz/internal/httpclient"
 )
 
-const defaultMaxBodyBytes = 256 << 10 // 256 KiB — enough for <head> in practice
+const defaultMaxBodyBytes = 256 << 10 // 256 KiB - enough for <head> in practice
 
 // Stack is the detected technology profile for a host. Empty strings mean
 // "unknown", not "absent"; a real Apache box might still report Server=""
@@ -117,7 +117,7 @@ func (s Stack) Summary() string {
 }
 
 // StackGated is optionally implemented by checks that should only run
-// against certain stacks. Scanner queries it via type assertion — checks
+// against certain stacks. Scanner queries it via type assertion - checks
 // that don't implement it are treated as stack-agnostic (always run).
 //
 // stack is never nil when AppliesTo is called: detection failures cause
@@ -171,7 +171,7 @@ func New(client *httpclient.Client, opts ...Option) *Detector {
 
 // Detect fingerprints the host of target. Repeat calls for the same
 // host:port return the cached stack. An unparseable URL yields an empty
-// stack and a non-nil error. Network failures are returned as-is — the
+// stack and a non-nil error. Network failures are returned as-is - the
 // caller decides whether to soft-fail.
 func (d *Detector) Detect(ctx context.Context, target string) (*Stack, error) {
 	u, err := url.Parse(target)

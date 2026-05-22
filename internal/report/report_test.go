@@ -81,10 +81,10 @@ func TestNewUnknownFormat(t *testing.T) {
 func TestTextReporter(t *testing.T) {
 	out := writeFormat(t, "text", sampleFindings())
 	for _, want := range []string{
-		"[high] security-headers — http://a — missing header X",
+		"[high] security-headers - http://a - missing header X",
 		"    details A",
-		"[medium] security-headers — http://b — missing header Y",
-		"[low] tls — http://c — weak cipher | pipe",
+		"[medium] security-headers - http://b - missing header Y",
+		"[low] tls - http://c - weak cipher | pipe",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("text output missing %q\nfull:\n%s", want, out)
@@ -325,7 +325,7 @@ func TestReportersDrainOnCanceledContext(t *testing.T) {
 			// at whether the reporter consumed past an early ctx.Err() check.
 			for _, want := range []string{"missing header X", "weak cipher"} {
 				if !strings.Contains(buf.String(), want) {
-					t.Errorf("%s missing %q — reporter dropped findings on canceled ctx", format, want)
+					t.Errorf("%s missing %q - reporter dropped findings on canceled ctx", format, want)
 				}
 			}
 		})
@@ -586,8 +586,8 @@ func TestTextReporterRendersStacks(t *testing.T) {
 	out := writeFormatWithMeta(t, "text", sampleFindings(), Metadata{Stacks: sampleStacks()})
 	for _, want := range []string{
 		"detected stacks:",
-		"api.example.com — server=openresty language=node (confidence=33%)",
-		"example.com — server=nginx language=php cms=wordpress (confidence=50%)",
+		"api.example.com - server=openresty language=node (confidence=33%)",
+		"example.com - server=nginx language=php cms=wordpress (confidence=50%)",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("text missing %q\nfull:\n%s", want, out)

@@ -87,7 +87,7 @@ type Evidence struct {
 // actually observed (which equals Target for site-wide checks, but differs
 // for per-page checks discovered via crawling).
 //
-// DedupeKey is a stable identifier for the *issue*, not the report row —
+// DedupeKey is a stable identifier for the *issue*, not the report row -
 // scope it as narrowly as the issue requires (per-page for XSS, per-host for
 // missing security headers, etc.) so the same problem doesn't flood the
 // output. See MakeDedupeKey and HostScope.
@@ -180,7 +180,7 @@ type Check interface {
 	// scope is the user-authorized boundary of the scan. Passive checks may
 	// ignore it (they only look at target, which is already in scope by the
 	// time the scanner dispatches). Non-passive checks MUST consult scope
-	// before probing sub-resources discovered on the page — a form on
+	// before probing sub-resources discovered on the page - a form on
 	// /admin is only safe to fuzz if /admin is itself in scope.
 	//
 	// A nil scope means "no restrictions"; treat it as permissive.

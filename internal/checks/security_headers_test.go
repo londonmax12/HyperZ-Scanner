@@ -155,7 +155,7 @@ func TestSecurityHeadersPopulatesEnrichedFields(t *testing.T) {
 		t.Errorf("Remediation empty")
 	}
 	if f.URL == "" {
-		t.Errorf("URL empty — should be the observed request URL")
+		t.Errorf("URL empty - should be the observed request URL")
 	}
 	if f.DedupeKey == "" {
 		t.Errorf("DedupeKey empty")
@@ -173,7 +173,7 @@ func TestSecurityHeadersPopulatesEnrichedFields(t *testing.T) {
 
 func TestSecurityHeadersDedupeKeysAreStableAndPerHeader(t *testing.T) {
 	// Two requests to the same host must produce the same dedupe key for the
-	// same missing header (that's the whole point — site-wide dedupe). And
+	// same missing header (that's the whole point - site-wide dedupe). And
 	// keys for different missing headers must differ.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)

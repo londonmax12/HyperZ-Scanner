@@ -97,7 +97,7 @@ func (s *Scope) AllowHost(h string) {
 }
 
 // Allows reports whether u falls within the scope. A nil Scope or nil URL
-// is permissive — see the package doc.
+// is permissive - see the package doc.
 func (s *Scope) Allows(u *url.URL) bool {
 	if s == nil || u == nil {
 		return true
