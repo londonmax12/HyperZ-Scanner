@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/url"
+	"sort"
 	"strings"
 
 	"github.com/londonball/hyperz/internal/httpclient"
@@ -143,12 +144,7 @@ func BuildEvidence(method, reqURL string, status int, headers map[string][]strin
 	for k := range headers {
 		keys = append(keys, k)
 	}
-	// Stable order without pulling sort: simple insertion sort, short list.
-	for i := 1; i < len(keys); i++ {
-		for j := i; j > 0 && keys[j-1] > keys[j]; j-- {
-			keys[j-1], keys[j] = keys[j], keys[j-1]
-		}
-	}
+	sort.Strings(keys)
 	for _, k := range keys {
 		for _, v := range headers[k] {
 			if len(v) > maxHeaderVal {
