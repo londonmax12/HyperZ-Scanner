@@ -6,6 +6,7 @@ import (
 	"mime"
 	"net/http"
 	"sort"
+	"strings"
 
 	"github.com/londonball/hyperz/internal/httpclient"
 	"github.com/londonball/hyperz/internal/page"
@@ -81,6 +82,16 @@ func isHTMLContentType(ct string) bool {
 	return mediaType == "text/html" || mediaType == "application/xhtml+xml"
 }
 
+// severityRank orders severities so the consolidated finding can adopt the
+// worst severity among all missing headers. Higher number = worse.
+var severityRank = map[Severity]int{
+	SeverityInfo:     0,
+	SeverityLow:      1,
+	SeverityMedium:   2,
+	SeverityHigh:     3,
+	SeverityCritical: 4,
+}
+
 func (c SecurityHeaders) Run(ctx context.Context, client *httpclient.Client, _ *scope.Scope, p page.Page) ([]Finding, error) {
 	snap, err := ensureResponse(ctx, client, p, 0)
 	if err != nil {
@@ -93,37 +104,67 @@ func (c SecurityHeaders) Run(ctx context.Context, client *httpclient.Client, _ *
 	if snap.Status != http.StatusOK || !isHTMLContentType(snap.Headers.Get("Content-Type")) {
 		return nil, nil
 	}
-	evidence := BuildEvidence("GET", p.URL, snap.Status, snap.Headers, "")
 
-	// Iterate in sorted header order so the output is stable across runs.
+	// Iterate in sorted header order so the missing-set, CWE list, and
+	// remediation text are stable across runs.
 	names := make([]string, 0, len(headerRules))
 	for h := range headerRules {
 		names = append(names, h)
 	}
 	sort.Strings(names)
 
-	var findings []Finding
+	var missing []string
 	for _, header := range names {
-		if snap.Headers.Get(header) != "" {
-			continue
+		if snap.Headers.Get(header) == "" {
+			missing = append(missing, header)
 		}
-		rule := headerRules[header]
-		findings = append(findings, Finding{
-			Check:       c.Name(),
-			Target:      p.URL,
-			URL:         p.URL,
-			Severity:    rule.severity,
-			Title:       "missing security header: " + header,
-			Detail:      fmt.Sprintf("response from %s did not include %s", p.URL, header),
-			CWE:         rule.cwe,
-			OWASP:       rule.owasp,
-			Remediation: rule.remediation,
-			Evidence:    evidence,
-			// Per-host: missing CSP on example.com is one issue, not one per
-			// crawled page. Including the header name prevents collisions
-			// between rules at the same scope.
-			DedupeKey: MakeKey(c.Name(), ScopeHost, p.URL, "missing-header:"+header),
-		})
 	}
-	return findings, nil
+	if len(missing) == 0 {
+		return nil, nil
+	}
+
+	// Consolidate every missing header into a single finding. Five missing
+	// headers on the same page is one configuration defect with five facets,
+	// not five independent issues; emitting five rows just inflates the
+	// report and forces the reader to mentally re-join them.
+	maxSev := SeverityInfo
+	seenCWE := map[string]bool{}
+	var cwes, remediations []string
+	for _, h := range missing {
+		r := headerRules[h]
+		if severityRank[r.severity] > severityRank[maxSev] {
+			maxSev = r.severity
+		}
+		if !seenCWE[r.cwe] {
+			seenCWE[r.cwe] = true
+			cwes = append(cwes, r.cwe)
+		}
+		remediations = append(remediations, h+": "+r.remediation)
+	}
+
+	var title string
+	if len(missing) == 1 {
+		title = "missing security header: " + missing[0]
+	} else {
+		title = fmt.Sprintf("missing %d security headers", len(missing))
+	}
+
+	return []Finding{{
+		Check:    c.Name(),
+		Target:   p.URL,
+		URL:      p.URL,
+		Severity: maxSev,
+		Title:    title,
+		Detail:   fmt.Sprintf("response from %s did not include: %s", p.URL, strings.Join(missing, ", ")),
+		CWE:      strings.Join(cwes, ", "),
+		// All header rules map to OWASP A05:2021 Security Misconfiguration,
+		// so consolidating doesn't lose information here.
+		OWASP:       "A05:2021 Security Misconfiguration",
+		Remediation: strings.Join(remediations, " "),
+		Evidence:    BuildEvidence("GET", p.URL, snap.Status, snap.Headers, ""),
+		// Per-host: missing headers on example.com is one site-wide config
+		// issue, not one per crawled page. No per-header suffix now that
+		// every missing header is folded into a single finding.
+		DedupeKey: MakeKey(c.Name(), ScopeHost, p.URL, "missing-headers"),
+	}}, nil
 }

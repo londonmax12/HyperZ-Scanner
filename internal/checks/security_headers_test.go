@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -54,40 +53,50 @@ func TestSecurityHeadersAllMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if len(findings) != 5 {
-		t.Fatalf("expected 5 findings, got %d: %+v", len(findings), findings)
+	// All five missing headers collapse into a single finding so the report
+	// shows one row per endpoint, not one per defect facet.
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 consolidated finding, got %d: %+v", len(findings), findings)
 	}
-	gotHeaders := make([]string, 0, len(findings))
-	for _, f := range findings {
-		if f.Check != "security-headers" {
-			t.Errorf("unexpected check %q", f.Check)
-		}
-		if f.Target != srv.URL {
-			t.Errorf("target = %q, want %q", f.Target, srv.URL)
-		}
-		if !strings.HasPrefix(f.Title, "missing security header: ") {
-			t.Errorf("title %q missing prefix", f.Title)
-		}
-		gotHeaders = append(gotHeaders, strings.TrimPrefix(f.Title, "missing security header: "))
+	f := findings[0]
+	if f.Check != "security-headers" {
+		t.Errorf("unexpected check %q", f.Check)
 	}
-	sort.Strings(gotHeaders)
-	want := []string{
+	if f.Target != srv.URL {
+		t.Errorf("target = %q, want %q", f.Target, srv.URL)
+	}
+	if f.Title != "missing 5 security headers" {
+		t.Errorf("title = %q, want %q", f.Title, "missing 5 security headers")
+	}
+	// Highest severity among the five rules is Medium (CSP/HSTS).
+	if f.Severity != SeverityMedium {
+		t.Errorf("severity = %q, want medium", f.Severity)
+	}
+	for _, h := range []string{
 		"Content-Security-Policy",
 		"Referrer-Policy",
 		"Strict-Transport-Security",
 		"X-Content-Type-Options",
 		"X-Frame-Options",
+	} {
+		if !strings.Contains(f.Detail, h) {
+			t.Errorf("detail missing %q: %q", h, f.Detail)
+		}
+		if !strings.Contains(f.Remediation, h+": ") {
+			t.Errorf("remediation missing per-header entry for %q: %q", h, f.Remediation)
+		}
 	}
-	for i, h := range want {
-		if gotHeaders[i] != h {
-			t.Errorf("header %d = %q, want %q", i, gotHeaders[i], h)
+	for _, c := range []string{"CWE-693", "CWE-319", "CWE-1021", "CWE-200"} {
+		if !strings.Contains(f.CWE, c) {
+			t.Errorf("CWE field missing %q: %q", c, f.CWE)
 		}
 	}
 }
 
 func TestSecurityHeadersSeverityMapping(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Only CSP and HSTS missing → both Medium.
+		// Only CSP and HSTS missing → both Medium, so the consolidated
+		// finding inherits Medium too.
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
@@ -100,13 +109,45 @@ func TestSecurityHeadersSeverityMapping(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if len(findings) != 2 {
-		t.Fatalf("got %d findings, want 2", len(findings))
+	if len(findings) != 1 {
+		t.Fatalf("got %d findings, want 1 consolidated", len(findings))
 	}
-	for _, f := range findings {
-		if f.Severity != SeverityMedium {
-			t.Errorf("%q: severity = %q, want medium", f.Title, f.Severity)
+	f := findings[0]
+	if f.Severity != SeverityMedium {
+		t.Errorf("severity = %q, want medium", f.Severity)
+	}
+	if f.Title != "missing 2 security headers" {
+		t.Errorf("title = %q, want %q", f.Title, "missing 2 security headers")
+	}
+	for _, h := range []string{"Content-Security-Policy", "Strict-Transport-Security"} {
+		if !strings.Contains(f.Detail, h) {
+			t.Errorf("detail missing %q: %q", h, f.Detail)
 		}
+	}
+}
+
+func TestSecurityHeadersConsolidatedSeverityIsMaxOfMissing(t *testing.T) {
+	// CSP missing (Medium) plus X-Frame-Options missing (Low). The
+	// consolidated finding must take the worst severity so the report
+	// surfaces the right priority for triage.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Strict-Transport-Security", "max-age=63072000")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	findings, err := SecurityHeaders{}.Run(context.Background(), newTestClient(t), nil, page.FromURL(srv.URL))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("got %d findings, want 1", len(findings))
+	}
+	if findings[0].Severity != SeverityMedium {
+		t.Errorf("severity = %q, want medium (max of Medium+Low)", findings[0].Severity)
 	}
 }
 
@@ -182,8 +223,11 @@ func TestSecurityHeadersAcceptsXHTML(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if len(findings) != 5 {
-		t.Fatalf("expected 5 findings on xhtml response, got %d: %+v", len(findings), findings)
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 consolidated finding on xhtml response, got %d: %+v", len(findings), findings)
+	}
+	if findings[0].Title != "missing 5 security headers" {
+		t.Errorf("title = %q, want %q", findings[0].Title, "missing 5 security headers")
 	}
 }
 
@@ -240,42 +284,33 @@ func TestSecurityHeadersPopulatesEnrichedFields(t *testing.T) {
 	}
 }
 
-func TestSecurityHeadersDedupeKeysAreStableAndPerHeader(t *testing.T) {
-	// Two requests to the same host must produce the same dedupe key for the
-	// same missing header (that's the whole point - site-wide dedupe). And
-	// keys for different missing headers must differ.
+func TestSecurityHeadersDedupeKeyIsStableAndPerHost(t *testing.T) {
+	// The consolidated finding's dedupe key must be deterministic across
+	// runs for the same host (site-wide dedupe collapses repeated crawls
+	// of the same host to one row), and must not vary with which subset
+	// of headers happens to be missing on a particular page.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
 
-	run := func() map[string]string {
+	run := func() string {
 		findings, err := SecurityHeaders{}.Run(context.Background(), newTestClient(t), nil, page.FromURL(srv.URL))
 		if err != nil {
 			t.Fatalf("Run: %v", err)
 		}
-		out := map[string]string{}
-		for _, f := range findings {
-			out[strings.TrimPrefix(f.Title, "missing security header: ")] = f.DedupeKey
+		if len(findings) != 1 {
+			t.Fatalf("expected 1 finding, got %d", len(findings))
 		}
-		return out
+		if findings[0].DedupeKey == "" {
+			t.Fatal("DedupeKey empty")
+		}
+		return findings[0].DedupeKey
 	}
 	a, b := run(), run()
-	if len(a) != 5 || len(b) != 5 {
-		t.Fatalf("expected 5 findings each; got %d / %d", len(a), len(b))
-	}
-	for header, key := range a {
-		if b[header] != key {
-			t.Errorf("dedupe key for %q drifted: %q vs %q", header, key, b[header])
-		}
-	}
-	seen := map[string]string{}
-	for header, key := range a {
-		if other, dup := seen[key]; dup {
-			t.Errorf("headers %q and %q share dedupe key %q", other, header, key)
-		}
-		seen[key] = header
+	if a != b {
+		t.Errorf("dedupe key drifted across runs: %q vs %q", a, b)
 	}
 }
 
