@@ -40,6 +40,12 @@ func extractAll(base *url.URL, body []byte) ([]string, []page.Form) {
 	if len(body) == 0 || base == nil {
 		return nil, nil
 	}
+	// Browsers honor <base href> for the whole document regardless of where
+	// the tag appears in source. Resolve it up-front so links and form
+	// actions that precede the tag still use the document's effective base.
+	if b := findBaseHref(base, body); b != nil {
+		base = b
+	}
 	z := html.NewTokenizer(bytes.NewReader(body))
 	// Token data is overwritten on each call to Next; copy out anything we
 	// want to keep.
@@ -47,7 +53,6 @@ func extractAll(base *url.URL, body []byte) ([]string, []page.Form) {
 	var (
 		forms      []page.Form
 		current    *page.Form
-		formBase   = base
 		inTextarea bool
 		taName     string
 		taBuf      strings.Builder
@@ -75,21 +80,6 @@ func extractAll(base *url.URL, body []byte) ([]string, []page.Form) {
 			switch tag {
 			case "a", "link", "area":
 				links.addAttr(attrs, "href")
-			case "base":
-				// <base href> shifts the resolution base for everything
-				// after it. Tokens before this point are already resolved
-				// against the original base; that matches browser behavior
-				// for inline content but not for the first elements - this
-				// is a deliberate trade for a single-pass extractor.
-				if href := attrs["href"]; href != "" {
-					if u, err := url.Parse(href); err == nil {
-						resolved := base.ResolveReference(u)
-						if resolved.Scheme == "http" || resolved.Scheme == "https" {
-							formBase = resolved
-							links.base = resolved
-						}
-					}
-				}
 			case "iframe", "frame", "script", "embed", "track":
 				links.addAttr(attrs, "src")
 			case "img", "source", "audio", "video":
@@ -107,7 +97,7 @@ func extractAll(base *url.URL, body []byte) ([]string, []page.Form) {
 					// before opening the inner so we don't lose it.
 					forms = append(forms, *current)
 				}
-				current = newForm(formBase, attrs)
+				current = newForm(base, attrs)
 			case "input":
 				if current != nil {
 					if in, ok := inputFromAttrs(attrs); ok {
@@ -168,6 +158,47 @@ func extractAll(base *url.URL, body []byte) ([]string, []page.Form) {
 		forms = append(forms, *current)
 	}
 	return links.out, forms
+}
+
+// findBaseHref scans body for the first <base href="..."> and resolves it
+// against base. Returns nil when no usable tag is present so the caller
+// keeps the original base. Only the first valid <base> wins, matching the
+// HTML spec and browser behavior; subsequent tags are ignored.
+//
+// The pre-pass is intentionally cheap: it stops as soon as a usable href
+// is found, and otherwise costs one tokenizer walk over the already
+// MaxBodyBytes-capped buffer.
+func findBaseHref(base *url.URL, body []byte) *url.URL {
+	z := html.NewTokenizer(bytes.NewReader(body))
+	for {
+		tt := z.Next()
+		if tt == html.ErrorToken {
+			return nil
+		}
+		if tt != html.StartTagToken && tt != html.SelfClosingTagToken {
+			continue
+		}
+		name, hasAttr := z.TagName()
+		if string(name) != "base" || !hasAttr {
+			continue
+		}
+		attrs := collectAttrs(z, hasAttr)
+		href := strings.TrimSpace(attrs["href"])
+		if href == "" {
+			// <base> without an href doesn't set the document base; keep
+			// scanning for a later one that does.
+			continue
+		}
+		u, err := url.Parse(href)
+		if err != nil {
+			continue
+		}
+		resolved := base.ResolveReference(u)
+		if resolved.Scheme != "http" && resolved.Scheme != "https" {
+			continue
+		}
+		return resolved
+	}
 }
 
 // collectAttrs pulls every attribute on the current token into a map.

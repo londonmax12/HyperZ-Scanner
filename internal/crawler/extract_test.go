@@ -160,18 +160,60 @@ func TestExtractLinksHandlesMetaRefresh(t *testing.T) {
 }
 
 func TestExtractLinksHonorsBaseHref(t *testing.T) {
-	// <base href="..."> shifts the resolution base for subsequent relative
-	// URLs. The single-pass extractor honors base for elements that come
-	// after the <base> tag; earlier elements use the document URL.
+	// <base href="..."> sets the document base for the whole page, including
+	// elements that appear before it in source - matching browsers and the
+	// HTML spec. A pre-pass locates the tag before the main extraction walk.
 	base := mustParseURL(t, "http://example.com/dir/")
 	body := []byte(`
+		<a href="before">b</a>
 		<base href="http://cdn.example/static/">
-		<a href="rel">x</a>
+		<a href="after">a</a>
 	`)
 	got := extractLinks(base, body)
-	want := []string{"http://cdn.example/static/rel"}
+	sort.Strings(got)
+	want := []string{
+		"http://cdn.example/static/after",
+		"http://cdn.example/static/before",
+	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v\nwant %v", got, want)
+	}
+}
+
+func TestExtractLinksFirstBaseHrefWins(t *testing.T) {
+	// HTML spec: only the first <base> with a usable href affects the
+	// document base. Tags without href, or with a non-http(s) scheme, are
+	// skipped in favor of the next candidate.
+	base := mustParseURL(t, "http://example.com/")
+	body := []byte(`
+		<base target="_blank">
+		<base href="javascript:void(0)">
+		<base href="http://first.example/p/">
+		<base href="http://second.example/q/">
+		<a href="x">x</a>
+	`)
+	got := extractLinks(base, body)
+	want := []string{"http://first.example/p/x"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v\nwant %v", got, want)
+	}
+}
+
+func TestExtractFormsHonorsBaseHrefBeforeForm(t *testing.T) {
+	// Form actions resolve against the document base too. A form that
+	// appears before <base> still picks up the override, so active checks
+	// don't end up fuzzing the original host by mistake.
+	base := mustParseURL(t, "http://example.com/dir/")
+	body := []byte(`
+		<form action="submit" method="post"><input name="a"></form>
+		<base href="http://api.example/v1/">
+	`)
+	got := extractForms(base, body)
+	if len(got) != 1 {
+		t.Fatalf("got %d forms, want 1", len(got))
+	}
+	if got[0].Action != "http://api.example/v1/submit" {
+		t.Errorf("Action = %q, want http://api.example/v1/submit", got[0].Action)
 	}
 }
 
