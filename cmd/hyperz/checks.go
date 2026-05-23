@@ -15,6 +15,8 @@ func registry() []checks.Check {
 	return []checks.Check{
 		checks.SecurityHeaders{},
 		checks.CookieAttributes{},
+		checks.CORSConfig{},
+		checks.CORSReflection{},
 		checks.ServerLeak{},
 		checks.TLSAudit{},
 		checks.MixedContent{},
