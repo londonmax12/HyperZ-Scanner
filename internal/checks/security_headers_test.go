@@ -23,6 +23,7 @@ func newTestClient(t *testing.T) *httpclient.Client {
 
 func TestSecurityHeadersAllPresent(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'")
 		w.Header().Set("Strict-Transport-Security", "max-age=63072000")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -44,6 +45,7 @@ func TestSecurityHeadersAllPresent(t *testing.T) {
 
 func TestSecurityHeadersAllMissing(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
@@ -86,6 +88,7 @@ func TestSecurityHeadersAllMissing(t *testing.T) {
 func TestSecurityHeadersSeverityMapping(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Only CSP and HSTS missing → both Medium.
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
@@ -120,6 +123,70 @@ func TestSecurityHeadersReturnsErrorOnNetworkFailure(t *testing.T) {
 	}
 }
 
+func TestSecurityHeadersSkipsNon200(t *testing.T) {
+	// A 404 page with HTML body should not produce findings: browser-rendering
+	// headers are not the security control for error responses, and crawls of
+	// non-existent paths would otherwise flood the report.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	findings, err := SecurityHeaders{}.Run(context.Background(), newTestClient(t), nil, page.FromURL(srv.URL))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("expected 0 findings on 404, got %d: %+v", len(findings), findings)
+	}
+}
+
+func TestSecurityHeadersSkipsNonHTMLContentType(t *testing.T) {
+	cases := map[string]string{
+		"json":    "application/json",
+		"image":   "image/png",
+		"missing": "",
+	}
+	for name, ct := range cases {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if ct != "" {
+					w.Header().Set("Content-Type", ct)
+				}
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer srv.Close()
+
+			findings, err := SecurityHeaders{}.Run(context.Background(), newTestClient(t), nil, page.FromURL(srv.URL))
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if len(findings) != 0 {
+				t.Fatalf("expected 0 findings for Content-Type %q, got %d: %+v", ct, len(findings), findings)
+			}
+		})
+	}
+}
+
+func TestSecurityHeadersAcceptsXHTML(t *testing.T) {
+	// application/xhtml+xml is the served-as-XML variant of HTML; browsers
+	// render it the same way, so the same header expectations apply.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/xhtml+xml")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	findings, err := SecurityHeaders{}.Run(context.Background(), newTestClient(t), nil, page.FromURL(srv.URL))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(findings) != 5 {
+		t.Fatalf("expected 5 findings on xhtml response, got %d: %+v", len(findings), findings)
+	}
+}
+
 func TestSecurityHeadersName(t *testing.T) {
 	if got := (SecurityHeaders{}).Name(); got != "security-headers" {
 		t.Fatalf("Name = %q, want security-headers", got)
@@ -129,6 +196,7 @@ func TestSecurityHeadersName(t *testing.T) {
 func TestSecurityHeadersPopulatesEnrichedFields(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Send back a couple of headers so Evidence isn't empty, but omit CSP.
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Server", "nginx")
 		w.Header().Set("Strict-Transport-Security", "max-age=63072000")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -177,6 +245,7 @@ func TestSecurityHeadersDedupeKeysAreStableAndPerHeader(t *testing.T) {
 	// same missing header (that's the whole point - site-wide dedupe). And
 	// keys for different missing headers must differ.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()

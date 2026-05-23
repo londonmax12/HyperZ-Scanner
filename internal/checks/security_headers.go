@@ -3,6 +3,8 @@ package checks
 import (
 	"context"
 	"fmt"
+	"mime"
+	"net/http"
 	"sort"
 
 	"github.com/londonball/hyperz/internal/httpclient"
@@ -63,10 +65,33 @@ var headerRules = map[string]headerRule{
 	},
 }
 
+// isHTMLContentType reports whether ct names an HTML document. Parameters
+// such as `; charset=utf-8` are stripped before comparison so a perfectly
+// labeled response is not skipped on a technicality. A missing or
+// unparseable Content-Type returns false: a server that does not declare
+// its body's type is not the audience for browser-rendering headers.
+func isHTMLContentType(ct string) bool {
+	if ct == "" {
+		return false
+	}
+	mediaType, _, err := mime.ParseMediaType(ct)
+	if err != nil {
+		return false
+	}
+	return mediaType == "text/html" || mediaType == "application/xhtml+xml"
+}
+
 func (c SecurityHeaders) Run(ctx context.Context, client *httpclient.Client, _ *scope.Scope, p page.Page) ([]Finding, error) {
 	snap, err := ensureResponse(ctx, client, p, 0)
 	if err != nil {
 		return nil, err
+	}
+	// CSP, X-Frame-Options, and Referrer-Policy govern HTML rendering in a
+	// browser; flagging them missing on a JSON API, an image, or a 404 page
+	// is noise. Restrict the check to 200 OK responses the server itself
+	// labeled as HTML so the findings track real attack surface.
+	if snap.Status != http.StatusOK || !isHTMLContentType(snap.Headers.Get("Content-Type")) {
+		return nil, nil
 	}
 	evidence := BuildEvidence("GET", p.URL, snap.Status, snap.Headers, "")
 
