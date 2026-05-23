@@ -72,6 +72,15 @@ type scanConfig struct {
 	authBearer  string
 	headers     []string
 
+	sessionCheckURL     string
+	sessionCheckPattern string
+	sessionCheckEvery   int
+
+	csrfTokenSource string
+	csrfInject      string
+	csrfHeaderName  string
+	csrfParam       string
+
 	baselinePath   string
 	baselineFormat string
 	failOn         string
@@ -208,6 +217,27 @@ Modes:
 	f.StringSliceVar(&cfg.headers, "header", nil,
 		"extra header 'Name: Value' sent on every request (repeatable; e.g. an API key)")
 
+	f.StringVar(&cfg.sessionCheckURL, "session-check-url", "",
+		"URL to GET periodically to verify the session is still authenticated; "+
+			"the scan halts with session-lost when the probe fails")
+	f.StringVar(&cfg.sessionCheckPattern, "session-check-pattern", "",
+		"regex the --session-check-url response body must match for the session "+
+			"to be considered alive (empty = only require HTTP 200)")
+	f.IntVar(&cfg.sessionCheckEvery, "session-check-every", 50,
+		"fire the session liveness probe every N requests (>=1)")
+
+	f.StringVar(&cfg.csrfTokenSource, "csrf-token-source", "",
+		"URL to GET once and parse for a CSRF token; the token is then "+
+			"auto-attached to every POST/PUT/PATCH/DELETE the scanner sends")
+	f.StringVar(&cfg.csrfInject, "csrf-inject", "auto",
+		"where to attach the CSRF token: auto (form for hidden inputs, header "+
+			"for <meta>) | form | header")
+	f.StringVar(&cfg.csrfHeaderName, "csrf-header-name", httpclient.DefaultCSRFHeader,
+		"request header name used when --csrf-inject=header")
+	f.StringVar(&cfg.csrfParam, "csrf-param", "",
+		"override the form-field name parsed from --csrf-token-source "+
+			"(rare; use when the displayed form name and the field the server expects differ)")
+
 	f.StringVar(&cfg.baselinePath, "baseline", "",
 		"previous scan report to diff against; findings are annotated new|persisting|resolved. "+
 			"Format autodetected from extension/content; only json|jsonl|csv|sarif round-trip cleanly enough to use")
@@ -300,6 +330,13 @@ func runScan(ctx context.Context, cfg *scanConfig, level checks.Level) int {
 		pool = proxy.NewSmartPool(proxies)
 		clientCfg.Transport = proxy.NewTransport(pool, proxy.TransportConfig{})
 		log.Info("proxy pool ready", "proxies", pool.Len(), "strategy", "epsilon-greedy")
+	}
+	// Session sentinel + CSRF middleware build after the proxy pool is in
+	// place so their internal probes route through the same transport (and
+	// therefore the same exit IPs) as the rest of the scan.
+	if err := applyActiveSessionConfig(&clientCfg, cfg, log); err != nil {
+		log.Error("session/csrf config failed", "err", err)
+		return exitScanError
 	}
 	client := httpclient.New(clientCfg)
 

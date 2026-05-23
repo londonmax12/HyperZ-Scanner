@@ -2,18 +2,26 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/londonball/hyperz/internal/httpclient"
 )
+
+// probeBodyCap bounds the body read by session/csrf probes so a misconfigured
+// source URL pointing at a binary blob (or a slow-loris response) can't burn
+// memory. 1 MiB is generous for a login or token page.
+const probeBodyCap = 1 << 20
 
 // applyAuthConfig pulls cookie/header/auth flags off the scan config and
 // populates the httpclient.Config in place. The seed list is needed so
@@ -272,6 +280,102 @@ func cookieURLForDomain(domain, path string, secure bool) (*url.URL, error) {
 		path = "/"
 	}
 	return url.Parse(scheme + "://" + host + path)
+}
+
+// applyActiveSessionConfig builds the SessionSentinel and CSRFTokenSource
+// middlewares (when the relevant flags are set) and appends them to
+// clientCfg.Middlewares. Must run after the cookie jar AND the proxy
+// transport are already on clientCfg so the probe http.Client shares both -
+// otherwise the sentinel could see a different network than the real scan.
+func applyActiveSessionConfig(clientCfg *httpclient.Config, cfg *scanConfig, log *slog.Logger) error {
+	if cfg.sessionCheckURL == "" && cfg.csrfTokenSource == "" {
+		return nil
+	}
+	// One probe client shared by both middlewares: it bypasses the
+	// middleware chain (preventing recursion) but uses the same jar and
+	// transport as the scan.
+	probeHTTP := httpclient.ProbeClient(*clientCfg)
+
+	if cfg.sessionCheckURL != "" {
+		if cfg.sessionCheckEvery < 1 {
+			return fmt.Errorf("--session-check-every must be >=1 (got %d)", cfg.sessionCheckEvery)
+		}
+		var re *regexp.Regexp
+		if cfg.sessionCheckPattern != "" {
+			r, err := regexp.Compile(cfg.sessionCheckPattern)
+			if err != nil {
+				return fmt.Errorf("--session-check-pattern: %w", err)
+			}
+			re = r
+		}
+		probe := func(ctx context.Context) (int, []byte, error) {
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, cfg.sessionCheckURL, nil)
+			if err != nil {
+				return 0, nil, err
+			}
+			resp, err := probeHTTP.Do(req)
+			if err != nil {
+				return 0, nil, err
+			}
+			defer resp.Body.Close()
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, probeBodyCap))
+			return resp.StatusCode, body, nil
+		}
+		clientCfg.Middlewares = append(clientCfg.Middlewares,
+			httpclient.NewSessionSentinel(cfg.sessionCheckEvery, probe, re))
+		log.Info("session sentinel armed",
+			"url", cfg.sessionCheckURL,
+			"every", cfg.sessionCheckEvery,
+			"pattern_set", re != nil)
+	}
+
+	if cfg.csrfTokenSource != "" {
+		mode, err := parseCSRFInject(cfg.csrfInject)
+		if err != nil {
+			return err
+		}
+		fetch := func(ctx context.Context, src string) ([]byte, error) {
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, src, nil)
+			if err != nil {
+				return nil, err
+			}
+			resp, err := probeHTTP.Do(req)
+			if err != nil {
+				return nil, err
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				return nil, fmt.Errorf("status %d", resp.StatusCode)
+			}
+			return io.ReadAll(io.LimitReader(resp.Body, probeBodyCap))
+		}
+		clientCfg.Middlewares = append(clientCfg.Middlewares, &httpclient.CSRFTokenSource{
+			SourceURL:  cfg.csrfTokenSource,
+			Fetcher:    fetch,
+			Mode:       mode,
+			HeaderName: cfg.csrfHeaderName,
+			FieldName:  cfg.csrfParam,
+		})
+		log.Info("csrf middleware armed",
+			"source", cfg.csrfTokenSource,
+			"mode", cfg.csrfInject,
+			"header_name", cfg.csrfHeaderName)
+	}
+	return nil
+}
+
+// parseCSRFInject maps the --csrf-inject string to a CSRFInject enum.
+func parseCSRFInject(s string) (httpclient.CSRFInject, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", "auto":
+		return httpclient.CSRFInjectAuto, nil
+	case "form":
+		return httpclient.CSRFInjectForm, nil
+	case "header":
+		return httpclient.CSRFInjectHeader, nil
+	default:
+		return 0, fmt.Errorf("--csrf-inject: want auto|form|header, got %q", s)
+	}
 }
 
 func uniqueHostURLs(seeds []string) []*url.URL {

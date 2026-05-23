@@ -23,6 +23,7 @@ type Client struct {
 	basicAuth    *BasicAuth
 	bearerToken  string
 	extraHeaders http.Header
+	middlewares  []RequestMiddleware
 	nowFn        func() time.Time // overridable for tests parsing HTTP-date Retry-After
 	sleepFn      func(context.Context, time.Duration) error
 }
@@ -75,6 +76,11 @@ type Config struct {
 	// on a specific request win; otherwise these are added in. Useful for
 	// custom auth tokens (e.g. X-API-Key) or canary identifiers.
 	ExtraHeaders http.Header
+	// Middlewares run, in order, just before each outbound request. They can
+	// mutate the request or short-circuit the call with an error. See
+	// RequestMiddleware for the contract; SessionSentinel and CSRFTokenSource
+	// are the in-tree implementations.
+	Middlewares []RequestMiddleware
 }
 
 func New(cfg Config) *Client {
@@ -131,6 +137,7 @@ func New(cfg Config) *Client {
 		basicAuth:    cfg.BasicAuth,
 		bearerToken:  cfg.BearerToken,
 		extraHeaders: cfg.ExtraHeaders.Clone(),
+		middlewares:  append([]RequestMiddleware(nil), cfg.Middlewares...),
 		nowFn:        time.Now,
 		sleepFn:      sleepCtx,
 	}
@@ -139,6 +146,29 @@ func New(cfg Config) *Client {
 // Jar returns the cookie jar wired into the underlying http.Client (may be
 // nil). Exposed so the CLI can pre-seed cookies after constructing the client.
 func (c *Client) Jar() http.CookieJar { return c.http.Jar }
+
+// ProbeClient returns an *http.Client suitable for a RequestMiddleware's own
+// internal requests (e.g. SessionSentinel's liveness ping, CSRFTokenSource's
+// source-page fetch). It shares cfg.Jar (so probes carry the same cookies the
+// scan does), cfg.Transport (so probes route through the same proxy pool),
+// and cfg.Timeout, but does NOT run the middleware chain - that's the whole
+// point: calls made through this client cannot recurse back into the
+// middleware that owns them.
+//
+// When cfg.Transport is nil, http.DefaultTransport is used. Pass the same
+// Config you're about to hand to New so the probe client matches the scan
+// client exactly.
+func ProbeClient(cfg Config) *http.Client {
+	transport := cfg.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	return &http.Client{
+		Timeout:   cfg.Timeout,
+		Transport: transport,
+		Jar:       cfg.Jar,
+	}
+}
 
 // Do issues req, applying the host limiter and default User-Agent. The
 // caller-provided ctx takes precedence over any context already attached to
@@ -188,6 +218,16 @@ func (c *Client) doWith(ctx context.Context, req *http.Request, h *http.Client) 
 			req.SetBasicAuth(c.basicAuth.Username, c.basicAuth.Password)
 		case c.bearerToken != "":
 			req.Header.Set("Authorization", "Bearer "+c.bearerToken)
+		}
+	}
+	// Middlewares fire after the static header/auth shims so they can read the
+	// outgoing state but before the retry loop so the mutation isn't repeated
+	// per attempt. A middleware that needs per-attempt behaviour (e.g. CSRF
+	// re-fetch on 403) can stash state on itself and re-run inside Before by
+	// inspecting req; for now, every in-tree middleware is happy with one pass.
+	for _, mw := range c.middlewares {
+		if err := mw.Before(req); err != nil {
+			return nil, err
 		}
 	}
 
