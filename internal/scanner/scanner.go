@@ -3,6 +3,7 @@ package scanner
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/londonball/hyperz/internal/checks"
 	"github.com/londonball/hyperz/internal/fingerprint"
@@ -165,10 +166,16 @@ func (s *Scanner) scanOne(ctx context.Context, p page.Page, out chan<- checks.Fi
 			if sem != nil {
 				defer func() { <-sem }()
 			}
+			// Per-check deadline keeps a pathological Run (regex
+			// backtracking, slow body read, weird redirect chain) from
+			// pinning its worker slot for the full client Timeout multiplied
+			// by however many requests it would otherwise issue.
+			runCtx, cancel := context.WithTimeout(ctx, checkBudget(c))
+			defer cancel()
 			// Sub-probe errors that the check chooses to swallow are still
 			// surfaced through this reporter, so a flaky host leaves one
 			// onError event per failure even when the check returns findings.
-			runCtx := checks.WithLevel(ctx, s.level)
+			runCtx = checks.WithLevel(runCtx, s.level)
 			if s.onError != nil {
 				runCtx = checks.WithReporter(runCtx, func(err error) {
 					s.onError(target, c.Name(), err)
@@ -187,6 +194,19 @@ func (s *Scanner) scanOne(ctx context.Context, p page.Page, out chan<- checks.Fi
 		}(c)
 	}
 	wg.Wait()
+}
+
+// checkBudget returns the per-check deadline to apply. A check that
+// implements checks.Budgeted may opt up to a longer deadline; non-positive
+// returns from Budget reuse DefaultBudget so a misconfigured opt-in can't
+// silently disable the deadline.
+func checkBudget(c checks.Check) time.Duration {
+	if b, ok := c.(checks.Budgeted); ok {
+		if d := b.Budget(); d > 0 {
+			return d
+		}
+	}
+	return checks.DefaultBudget
 }
 
 // fingerprint resolves the stack for p's host, or returns nil when

@@ -326,6 +326,69 @@ func TestScanWithoutFingerprintAlwaysRunsGatedChecks(t *testing.T) {
 	}
 }
 
+// budgetedCheck records the deadline it observed and is used to verify the
+// scanner wraps Run's ctx with a per-check deadline.
+type budgetedCheck struct {
+	stubCheck
+	budget       time.Duration
+	gotDeadline  bool
+	gotRemaining time.Duration
+}
+
+func (b *budgetedCheck) Budget() time.Duration { return b.budget }
+func (b *budgetedCheck) Run(ctx context.Context, c *httpclient.Client, s *scope.Scope, p page.Page) ([]checks.Finding, error) {
+	if dl, ok := ctx.Deadline(); ok {
+		b.gotDeadline = true
+		b.gotRemaining = time.Until(dl)
+	}
+	return b.stubCheck.Run(ctx, c, s, p)
+}
+
+func TestScanAppliesPerCheckDeadline(t *testing.T) {
+	// A check that doesn't implement Budgeted still gets DefaultBudget; a
+	// check that opts up gets its declared budget. The deadline must come
+	// from the scanner-attached timeout, not the parent ctx (which has none).
+	def := &stubCheck{name: "default"}
+	defObs := &observingCheck{stubCheck: def}
+	opt := &budgetedCheck{
+		stubCheck: stubCheck{name: "opt"},
+		budget:    5 * time.Minute,
+	}
+	s := New(newNilClient(), []checks.Check{defObs, opt})
+	if _, err := runOne(context.Background(), s, "http://t"); err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if !defObs.gotDeadline {
+		t.Fatalf("default check got no deadline; scanner did not wrap runCtx")
+	}
+	if got := defObs.gotRemaining; got <= 0 || got > checks.DefaultBudget {
+		t.Fatalf("default check remaining = %v, want (0, %v]", got, checks.DefaultBudget)
+	}
+	if !opt.gotDeadline {
+		t.Fatalf("budgeted check got no deadline")
+	}
+	if got := opt.gotRemaining; got <= checks.DefaultBudget || got > opt.budget {
+		t.Fatalf("budgeted check remaining = %v, want (%v, %v]", got, checks.DefaultBudget, opt.budget)
+	}
+}
+
+// observingCheck snapshots the ctx deadline it was handed. Used to verify
+// that even checks that don't implement Budgeted get the scanner's default
+// deadline applied.
+type observingCheck struct {
+	*stubCheck
+	gotDeadline  bool
+	gotRemaining time.Duration
+}
+
+func (o *observingCheck) Run(ctx context.Context, c *httpclient.Client, s *scope.Scope, p page.Page) ([]checks.Finding, error) {
+	if dl, ok := ctx.Deadline(); ok {
+		o.gotDeadline = true
+		o.gotRemaining = time.Until(dl)
+	}
+	return o.stubCheck.Run(ctx, c, s, p)
+}
+
 func TestScanMultipleChecksParallel(t *testing.T) {
 	a := &stubCheck{name: "a", findings: []checks.Finding{{Title: "fa"}}}
 	b := &stubCheck{name: "b", findings: []checks.Finding{{Title: "fb"}}}

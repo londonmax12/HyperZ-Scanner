@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/londonball/hyperz/internal/httpclient"
 	"github.com/londonball/hyperz/internal/page"
@@ -379,6 +380,25 @@ func LevelFrom(ctx context.Context) Level {
 		return lvl
 	}
 	return LevelDefault
+}
+
+// DefaultBudget is the per-check deadline the scanner applies when a check
+// does not implement Budgeted. Picked to fit a check that issues a handful
+// of sequential requests at the default per-request timeout without
+// leaving a worker slot pinned by a pathological one (regex backtracking,
+// slow body read, weird redirect chain).
+const DefaultBudget = 60 * time.Second
+
+// Budgeted is optionally implemented by checks that need a longer per-check
+// deadline than DefaultBudget. The scanner wraps Run's ctx with a deadline
+// of Budget(); checks that don't implement Budgeted get DefaultBudget. A
+// non-positive return reverts to DefaultBudget.
+//
+// Opt up only when a check truly needs the headroom (deep sweeps,
+// aggressive fuzzing) - a longer budget means a misbehaving check pins
+// its worker slot for longer before the deadline reclaims it.
+type Budgeted interface {
+	Budget() time.Duration
 }
 
 type Check interface {
