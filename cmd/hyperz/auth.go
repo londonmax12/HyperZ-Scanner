@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/londonball/hyperz/internal/httpclient"
+	"github.com/londonmax12/hyperz/internal/httpclient"
 )
 
 // probeBodyCap bounds the body read by session/csrf probes so a misconfigured

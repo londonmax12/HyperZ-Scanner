@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/londonball/hyperz/internal/checks"
+	"github.com/londonmax12/hyperz/internal/checks"
 )
 
 // Baseline is a previous scan's findings, loaded for diffing against the
@@ -37,7 +37,7 @@ var baselineFormats = map[string]bool{
 // utf8BOM is the byte order mark editors (and PowerShell's default Set-Content
 // on 5.1) prepend to UTF-8 files. The standard library's JSON/CSV parsers
 // don't strip it, so we have to do it ourselves to avoid a confusing
-// "invalid character 'ï'" error on otherwise-valid baselines.
+// "invalid character 'Ã¯'" error on otherwise-valid baselines.
 var utf8BOM = []byte{0xEF, 0xBB, 0xBF}
 
 // LoadBaseline reads path and parses it into a Baseline. Format is detected

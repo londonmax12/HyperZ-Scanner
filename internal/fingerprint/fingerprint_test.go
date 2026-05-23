@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/londonball/hyperz/internal/httpclient"
-	"github.com/londonball/hyperz/internal/page"
+	"github.com/londonmax12/hyperz/internal/httpclient"
+	"github.com/londonmax12/hyperz/internal/page"
 )
 
 func newTestClient(t *testing.T) *httpclient.Client {
@@ -351,7 +351,7 @@ func TestStackSummaryWithVersions(t *testing.T) {
 }
 
 func TestConfidence(t *testing.T) {
-	// 3 of 6 categories populated → 0.5
+	// 3 of 6 categories populated â†’ 0.5
 	s := &Stack{Server: "nginx", Language: "php", CMS: "wordpress"}
 	if got := confidenceOf(s); got != 0.5 {
 		t.Errorf("confidence = %v, want 0.5", got)

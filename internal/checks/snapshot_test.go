@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/londonball/hyperz/internal/page"
+	"github.com/londonmax12/hyperz/internal/page"
 )
 
 func TestEnsureResponseReusesProducerSnapshot(t *testing.T) {

@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/londonball/hyperz/internal/page"
-	"github.com/londonball/hyperz/internal/scope"
+	"github.com/londonmax12/hyperz/internal/page"
+	"github.com/londonmax12/hyperz/internal/scope"
 )
 
 func writeTempFile(t *testing.T, name, body string) string {
@@ -88,7 +88,7 @@ func TestFeedDeliversAllURLs(t *testing.T) {
 }
 
 func TestFeedStopsOnContextCancel(t *testing.T) {
-	// Unbuffered output channel + canceled ctx → first push must abort.
+	// Unbuffered output channel + canceled ctx â†’ first push must abort.
 	out := make(chan string)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -240,7 +240,7 @@ func TestOpenOutputStdout(t *testing.T) {
 		}
 		closeFn()
 		if w != os.Stdout {
-			t.Fatalf("openOutput(%q) → %T, want os.Stdout", p, w)
+			t.Fatalf("openOutput(%q) â†’ %T, want os.Stdout", p, w)
 		}
 	}
 }

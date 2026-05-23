@@ -10,9 +10,9 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/londonball/hyperz/internal/httpclient"
-	"github.com/londonball/hyperz/internal/page"
-	"github.com/londonball/hyperz/internal/scope"
+	"github.com/londonmax12/hyperz/internal/httpclient"
+	"github.com/londonmax12/hyperz/internal/page"
+	"github.com/londonmax12/hyperz/internal/scope"
 )
 
 const defaultMaxBodyBytes = 5 << 20 // 5 MiB
@@ -21,10 +21,10 @@ const defaultMaxBodyBytes = 5 << 20 // 5 MiB
 // cap live on the Scope, not here - pass the same Scope to the scanner so
 // crawl boundaries and check boundaries can't drift apart.
 type Config struct {
-	Workers      int          // concurrent fetchers; 0 → 8
-	MaxPages     int          // 0 → unlimited
-	MaxBodyBytes int64        // per-page body cap; 0 → 5 MiB
-	Scope        *scope.Scope // nil → no host/port/path/depth gating
+	Workers      int          // concurrent fetchers; 0 â†’ 8
+	MaxPages     int          // 0 â†’ unlimited
+	MaxBodyBytes int64        // per-page body cap; 0 â†’ 5 MiB
+	Scope        *scope.Scope // nil â†’ no host/port/path/depth gating
 	// APIDiscovery enables two behaviors: (1) probing a fixed list of
 	// well-known OpenAPI / Swagger paths against each seed origin at
 	// startup, and (2) when a fetched URL returns a JSON/YAML body that

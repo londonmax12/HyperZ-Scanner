@@ -6,7 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/londonball/hyperz/internal/checks"
+	"github.com/londonmax12/hyperz/internal/checks"
 )
 
 // registry lists every check that ships with hyperz. Add new checks here so

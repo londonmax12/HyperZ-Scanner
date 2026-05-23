@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/londonball/hyperz/internal/checks"
-	"github.com/londonball/hyperz/internal/fingerprint"
-	"github.com/londonball/hyperz/internal/httpclient"
+	"github.com/londonmax12/hyperz/internal/checks"
+	"github.com/londonmax12/hyperz/internal/fingerprint"
+	"github.com/londonmax12/hyperz/internal/httpclient"
 )
 
 func sampleFindings() []checks.Finding {
@@ -217,7 +217,7 @@ func TestSARIFReporterShape(t *testing.T) {
 	if run.Tool.Driver.Name != "hyperz" {
 		t.Fatalf("driver name = %q", run.Tool.Driver.Name)
 	}
-	// Rule dedup: 3 findings span 2 unique checks → 2 rules, sorted by ID.
+	// Rule dedup: 3 findings span 2 unique checks â†’ 2 rules, sorted by ID.
 	if len(run.Tool.Driver.Rules) != 2 {
 		t.Fatalf("rules = %d, want 2", len(run.Tool.Driver.Rules))
 	}
@@ -228,7 +228,7 @@ func TestSARIFReporterShape(t *testing.T) {
 	if len(run.Results) != 3 {
 		t.Fatalf("results = %d, want 3", len(run.Results))
 	}
-	// Severity mapping: high→error, medium→warning, low→note.
+	// Severity mapping: highâ†’error, mediumâ†’warning, lowâ†’note.
 	wantLevels := map[string]string{
 		"http://a": "error",
 		"http://b": "warning",
@@ -253,7 +253,7 @@ func TestSARIFLevelMapping(t *testing.T) {
 	}
 	for sev, want := range cases {
 		if got := sarifLevel(sev); got != want {
-			t.Errorf("%s → %q, want %q", sev, got, want)
+			t.Errorf("%s â†’ %q, want %q", sev, got, want)
 		}
 	}
 }
@@ -478,7 +478,7 @@ func TestTextReporterRendersNewFields(t *testing.T) {
 		"http://t/page", // URL, not Target, is the location
 		"refs: CWE-693 A05:2021 Security Misconfiguration",
 		"fix:  Set Content-Security-Policy",
-		"evidence: GET http://t/page → 200",
+		"evidence: GET http://t/page â†’ 200",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("text missing %q\nfull:\n%s", want, out)

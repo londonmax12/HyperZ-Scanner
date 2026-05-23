@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/londonball/hyperz/internal/httpclient"
-	"github.com/londonball/hyperz/internal/page"
+	"github.com/londonmax12/hyperz/internal/httpclient"
+	"github.com/londonmax12/hyperz/internal/page"
 )
 
 func TestMixedContentName(t *testing.T) {

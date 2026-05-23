@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/londonball/hyperz/internal/checks"
-	"github.com/londonball/hyperz/internal/fingerprint"
-	"github.com/londonball/hyperz/internal/httpclient"
+	"github.com/londonmax12/hyperz/internal/checks"
+	"github.com/londonmax12/hyperz/internal/fingerprint"
+	"github.com/londonmax12/hyperz/internal/httpclient"
 )
 
 // Metadata carries scan-level context that reporters render alongside the
@@ -255,7 +255,7 @@ func writeTextFinding(w io.Writer, f checks.Finding) error {
 		}
 	}
 	if e := f.Evidence; e != nil && (e.Method != "" || e.Snippet != "" || e.Status != 0) {
-		if _, err := fmt.Fprintf(w, "    evidence: %s %s → %d\n",
+		if _, err := fmt.Fprintf(w, "    evidence: %s %s â†’ %d\n",
 			defaultStr(e.Method, "GET"), defaultStr(e.RequestURL, loc), e.Status); err != nil {
 			return err
 		}
@@ -664,7 +664,7 @@ func (markdownReporter) Write(ctx context.Context, w io.Writer, in <-chan checks
 			fmt.Fprintf(w, "- **Remediation:** %s\n", f.Remediation)
 		}
 		if e := f.Evidence; e != nil {
-			fmt.Fprintf(w, "- **Evidence:** `%s %s → %d`\n",
+			fmt.Fprintf(w, "- **Evidence:** `%s %s â†’ %d`\n",
 				defaultStr(e.Method, "GET"), defaultStr(e.RequestURL, loc), e.Status)
 			if e.Snippet != "" {
 				fmt.Fprintf(w, "\n```\n%s\n```\n", e.Snippet)

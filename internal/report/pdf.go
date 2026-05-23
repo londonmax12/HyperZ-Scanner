@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/londonball/hyperz/internal/checks"
-	"github.com/londonball/hyperz/internal/fingerprint"
-	"github.com/londonball/hyperz/internal/httpclient"
+	"github.com/londonmax12/hyperz/internal/checks"
+	"github.com/londonmax12/hyperz/internal/fingerprint"
+	"github.com/londonmax12/hyperz/internal/httpclient"
 )
 
 // PDF reporter emits a minimal, dependency-free PDF 1.4 document using
@@ -212,7 +212,7 @@ func (d *pdfDoc) renderBudget(budget *httpclient.Budget) {
 }
 
 // renderStacks adds a "Detected stacks" page after the cover. Each row is
-// "host - server=… language=… …" so the PDF stays single-column without
+// "host - server=â€¦ language=â€¦ â€¦" so the PDF stays single-column without
 // reaching for table primitives we don't have.
 func (d *pdfDoc) renderStacks(stacks map[string]*fingerprint.Stack) {
 	if len(stacks) == 0 {

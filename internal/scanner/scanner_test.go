@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/londonball/hyperz/internal/checks"
-	"github.com/londonball/hyperz/internal/fingerprint"
-	"github.com/londonball/hyperz/internal/httpclient"
-	"github.com/londonball/hyperz/internal/page"
-	"github.com/londonball/hyperz/internal/scope"
+	"github.com/londonmax12/hyperz/internal/checks"
+	"github.com/londonmax12/hyperz/internal/fingerprint"
+	"github.com/londonmax12/hyperz/internal/httpclient"
+	"github.com/londonmax12/hyperz/internal/page"
+	"github.com/londonmax12/hyperz/internal/scope"
 )
 
 // stubCheck records every Run invocation and returns a configurable result.
@@ -334,7 +334,7 @@ func TestScanGatedCheckSkippedWhenStackDoesNotMatch(t *testing.T) {
 }
 
 func TestScanWithoutFingerprintAlwaysRunsGatedChecks(t *testing.T) {
-	// No detector wired → AppliesTo must not be consulted, so a check that
+	// No detector wired â†’ AppliesTo must not be consulted, so a check that
 	// would reject every stack still runs.
 	gated := &stubGatedCheck{
 		stubCheck: stubCheck{name: "wp", findings: []checks.Finding{{Title: "x"}}},

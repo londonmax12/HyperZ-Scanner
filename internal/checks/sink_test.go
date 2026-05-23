@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/londonball/hyperz/internal/page"
+	"github.com/londonmax12/hyperz/internal/page"
 )
 
 func TestSinksForQueryParams(t *testing.T) {

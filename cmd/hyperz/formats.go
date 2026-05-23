@@ -5,7 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/londonball/hyperz/internal/report"
+	"github.com/londonmax12/hyperz/internal/report"
 )
 
 func newFormatsCmd() *cobra.Command {

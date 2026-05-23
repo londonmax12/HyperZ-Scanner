@@ -1,4 +1,4 @@
-module github.com/londonball/hyperz
+module github.com/londonmax12/hyperz
 
 go 1.26.3
 

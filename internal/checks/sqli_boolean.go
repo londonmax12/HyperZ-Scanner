@@ -7,9 +7,9 @@ import (
 	"net/http"
 	"net/url"
 
-	"github.com/londonball/hyperz/internal/httpclient"
-	"github.com/londonball/hyperz/internal/page"
-	"github.com/londonball/hyperz/internal/scope"
+	"github.com/londonmax12/hyperz/internal/httpclient"
+	"github.com/londonmax12/hyperz/internal/page"
+	"github.com/londonmax12/hyperz/internal/scope"
 )
 
 // SQLiBoolean probes for SQL injection through differential response

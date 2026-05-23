@@ -16,8 +16,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/londonball/hyperz/internal/httpclient"
-	"github.com/londonball/hyperz/internal/page"
+	"github.com/londonmax12/hyperz/internal/httpclient"
+	"github.com/londonmax12/hyperz/internal/page"
 )
 
 const defaultMaxBodyBytes = 256 << 10 // 256 KiB - enough for <head> in practice
@@ -235,7 +235,7 @@ type cacheEntry struct {
 type Option func(*Detector)
 
 // WithMaxBodyBytes caps the body read during HTML signal detection.
-// 0 → default (256 KiB).
+// 0 â†’ default (256 KiB).
 func WithMaxBodyBytes(n int64) Option {
 	return func(d *Detector) {
 		if n > 0 {
@@ -245,7 +245,7 @@ func WithMaxBodyBytes(n int64) Option {
 }
 
 // WithOnDetect installs a callback invoked once per unique host the first
-// time fingerprinting succeeds. Useful for logging "[fingerprint] host=…"
+// time fingerprinting succeeds. Useful for logging "[fingerprint] host=â€¦"
 // without printing duplicates per crawled page.
 func WithOnDetect(fn func(host string, stack *Stack)) Option {
 	return func(d *Detector) { d.onDetect = fn }

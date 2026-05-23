@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/londonball/hyperz/internal/httpclient"
-	"github.com/londonball/hyperz/internal/page"
-	"github.com/londonball/hyperz/internal/scope"
+	"github.com/londonmax12/hyperz/internal/httpclient"
+	"github.com/londonmax12/hyperz/internal/page"
+	"github.com/londonmax12/hyperz/internal/scope"
 )
 
 // mustScope builds a Scope from Config, panicking on error. Tests only.
@@ -42,12 +42,12 @@ func seedScope(t *testing.T, maxDepth int, seeds ...string) *scope.Scope {
 
 // linkedSite stands up a tree of HTML pages linked by relative paths:
 //
-//	/      → /a, /b
-//	/a     → /a/x
-//	/a/x   → (leaf)
-//	/b     → /b/y
-//	/b/y   → /b/y/z
-//	/b/y/z → (leaf)
+//	/      â†’ /a, /b
+//	/a     â†’ /a/x
+//	/a/x   â†’ (leaf)
+//	/b     â†’ /b/y
+//	/b/y   â†’ /b/y/z
+//	/b/y/z â†’ (leaf)
 func linkedSite(t *testing.T) *httptest.Server {
 	t.Helper()
 	pages := map[string]string{
@@ -143,7 +143,7 @@ func TestCrawlMaxPagesCaps(t *testing.T) {
 	}
 	got := collectAll(out)
 	if len(got) > 3 {
-		t.Fatalf("got %d URLs, want ≤3: %v", len(got), got)
+		t.Fatalf("got %d URLs, want â‰¤3: %v", len(got), got)
 	}
 }
 
@@ -200,7 +200,7 @@ func TestCrawlSkipsNonHTMLContent(t *testing.T) {
 }
 
 func TestCrawlInvokesErrorHandlerOnFetchFailure(t *testing.T) {
-	// /bad → 500; the error handler should be called for it (after success
+	// /bad â†’ 500; the error handler should be called for it (after success
 	// on /), but the crawl as a whole still completes without error.
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -443,7 +443,7 @@ func TestCrawlAPIDiscoveryAttachesSpecOpsToEmittedPages(t *testing.T) {
 }
 
 func TestCrawlDedupesAcrossFragments(t *testing.T) {
-	// /home is linked from /, /a, /b → must still be emitted only once.
+	// /home is linked from /, /a, /b â†’ must still be emitted only once.
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")

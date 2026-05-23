@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/londonball/hyperz/internal/httpclient"
+	"github.com/londonmax12/hyperz/internal/httpclient"
 )
 
 // DefaultSources is a small built-in list of public proxy aggregators. They

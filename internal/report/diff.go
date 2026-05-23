@@ -3,7 +3,7 @@ package report
 import (
 	"sort"
 
-	"github.com/londonball/hyperz/internal/checks"
+	"github.com/londonmax12/hyperz/internal/checks"
 )
 
 // Tap forwards findings from in to a new channel, invoking observe on each

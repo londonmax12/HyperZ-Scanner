@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/londonball/hyperz/internal/checks"
+	"github.com/londonmax12/hyperz/internal/checks"
 )
 
 func TestParseFailOnSeverityNames(t *testing.T) {

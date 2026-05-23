@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/londonball/hyperz/internal/page"
+	"github.com/londonmax12/hyperz/internal/page"
 )
 
 func mustURL(t *testing.T, raw string) *url.URL {

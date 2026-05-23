@@ -6,7 +6,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/londonball/hyperz/internal/page"
+	"github.com/londonmax12/hyperz/internal/page"
 )
 
 func mustParseURL(t *testing.T, s string) *url.URL {

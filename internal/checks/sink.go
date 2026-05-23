@@ -10,7 +10,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/londonball/hyperz/internal/page"
+	"github.com/londonmax12/hyperz/internal/page"
 )
 
 // Loc identifies where on the wire a user-influenced value rides. Two

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/londonball/hyperz/internal/checks"
+	"github.com/londonmax12/hyperz/internal/checks"
 )
 
 func baselineSample() []checks.Finding {

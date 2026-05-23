@@ -8,7 +8,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/londonball/hyperz/internal/page"
+	"github.com/londonmax12/hyperz/internal/page"
 )
 
 // wellKnownSpecPaths is the set of conventional URLs that frameworks expose

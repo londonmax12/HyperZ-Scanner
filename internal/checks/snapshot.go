@@ -5,8 +5,8 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/londonball/hyperz/internal/httpclient"
-	"github.com/londonball/hyperz/internal/page"
+	"github.com/londonmax12/hyperz/internal/httpclient"
+	"github.com/londonmax12/hyperz/internal/page"
 )
 
 // snapshot is the per-URL response a check inspects: status, headers, and

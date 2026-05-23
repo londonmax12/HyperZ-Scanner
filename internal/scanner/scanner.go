@@ -6,11 +6,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/londonball/hyperz/internal/checks"
-	"github.com/londonball/hyperz/internal/fingerprint"
-	"github.com/londonball/hyperz/internal/httpclient"
-	"github.com/londonball/hyperz/internal/page"
-	"github.com/londonball/hyperz/internal/scope"
+	"github.com/londonmax12/hyperz/internal/checks"
+	"github.com/londonmax12/hyperz/internal/fingerprint"
+	"github.com/londonmax12/hyperz/internal/httpclient"
+	"github.com/londonmax12/hyperz/internal/page"
+	"github.com/londonmax12/hyperz/internal/scope"
 )
 
 type Scanner struct {

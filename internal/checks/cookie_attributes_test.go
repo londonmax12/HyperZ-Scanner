@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/londonball/hyperz/internal/httpclient"
-	"github.com/londonball/hyperz/internal/page"
+	"github.com/londonmax12/hyperz/internal/httpclient"
+	"github.com/londonmax12/hyperz/internal/page"
 )
 
 // httpsTestClient skips cert verification so httptest.NewTLSServer's
@@ -232,7 +232,7 @@ func TestCookieAttributesDedupePerCookieAndAttribute(t *testing.T) {
 	}
 	a, b := run(), run()
 	if len(a) != 6 || len(b) != 6 {
-		t.Fatalf("expected 6 findings each (2 cookies × 3 attrs), got %d / %d", len(a), len(b))
+		t.Fatalf("expected 6 findings each (2 cookies Ã— 3 attrs), got %d / %d", len(a), len(b))
 	}
 	keyOf := func(fs []Finding) map[string]string {
 		m := make(map[string]string, len(fs))

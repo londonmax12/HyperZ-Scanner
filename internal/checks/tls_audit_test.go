@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/londonball/hyperz/internal/page"
+	"github.com/londonmax12/hyperz/internal/page"
 )
 
 func TestTLSAuditName(t *testing.T) {

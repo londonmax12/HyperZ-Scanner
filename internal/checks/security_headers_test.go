@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/londonball/hyperz/internal/httpclient"
-	"github.com/londonball/hyperz/internal/page"
+	"github.com/londonmax12/hyperz/internal/httpclient"
+	"github.com/londonmax12/hyperz/internal/page"
 )
 
 func newTestClient(t *testing.T) *httpclient.Client {
@@ -95,7 +95,7 @@ func TestSecurityHeadersAllMissing(t *testing.T) {
 
 func TestSecurityHeadersSeverityMapping(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Only CSP and HSTS missing → both Medium, so the consolidated
+		// Only CSP and HSTS missing â†’ both Medium, so the consolidated
 		// finding inherits Medium too.
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
