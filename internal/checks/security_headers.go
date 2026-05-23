@@ -82,16 +82,6 @@ func isHTMLContentType(ct string) bool {
 	return mediaType == "text/html" || mediaType == "application/xhtml+xml"
 }
 
-// severityRank orders severities so the consolidated finding can adopt the
-// worst severity among all missing headers. Higher number = worse.
-var severityRank = map[Severity]int{
-	SeverityInfo:     0,
-	SeverityLow:      1,
-	SeverityMedium:   2,
-	SeverityHigh:     3,
-	SeverityCritical: 4,
-}
-
 func (c SecurityHeaders) Run(ctx context.Context, client *httpclient.Client, _ *scope.Scope, p page.Page) ([]Finding, error) {
 	snap, err := ensureResponse(ctx, client, p, 0)
 	if err != nil {
@@ -132,7 +122,7 @@ func (c SecurityHeaders) Run(ctx context.Context, client *httpclient.Client, _ *
 	var cwes, remediations []string
 	for _, h := range missing {
 		r := headerRules[h]
-		if severityRank[r.severity] > severityRank[maxSev] {
+		if SeverityRank(r.severity) > SeverityRank(maxSev) {
 			maxSev = r.severity
 		}
 		if !seenCWE[r.cwe] {

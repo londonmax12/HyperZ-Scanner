@@ -47,7 +47,7 @@ type pdfReporter struct{}
 func (pdfReporter) Write(ctx context.Context, w io.Writer, in <-chan checks.Finding, meta Metadata) error {
 	findings := drain(ctx, in)
 	d := newPDFDoc()
-	d.renderReport(findings, meta.Stacks, meta.Budget)
+	d.renderReport(findings, meta)
 	d.addFooters()
 	return d.serialize(w)
 }
@@ -152,10 +152,10 @@ var severityOrder = []checks.Severity{
 	checks.SeverityInfo,
 }
 
-func (d *pdfDoc) renderReport(findings []checks.Finding, stacks map[string]*fingerprint.Stack, budget *httpclient.Budget) {
-	d.renderCover(findings)
-	d.renderStacks(stacks)
-	d.renderBudget(budget)
+func (d *pdfDoc) renderReport(findings []checks.Finding, meta Metadata) {
+	d.renderCover(findings, meta.Diff)
+	d.renderStacks(meta.Stacks)
+	d.renderBudget(meta.Budget)
 	if len(findings) == 0 {
 		return
 	}
@@ -233,7 +233,7 @@ func (d *pdfDoc) renderStacks(stacks map[string]*fingerprint.Stack) {
 	}
 }
 
-func (d *pdfDoc) renderCover(findings []checks.Finding) {
+func (d *pdfDoc) renderCover(findings []checks.Finding, diff *DiffCounts) {
 	d.gap(24)
 	d.writeLine("hyperz scan report", fontBold, pdfSizeH1, 0.10, 0.10, 0.10)
 	d.writeLine("generated "+time.Now().UTC().Format(time.RFC3339), fontReg, pdfSizeBase, 0.45, 0.45, 0.45)
@@ -244,6 +244,11 @@ func (d *pdfDoc) renderCover(findings []checks.Finding) {
 	d.hline(pdfBodyLeft, pdfBodyRight, d.y, 0.5, 0.85, 0.85, 0.85)
 	d.gap(8)
 	d.writeLine(fmt.Sprintf("Total findings: %d", len(findings)), fontReg, pdfSizeBase, 0, 0, 0)
+	if diff != nil {
+		d.writeLine(fmt.Sprintf("Diff vs baseline: %d new, %d persisting, %d resolved",
+			diff.New, diff.Persisting, diff.Resolved),
+			fontReg, pdfSizeBase, 0.30, 0.30, 0.30)
+	}
 	d.gap(10)
 
 	if len(findings) == 0 {
@@ -291,7 +296,11 @@ func (d *pdfDoc) renderSeverityHeading(sev checks.Severity, n int) {
 
 func (d *pdfDoc) renderFinding(f checks.Finding) {
 	r, g, b := severityRGB(f.Severity)
-	d.writeLine(fmt.Sprintf("[%s] %s", f.Severity, f.Check), fontBold, pdfSizeH3, r, g, b)
+	heading := fmt.Sprintf("[%s] %s", f.Severity, f.Check)
+	if badge := diffStatusBadge(f.DiffStatus); badge != "" {
+		heading = fmt.Sprintf("(%s) %s", badge, heading)
+	}
+	d.writeLine(heading, fontBold, pdfSizeH3, r, g, b)
 	loc := f.URL
 	if loc == "" {
 		loc = f.Target

@@ -71,6 +71,10 @@ type scanConfig struct {
 	authBasic   string
 	authBearer  string
 	headers     []string
+
+	baselinePath   string
+	baselineFormat string
+	failOn         string
 }
 
 func newScanCmd() *cobra.Command {
@@ -110,13 +114,21 @@ Modes:
 				return err
 			}
 			code := runScan(cmd.Context(), &cfg, level)
-			if code == exitCanceled {
-				return fmt.Errorf("canceled")
-			}
-			if code != exitOK {
+			switch code {
+			case exitOK:
+				return nil
+			case exitCanceled:
+				// cobra strips RunE errors and main.go exits 2; override the
+				// exit code in main.go's deferred path is awkward, so call
+				// os.Exit directly to preserve 130 for shells that look at it.
+				os.Exit(exitCanceled)
+				return nil
+			case exitFindings:
+				os.Exit(exitFindings)
+				return nil
+			default:
 				return fmt.Errorf("scan failed")
 			}
-			return nil
 		},
 	}
 
@@ -196,6 +208,15 @@ Modes:
 	f.StringSliceVar(&cfg.headers, "header", nil,
 		"extra header 'Name: Value' sent on every request (repeatable; e.g. an API key)")
 
+	f.StringVar(&cfg.baselinePath, "baseline", "",
+		"previous scan report to diff against; findings are annotated new|persisting|resolved. "+
+			"Format autodetected from extension/content; only json|jsonl|csv|sarif round-trip cleanly enough to use")
+	f.StringVar(&cfg.baselineFormat, "baseline-format", "",
+		"override baseline format detection (json|jsonl|csv|sarif)")
+	f.StringVar(&cfg.failOn, "fail-on", "medium",
+		"exit 1 when any finding's severity is at or above this level "+
+			"(info|low|medium|high|critical|none). With --baseline, only NEW findings count toward the threshold")
+
 	return cmd
 }
 
@@ -203,32 +224,56 @@ func runScan(ctx context.Context, cfg *scanConfig, level checks.Level) int {
 	log, err := newLogger(cfg.logLevel, cfg.logFormat, os.Stderr)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
-		return exitFailure
+		return exitScanError
+	}
+
+	failOnRank, gateEnabled, err := parseFailOn(cfg.failOn)
+	if err != nil {
+		log.Error("invalid --fail-on", "err", err)
+		return exitScanError
+	}
+
+	var baseline *report.Baseline
+	if cfg.baselinePath != "" {
+		baseline, err = report.LoadBaseline(cfg.baselinePath, cfg.baselineFormat)
+		if err != nil {
+			log.Error("baseline load failed", "path", cfg.baselinePath, "err", err)
+			return exitScanError
+		}
+		log.Info("baseline loaded",
+			"path", cfg.baselinePath,
+			"format", baseline.Format,
+			"keyed", len(baseline.Keys),
+			"unkeyed", len(baseline.NoKey))
+		if len(baseline.NoKey) > 0 {
+			log.Warn("baseline entries without dedupe_key are excluded from diff",
+				"count", len(baseline.NoKey))
+		}
 	}
 
 	rep, err := report.New(cfg.format)
 	if err != nil {
 		log.Error("report init failed", "err", err)
-		return exitFailure
+		return exitScanError
 	}
 
 	out, closeOut, err := openOutput(cfg.outputPath)
 	if err != nil {
 		log.Error("open output failed", "path", cfg.outputPath, "err", err)
-		return exitFailure
+		return exitScanError
 	}
 	defer closeOut()
 
 	proxies, err := loadProxies(ctx, log, cfg)
 	if err != nil {
 		log.Error("proxy load failed", "err", err)
-		return exitFailure
+		return exitScanError
 	}
 
 	seeds, err := collectSeeds(cfg.urls, cfg.urlsFile)
 	if err != nil {
 		log.Error("input load failed", "err", err)
-		return exitFailure
+		return exitScanError
 	}
 
 	budget := httpclient.NewBudget(cfg.maxRequests, cfg.globalRPS, cfg.globalBurst)
@@ -248,7 +293,7 @@ func runScan(ctx context.Context, cfg *scanConfig, level checks.Level) int {
 	}
 	if err := applyAuthConfig(&clientCfg, cfg, seeds, log); err != nil {
 		log.Error("auth config failed", "err", err)
-		return exitFailure
+		return exitScanError
 	}
 	var pool *proxy.SmartPool
 	if len(proxies) > 0 {
@@ -261,7 +306,7 @@ func runScan(ctx context.Context, cfg *scanConfig, level checks.Level) int {
 	sc, err := buildScope(cfg, seeds)
 	if err != nil {
 		log.Error("scope build failed", "err", err)
-		return exitFailure
+		return exitScanError
 	}
 	if hosts := sc.Hosts(); len(hosts) > 0 {
 		log.Info("scope configured", "hosts", strings.Join(hosts, ","), "depth", sc.MaxDepth())
@@ -350,27 +395,74 @@ func runScan(ctx context.Context, cfg *scanConfig, level checks.Level) int {
 	// Finding.DedupeKey; findings without a key pass through unchanged.
 	deduped := report.Dedupe(findings)
 
+	// Diff overlay runs after Dedupe so resolved/persisting decisions are
+	// taken on the same fingerprint a future scan would emit. counts is
+	// shared with the reporter via Metadata.Diff and safe to read once the
+	// reporter returns (the overlay only writes while the reporter is
+	// draining).
+	var diffCounts *report.DiffCounts
+	reportCh := deduped
+	if baseline != nil {
+		diffCounts = &report.DiffCounts{}
+		reportCh = report.Diff(deduped, baseline, diffCounts)
+	}
+
+	// Track the worst severity that *would* trigger the --fail-on gate so
+	// the exit code can be set once the reporter drains. With --baseline,
+	// only `new` findings count (the whole point of a baseline is to ignore
+	// known issues). Without a baseline, every emitted finding counts.
+	worstSev := -1
+	gated := report.Tap(reportCh, func(f checks.Finding) {
+		if !gateEnabled {
+			return
+		}
+		if baseline != nil && f.DiffStatus != report.DiffStatusNew {
+			return
+		}
+		if r := checks.SeverityRank(f.Severity); r > worstSev {
+			worstSev = r
+		}
+	})
+
 	exit := exitOK
-	if err := rep.Write(ctx, out, deduped, report.Metadata{Stacks: stacks, Budget: budget}); err != nil {
+	if err := rep.Write(ctx, out, gated, report.Metadata{
+		Stacks: stacks,
+		Budget: budget,
+		Diff:   diffCounts,
+	}); err != nil {
 		log.Error("report write failed", "err", err)
-		exit = exitFailure
+		exit = exitScanError
 	}
 	if err := <-scanErr; err != nil && ctx.Err() == nil {
 		log.Error("scan failed", "err", err)
-		exit = exitFailure
+		exit = exitScanError
 	}
 	if err := <-feedErr; err != nil {
 		log.Error("input feed failed", "err", err)
-		exit = exitFailure
+		exit = exitScanError
 	}
 	if n := checkErrors.Load(); n > 0 {
 		log.Warn("check errors occurred", "count", n)
 		if exit == exitOK {
-			exit = exitFailure
+			exit = exitScanError
 		}
 	}
 	if ctx.Err() != nil && exit == exitOK {
 		exit = exitCanceled
+	}
+	// Threshold gate runs only when the scan otherwise completed cleanly.
+	// A tool error (exitScanError) or cancel (exitCanceled) already
+	// dominates - we don't want to mask a broken scan as "just findings".
+	if exit == exitOK && gateEnabled && worstSev >= failOnRank {
+		log.Info("findings at or above --fail-on threshold",
+			"fail_on", cfg.failOn, "exit_code", exitFindings)
+		exit = exitFindings
+	}
+	if diffCounts != nil {
+		log.Info("diff vs baseline summary",
+			"new", diffCounts.New,
+			"persisting", diffCounts.Persisting,
+			"resolved", diffCounts.Resolved)
 	}
 	if pool != nil {
 		logProxyStats(log, pool, cfg.proxyStatsTopN)
@@ -386,6 +478,21 @@ func runScan(ctx context.Context, cfg *scanConfig, level checks.Level) int {
 		}
 	}
 	return exit
+}
+
+// parseFailOn turns the --fail-on flag value into a severity rank (per
+// checks.SeverityRank). "none" disables the gate; any other value must be a
+// canonical severity name. Returns enabled=false when the gate is off so
+// callers can short-circuit the worst-severity tracking.
+func parseFailOn(s string) (rank int, enabled bool, err error) {
+	if strings.EqualFold(s, "none") {
+		return 0, false, nil
+	}
+	sev, err := checks.ParseSeverity(s)
+	if err != nil {
+		return 0, false, err
+	}
+	return checks.SeverityRank(sev), true, nil
 }
 
 // fingerprintFallbackProbes returns the host-relative paths the detector

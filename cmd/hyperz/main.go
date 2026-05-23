@@ -13,6 +13,6 @@ func main() {
 
 	if err := newRootCmd().ExecuteContext(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
-		os.Exit(exitFailure)
+		os.Exit(exitScanError)
 	}
 }

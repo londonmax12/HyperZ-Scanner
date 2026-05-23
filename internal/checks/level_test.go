@@ -122,3 +122,44 @@ func TestSecurityHeadersIsPassive(t *testing.T) {
 		t.Fatalf("Level = %v, want %v", got, LevelPassive)
 	}
 }
+
+func TestSeverityRankOrdersAllLevels(t *testing.T) {
+	order := []Severity{SeverityInfo, SeverityLow, SeverityMedium, SeverityHigh, SeverityCritical}
+	for i := 1; i < len(order); i++ {
+		if SeverityRank(order[i]) <= SeverityRank(order[i-1]) {
+			t.Errorf("rank not monotonic at %v vs %v", order[i-1], order[i])
+		}
+	}
+	if SeverityRank("nonsense") >= 0 {
+		t.Errorf("unknown severity should rank below SeverityInfo")
+	}
+}
+
+func TestParseSeverityAcceptsKnown(t *testing.T) {
+	cases := map[string]Severity{
+		"info":     SeverityInfo,
+		"INFO":     SeverityInfo,
+		"low":      SeverityLow,
+		"Medium":   SeverityMedium,
+		"HIGH":     SeverityHigh,
+		"critical": SeverityCritical,
+	}
+	for in, want := range cases {
+		got, err := ParseSeverity(in)
+		if err != nil {
+			t.Errorf("ParseSeverity(%q) err = %v", in, err)
+			continue
+		}
+		if got != want {
+			t.Errorf("ParseSeverity(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestParseSeverityRejectsUnknown(t *testing.T) {
+	for _, in := range []string{"", "warning", "blocker", "trivial"} {
+		if _, err := ParseSeverity(in); err == nil {
+			t.Errorf("ParseSeverity(%q) accepted, want error", in)
+		}
+	}
+}

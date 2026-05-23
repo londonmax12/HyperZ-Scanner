@@ -191,6 +191,55 @@ type Finding struct {
 	Remediation string    `json:"remediation,omitempty"`
 	Evidence    *Evidence `json:"evidence,omitempty"`
 	DedupeKey   string    `json:"dedupe_key,omitempty"`
+
+	// DiffStatus is populated only when the scan was run with --baseline. It
+	// classifies the finding relative to the baseline report: "new" (absent
+	// from the baseline), "persisting" (also present in the baseline), or
+	// "resolved" (in the baseline but no longer observed). Checks never set
+	// this directly - the diff overlay annotates findings before they reach
+	// the reporter.
+	DiffStatus string `json:"diff_status,omitempty"`
+}
+
+// severityRank orders severities so callers can compare or threshold against
+// each other (e.g. --fail-on gating, consolidating per-rule findings into the
+// worst observed severity). Use SeverityRank rather than reading the map.
+var severityRank = map[Severity]int{
+	SeverityInfo:     0,
+	SeverityLow:      1,
+	SeverityMedium:   2,
+	SeverityHigh:     3,
+	SeverityCritical: 4,
+}
+
+// SeverityRank returns a comparable integer for s. Unknown severities sort
+// below SeverityInfo so a malformed baseline entry can't accidentally trip a
+// fail-on gate.
+func SeverityRank(s Severity) int {
+	if r, ok := severityRank[s]; ok {
+		return r
+	}
+	return -1
+}
+
+// ParseSeverity normalizes "Medium"/"MEDIUM"/"medium" into a Severity and
+// rejects anything that isn't one of the five canonical levels. Used by CLI
+// flags (e.g. --fail-on) where users type names rather than the typed
+// constants.
+func ParseSeverity(s string) (Severity, error) {
+	switch strings.ToLower(s) {
+	case "info":
+		return SeverityInfo, nil
+	case "low":
+		return SeverityLow, nil
+	case "medium":
+		return SeverityMedium, nil
+	case "high":
+		return SeverityHigh, nil
+	case "critical":
+		return SeverityCritical, nil
+	}
+	return "", fmt.Errorf("invalid severity %q (want info, low, medium, high, or critical)", s)
 }
 
 // MakeDedupeKey hashes its parts into a stable 16-char hex fingerprint. A

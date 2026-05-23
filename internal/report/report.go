@@ -30,6 +30,54 @@ type Metadata struct {
 	// scan, including any in-flight checks that drained budget while the
 	// streaming reporters were already running.
 	Budget *httpclient.Budget
+	// Diff, when non-nil, signals the scan ran with a --baseline. Reporters
+	// render a diff summary (and per-finding status prefixes/columns) when
+	// it's populated. Counts are read after the findings channel closes;
+	// the scan command updates the same struct as findings flow through the
+	// Diff overlay, so the summary printed here reflects the final tally.
+	Diff *DiffCounts
+}
+
+// diffStatusPrefix returns the per-finding marker the text/markdown
+// reporters prepend to lines so a reader can scan for what changed at a
+// glance. Returns the empty string when no diff was performed.
+func diffStatusPrefix(status string) string {
+	switch status {
+	case DiffStatusNew:
+		return "+ "
+	case DiffStatusPersisting:
+		return "~ "
+	case DiffStatusResolved:
+		return "- "
+	default:
+		return ""
+	}
+}
+
+// diffSummaryLine renders the one-line counter footer ("2 new, 3
+// persisting, 1 resolved") or the empty string when no diff was performed.
+func diffSummaryLine(d *DiffCounts) string {
+	if d == nil {
+		return ""
+	}
+	return fmt.Sprintf("diff vs baseline: %d new, %d persisting, %d resolved",
+		d.New, d.Persisting, d.Resolved)
+}
+
+// diffStatusBadge returns a short human label for use in markdown table
+// cells and section headers. The empty string is returned for an empty
+// status so the call site can fall back to the no-diff layout.
+func diffStatusBadge(status string) string {
+	switch status {
+	case DiffStatusNew:
+		return "NEW"
+	case DiffStatusPersisting:
+		return "persisting"
+	case DiffStatusResolved:
+		return "resolved"
+	default:
+		return ""
+	}
 }
 
 // budgetSummary writes a human-friendly multi-line summary of the budget
@@ -158,6 +206,11 @@ func (textReporter) Write(_ context.Context, w io.Writer, in <-chan checks.Findi
 			return err
 		}
 	}
+	if s := diffSummaryLine(meta.Diff); s != "" {
+		if _, err := fmt.Fprintln(w, "\n"+s); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -182,7 +235,8 @@ func writeTextFinding(w io.Writer, f checks.Finding) error {
 	if loc == "" {
 		loc = f.Target
 	}
-	if _, err := fmt.Fprintf(w, "[%s] %s - %s - %s\n", f.Severity, f.Check, loc, f.Title); err != nil {
+	if _, err := fmt.Fprintf(w, "%s[%s] %s - %s - %s\n",
+		diffStatusPrefix(f.DiffStatus), f.Severity, f.Check, loc, f.Title); err != nil {
 		return err
 	}
 	if f.Detail != "" {
@@ -248,6 +302,14 @@ func (jsonlReporter) Write(_ context.Context, w io.Writer, in <-chan checks.Find
 			}
 		}
 	}
+	if meta.Diff != nil {
+		if err := enc.Encode(map[string]any{
+			"type": "diff_summary",
+			"diff": meta.Diff,
+		}); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -262,13 +324,20 @@ var csvHeader = []string{
 	"dedupe_key",
 }
 
-// csv intentionally ignores Metadata: the format is flat tabular finding
-// rows and there's no natural place for per-host stack info without
-// breaking the row contract. Use jsonl/json/markdown if you need both.
-func (csvReporter) Write(_ context.Context, w io.Writer, in <-chan checks.Finding, _ Metadata) error {
+// csv intentionally ignores most Metadata (stacks/budget): the format is
+// flat tabular finding rows and there's no natural place for per-host info
+// without breaking the row contract. Use jsonl/json/markdown if you need
+// both. The diff_status column is appended only when meta.Diff is non-nil
+// so existing tooling that locks the header order keeps working.
+func (csvReporter) Write(_ context.Context, w io.Writer, in <-chan checks.Finding, meta Metadata) error {
 	cw := csv.NewWriter(w)
+	header := csvHeader
+	withDiff := meta.Diff != nil
+	if withDiff {
+		header = append(append([]string{}, csvHeader...), "diff_status")
+	}
 	var writeErr error
-	if err := cw.Write(csvHeader); err != nil {
+	if err := cw.Write(header); err != nil {
 		writeErr = err
 	}
 	for f := range in {
@@ -283,12 +352,16 @@ func (csvReporter) Write(_ context.Context, w io.Writer, in <-chan checks.Findin
 				status = strconv.Itoa(e.Status)
 			}
 		}
-		if err := cw.Write([]string{
+		row := []string{
 			string(f.Severity), f.Check, f.Target, f.URL, f.Title, f.Detail,
 			f.CWE, f.OWASP, f.Remediation,
 			method, eURL, status,
 			f.DedupeKey,
-		}); err != nil {
+		}
+		if withDiff {
+			row = append(row, f.DiffStatus)
+		}
+		if err := cw.Write(row); err != nil {
 			writeErr = err
 		}
 	}
@@ -310,6 +383,7 @@ type jsonEnvelope struct {
 	Findings []checks.Finding              `json:"findings"`
 	Stacks   map[string]*fingerprint.Stack `json:"detected_stacks,omitempty"`
 	Budget   *httpclient.BudgetStats       `json:"request_budget,omitempty"`
+	Diff     *DiffCounts                   `json:"diff_summary,omitempty"`
 }
 
 func (jsonReporter) Write(ctx context.Context, w io.Writer, in <-chan checks.Finding, meta Metadata) error {
@@ -317,7 +391,7 @@ func (jsonReporter) Write(ctx context.Context, w io.Writer, in <-chan checks.Fin
 	if findings == nil {
 		findings = []checks.Finding{}
 	}
-	env := jsonEnvelope{Findings: findings, Stacks: meta.Stacks}
+	env := jsonEnvelope{Findings: findings, Stacks: meta.Stacks, Diff: meta.Diff}
 	if meta.Budget != nil {
 		s := meta.Budget.Snapshot()
 		if s.Max > 0 || s.GlobalRPS > 0 {
@@ -420,17 +494,21 @@ func (sarifReporter) Write(ctx context.Context, w io.Writer, in <-chan checks.Fi
 		if f.DedupeKey != "" {
 			res.PartialFingerprints = map[string]string{"hyperz/v1": f.DedupeKey}
 		}
-		if f.Remediation != "" || f.CWE != "" || f.OWASP != "" {
-			res.Properties = map[string]string{}
-			if f.CWE != "" {
-				res.Properties["cwe"] = f.CWE
-			}
-			if f.OWASP != "" {
-				res.Properties["owasp"] = f.OWASP
-			}
-			if f.Remediation != "" {
-				res.Properties["remediation"] = f.Remediation
-			}
+		// Always emit severity as a property: SARIF's level enum collapses
+		// critical+high to "error" and info to "none", so without this the
+		// original severity is unrecoverable from a SARIF baseline.
+		res.Properties = map[string]string{"severity": string(f.Severity)}
+		if f.CWE != "" {
+			res.Properties["cwe"] = f.CWE
+		}
+		if f.OWASP != "" {
+			res.Properties["owasp"] = f.OWASP
+		}
+		if f.Remediation != "" {
+			res.Properties["remediation"] = f.Remediation
+		}
+		if f.DiffStatus != "" {
+			res.Properties["diffStatus"] = f.DiffStatus
 		}
 		results = append(results, res)
 	}
@@ -532,22 +610,35 @@ func (markdownReporter) Write(ctx context.Context, w io.Writer, in <-chan checks
 
 	writeMarkdownStacks(w, meta.Stacks)
 	writeMarkdownBudget(w, meta.Budget)
+	writeMarkdownDiff(w, meta.Diff)
 
 	if len(findings) == 0 {
 		fmt.Fprintln(w, "_No findings._")
 		return nil
 	}
 
+	withDiff := meta.Diff != nil
 	fmt.Fprintf(w, "## Findings\n\n")
-	fmt.Fprintf(w, "| Severity | Check | URL | Title | CWE | OWASP |\n|---|---|---|---|---|---|\n")
+	if withDiff {
+		fmt.Fprintf(w, "| Status | Severity | Check | URL | Title | CWE | OWASP |\n|---|---|---|---|---|---|---|\n")
+	} else {
+		fmt.Fprintf(w, "| Severity | Check | URL | Title | CWE | OWASP |\n|---|---|---|---|---|---|\n")
+	}
 	for _, f := range findings {
 		loc := f.URL
 		if loc == "" {
 			loc = f.Target
 		}
-		fmt.Fprintf(w, "| %s | %s | %s | %s | %s | %s |\n",
-			f.Severity, f.Check, escapePipe(loc), escapePipe(f.Title),
-			escapePipe(f.CWE), escapePipe(f.OWASP))
+		if withDiff {
+			fmt.Fprintf(w, "| %s | %s | %s | %s | %s | %s | %s |\n",
+				diffStatusBadge(f.DiffStatus),
+				f.Severity, f.Check, escapePipe(loc), escapePipe(f.Title),
+				escapePipe(f.CWE), escapePipe(f.OWASP))
+		} else {
+			fmt.Fprintf(w, "| %s | %s | %s | %s | %s | %s |\n",
+				f.Severity, f.Check, escapePipe(loc), escapePipe(f.Title),
+				escapePipe(f.CWE), escapePipe(f.OWASP))
+		}
 	}
 
 	fmt.Fprintf(w, "\n## Details\n\n")
@@ -556,7 +647,12 @@ func (markdownReporter) Write(ctx context.Context, w io.Writer, in <-chan checks
 		if loc == "" {
 			loc = f.Target
 		}
-		fmt.Fprintf(w, "### [%s] %s - %s\n\n", f.Severity, f.Check, escapePipe(f.Title))
+		header := fmt.Sprintf("### [%s] %s - %s", f.Severity, f.Check, escapePipe(f.Title))
+		if f.DiffStatus != "" {
+			header = fmt.Sprintf("### %s [%s] %s - %s",
+				diffStatusBadge(f.DiffStatus), f.Severity, f.Check, escapePipe(f.Title))
+		}
+		fmt.Fprintf(w, "%s\n\n", header)
 		fmt.Fprintf(w, "- **URL:** %s\n", loc)
 		if tags := joinNonEmpty(", ", f.CWE, f.OWASP); tags != "" {
 			fmt.Fprintf(w, "- **Refs:** %s\n", tags)
@@ -620,6 +716,17 @@ func writeMarkdownStacks(w io.Writer, stacks map[string]*fingerprint.Stack) {
 			s.Confidence*100)
 	}
 	fmt.Fprintln(w)
+}
+
+func writeMarkdownDiff(w io.Writer, d *DiffCounts) {
+	if d == nil {
+		return
+	}
+	fmt.Fprintf(w, "## Diff vs baseline\n\n")
+	fmt.Fprintf(w, "| Status | Count |\n|---|---|\n")
+	fmt.Fprintf(w, "| new | %d |\n", d.New)
+	fmt.Fprintf(w, "| persisting | %d |\n", d.Persisting)
+	fmt.Fprintf(w, "| resolved | %d |\n\n", d.Resolved)
 }
 
 func writeMarkdownBudget(w io.Writer, b *httpclient.Budget) {
