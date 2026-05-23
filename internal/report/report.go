@@ -13,6 +13,7 @@ import (
 
 	"github.com/londonball/hyperz/internal/checks"
 	"github.com/londonball/hyperz/internal/fingerprint"
+	"github.com/londonball/hyperz/internal/httpclient"
 )
 
 // Metadata carries scan-level context that reporters render alongside the
@@ -23,6 +24,41 @@ type Metadata struct {
 	// fingerprint detected for it. nil/empty when fingerprinting is
 	// disabled or every detection failed.
 	Stacks map[string]*fingerprint.Stack
+	// Budget is the scan-wide request budget the client was wired with;
+	// nil when no count cap and no global RPS were configured. Reporters
+	// call Snapshot at render time so the rendered counts reflect the full
+	// scan, including any in-flight checks that drained budget while the
+	// streaming reporters were already running.
+	Budget *httpclient.Budget
+}
+
+// budgetSummary writes a human-friendly multi-line summary of the budget
+// snapshot. Returns the empty string when meta.Budget is nil or the budget
+// had no enforcement turned on (defensive against a future "registered but
+// off" path).
+func budgetSummary(b *httpclient.Budget) string {
+	if b == nil {
+		return ""
+	}
+	s := b.Snapshot()
+	if s.Max == 0 && s.GlobalRPS == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("request budget:\n")
+	if s.Max > 0 {
+		fmt.Fprintf(&sb, "  requests: %d / %d", s.Requests, s.Max)
+		if s.Exhausted {
+			fmt.Fprintf(&sb, " (exhausted at %s)", s.ExhaustedAt.UTC().Format(time.RFC3339))
+		}
+		sb.WriteByte('\n')
+	} else {
+		fmt.Fprintf(&sb, "  requests: %d\n", s.Requests)
+	}
+	if s.GlobalRPS > 0 {
+		fmt.Fprintf(&sb, "  global rate: %g rps\n", s.GlobalRPS)
+	}
+	return sb.String()
 }
 
 // Reporter consumes findings from a channel and writes them in some format.
@@ -114,7 +150,15 @@ func (textReporter) Write(_ context.Context, w io.Writer, in <-chan checks.Findi
 			return err
 		}
 	}
-	return writeTextStacks(w, meta.Stacks)
+	if err := writeTextStacks(w, meta.Stacks); err != nil {
+		return err
+	}
+	if s := budgetSummary(meta.Budget); s != "" {
+		if _, err := fmt.Fprintln(w, "\n"+strings.TrimRight(s, "\n")); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func writeTextStacks(w io.Writer, stacks map[string]*fingerprint.Stack) error {
@@ -193,6 +237,17 @@ func (jsonlReporter) Write(_ context.Context, w io.Writer, in <-chan checks.Find
 			return err
 		}
 	}
+	if meta.Budget != nil {
+		s := meta.Budget.Snapshot()
+		if s.Max > 0 || s.GlobalRPS > 0 {
+			if err := enc.Encode(map[string]any{
+				"type":   "request_budget",
+				"budget": s,
+			}); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 
@@ -254,6 +309,7 @@ type jsonReporter struct{}
 type jsonEnvelope struct {
 	Findings []checks.Finding              `json:"findings"`
 	Stacks   map[string]*fingerprint.Stack `json:"detected_stacks,omitempty"`
+	Budget   *httpclient.BudgetStats       `json:"request_budget,omitempty"`
 }
 
 func (jsonReporter) Write(ctx context.Context, w io.Writer, in <-chan checks.Finding, meta Metadata) error {
@@ -261,9 +317,16 @@ func (jsonReporter) Write(ctx context.Context, w io.Writer, in <-chan checks.Fin
 	if findings == nil {
 		findings = []checks.Finding{}
 	}
+	env := jsonEnvelope{Findings: findings, Stacks: meta.Stacks}
+	if meta.Budget != nil {
+		s := meta.Budget.Snapshot()
+		if s.Max > 0 || s.GlobalRPS > 0 {
+			env.Budget = &s
+		}
+	}
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
-	return enc.Encode(jsonEnvelope{Findings: findings, Stacks: meta.Stacks})
+	return enc.Encode(env)
 }
 
 // ---------- sarif (buffered) ----------
@@ -382,8 +445,17 @@ func (sarifReporter) Write(ctx context.Context, w io.Writer, in <-chan checks.Fi
 		Tool:    sarifTool{Driver: sarifDriver{Name: "hyperz", Rules: rules}},
 		Results: results,
 	}
-	if len(meta.Stacks) > 0 {
-		run.Properties = map[string]any{"detectedStacks": meta.Stacks}
+	if len(meta.Stacks) > 0 || meta.Budget != nil {
+		run.Properties = map[string]any{}
+		if len(meta.Stacks) > 0 {
+			run.Properties["detectedStacks"] = meta.Stacks
+		}
+		if meta.Budget != nil {
+			s := meta.Budget.Snapshot()
+			if s.Max > 0 || s.GlobalRPS > 0 {
+				run.Properties["requestBudget"] = s
+			}
+		}
 	}
 	doc := sarifLog{
 		Schema:  "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/Schemata/sarif-schema-2.1.0.json",
@@ -459,6 +531,7 @@ func (markdownReporter) Write(ctx context.Context, w io.Writer, in <-chan checks
 	}
 
 	writeMarkdownStacks(w, meta.Stacks)
+	writeMarkdownBudget(w, meta.Budget)
 
 	if len(findings) == 0 {
 		fmt.Fprintln(w, "_No findings._")
@@ -545,6 +618,31 @@ func writeMarkdownStacks(w io.Writer, stacks map[string]*fingerprint.Stack) {
 			withVersion(s.CDN, s.Versions["cdn"]),
 			withVersion(s.WAF, s.Versions["waf"]),
 			s.Confidence*100)
+	}
+	fmt.Fprintln(w)
+}
+
+func writeMarkdownBudget(w io.Writer, b *httpclient.Budget) {
+	if b == nil {
+		return
+	}
+	s := b.Snapshot()
+	if s.Max == 0 && s.GlobalRPS == 0 {
+		return
+	}
+	fmt.Fprintf(w, "## Request budget\n\n")
+	if s.Max > 0 {
+		if s.Exhausted {
+			fmt.Fprintf(w, "- Requests: **%d / %d** (exhausted at %s)\n",
+				s.Requests, s.Max, s.ExhaustedAt.UTC().Format(time.RFC3339))
+		} else {
+			fmt.Fprintf(w, "- Requests: %d / %d\n", s.Requests, s.Max)
+		}
+	} else {
+		fmt.Fprintf(w, "- Requests: %d\n", s.Requests)
+	}
+	if s.GlobalRPS > 0 {
+		fmt.Fprintf(w, "- Global rate: %g rps\n", s.GlobalRPS)
 	}
 	fmt.Fprintln(w)
 }

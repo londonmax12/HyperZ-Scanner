@@ -12,6 +12,7 @@ import (
 
 	"github.com/londonball/hyperz/internal/checks"
 	"github.com/londonball/hyperz/internal/fingerprint"
+	"github.com/londonball/hyperz/internal/httpclient"
 )
 
 func sampleFindings() []checks.Finding {
@@ -798,6 +799,134 @@ func TestPDFReporterRendersExchangeBodies(t *testing.T) {
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("PDF missing %q", want)
+		}
+	}
+}
+
+func exhaustedBudget(t *testing.T, max int64) *httpclient.Budget {
+	t.Helper()
+	b := httpclient.NewBudget(max, 0, 1)
+	for i := int64(0); i < max; i++ {
+		if err := b.Wait(context.Background()); err != nil {
+			t.Fatalf("seed wait %d: %v", i, err)
+		}
+	}
+	// One more to trip ErrBudgetExhausted and stamp ExhaustedAt.
+	_ = b.Wait(context.Background())
+	return b
+}
+
+func TestTextReporterRendersBudgetExhaustion(t *testing.T) {
+	out := writeFormatWithMeta(t, "text", sampleFindings(), Metadata{Budget: exhaustedBudget(t, 2)})
+	for _, want := range []string{
+		"request budget:",
+		"requests: 2 / 2",
+		"exhausted at ",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("text output missing %q\nfull:\n%s", want, out)
+		}
+	}
+}
+
+func TestTextReporterOmitsBudgetWhenNil(t *testing.T) {
+	out := writeFormatWithMeta(t, "text", sampleFindings(), Metadata{})
+	if strings.Contains(out, "request budget") {
+		t.Errorf("text output included budget section when none configured:\n%s", out)
+	}
+}
+
+func TestJSONReporterIncludesBudget(t *testing.T) {
+	out := writeFormatWithMeta(t, "json", sampleFindings(),
+		Metadata{Budget: exhaustedBudget(t, 3)})
+	var got jsonEnvelope
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("decode: %v\n%s", err, out)
+	}
+	if got.Budget == nil {
+		t.Fatalf("envelope.Budget = nil, want budget snapshot")
+	}
+	if got.Budget.Max != 3 || got.Budget.Requests != 3 || !got.Budget.Exhausted {
+		t.Fatalf("budget = %+v, want max=3 requests=3 exhausted=true", got.Budget)
+	}
+}
+
+func TestJSONReporterOmitsBudgetWhenNil(t *testing.T) {
+	out := writeFormat(t, "json", sampleFindings())
+	if strings.Contains(out, "request_budget") {
+		t.Errorf("json envelope leaked request_budget key when no budget configured:\n%s", out)
+	}
+}
+
+func TestJSONLReporterEmitsBudgetTailRecord(t *testing.T) {
+	out := writeFormatWithMeta(t, "jsonl", sampleFindings(),
+		Metadata{Budget: exhaustedBudget(t, 2)})
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	if len(lines) == 0 {
+		t.Fatal("no jsonl output")
+	}
+	tail := lines[len(lines)-1]
+	var rec struct {
+		Type   string                 `json:"type"`
+		Budget map[string]interface{} `json:"budget"`
+	}
+	if err := json.Unmarshal([]byte(tail), &rec); err != nil {
+		t.Fatalf("decode tail %q: %v", tail, err)
+	}
+	if rec.Type != "request_budget" {
+		t.Fatalf("tail type = %q, want request_budget", rec.Type)
+	}
+	if rec.Budget["exhausted"] != true {
+		t.Fatalf("tail budget.exhausted = %v, want true", rec.Budget["exhausted"])
+	}
+}
+
+func TestMarkdownReporterRendersBudgetSection(t *testing.T) {
+	out := writeFormatWithMeta(t, "markdown", sampleFindings(),
+		Metadata{Budget: exhaustedBudget(t, 2)})
+	for _, want := range []string{
+		"## Request budget",
+		"Requests: **2 / 2**",
+		"exhausted at",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("markdown output missing %q\nfull:\n%s", want, out)
+		}
+	}
+}
+
+func TestSARIFReporterIncludesBudgetInRunProperties(t *testing.T) {
+	out := writeFormatWithMeta(t, "sarif", sampleFindings(),
+		Metadata{Budget: exhaustedBudget(t, 2)})
+	var doc struct {
+		Runs []struct {
+			Properties map[string]any `json:"properties"`
+		} `json:"runs"`
+	}
+	if err := json.Unmarshal([]byte(out), &doc); err != nil {
+		t.Fatalf("decode: %v\n%s", err, out)
+	}
+	if len(doc.Runs) != 1 {
+		t.Fatalf("runs = %d, want 1", len(doc.Runs))
+	}
+	rb, ok := doc.Runs[0].Properties["requestBudget"].(map[string]any)
+	if !ok {
+		t.Fatalf("run.properties.requestBudget missing or not an object: %+v", doc.Runs[0].Properties)
+	}
+	if rb["exhausted"] != true {
+		t.Fatalf("requestBudget.exhausted = %v, want true", rb["exhausted"])
+	}
+}
+
+func TestPDFReporterRendersBudgetSection(t *testing.T) {
+	out := writeFormatWithMeta(t, "pdf", sampleFindings(),
+		Metadata{Budget: exhaustedBudget(t, 2)})
+	for _, want := range []string{
+		"Request budget",
+		"requests: 2 / 2",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("PDF stream missing %q", want)
 		}
 	}
 }

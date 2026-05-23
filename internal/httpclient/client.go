@@ -17,6 +17,7 @@ type Client struct {
 	httpNoFollow *http.Client // shares transport/jar/timeout with http; CheckRedirect short-circuits the chain
 	userAgent    string
 	limiter      *HostLimiter
+	budget       *Budget
 	maxRetries   int
 	maxRetryWait time.Duration
 	basicAuth    *BasicAuth
@@ -39,6 +40,11 @@ type Config struct {
 	MaxIdleConnsPerHost int
 	MaxConnsPerHost     int
 	Limiter             *HostLimiter
+	// Budget, when non-nil, enforces a scan-wide request count cap and/or a
+	// global RPS ceiling layered on top of the per-host Limiter. Returns
+	// ErrBudgetExhausted from Do once the count cap is reached. Built via
+	// NewBudget; pass nil (the default) for no scan-wide enforcement.
+	Budget *Budget
 	// Proxy selects the proxy URL for each request. Ignored when Transport
 	// is set; otherwise nil means http.ProxyFromEnvironment.
 	Proxy func(*http.Request) (*url.URL, error)
@@ -119,6 +125,7 @@ func New(cfg Config) *Client {
 		},
 		userAgent:    cfg.UserAgent,
 		limiter:      cfg.Limiter,
+		budget:       cfg.Budget,
 		maxRetries:   cfg.MaxRetries,
 		maxRetryWait: maxWait,
 		basicAuth:    cfg.BasicAuth,
@@ -142,6 +149,11 @@ func (c *Client) Jar() http.CookieJar { return c.http.Jar }
 // header value (capped by MaxRetryWait) or an exponential backoff fallback.
 // Each such response also penalizes the host limiter so subsequent requests
 // to that host slow down.
+//
+// Transport errors (dial, TLS, RST, read timeout) on an idempotent request
+// also retry, using the same exponential backoff. Transport failures don't
+// penalize the host limiter, since they say nothing about target pushback.
+// ctx cancellation short-circuits the loop.
 func (c *Client) Do(ctx context.Context, req *http.Request) (*http.Response, error) {
 	return c.doWith(ctx, req, c.http)
 }
@@ -187,6 +199,13 @@ func (c *Client) doWith(ctx context.Context, req *http.Request, h *http.Client) 
 	var resp *http.Response
 	var err error
 	for attempt := 0; attempt < attempts; attempt++ {
+		// Budget runs ahead of the host limiter: an exhausted count cap
+		// short-circuits without burning a host slot, and the global RPS
+		// shapes flow before per-host pacing. Retries count against the
+		// budget too - that's the whole point of a noise ceiling.
+		if werr := c.budget.Wait(ctx); werr != nil {
+			return nil, werr
+		}
 		if c.limiter != nil && req.URL != nil {
 			if werr := c.limiter.Wait(ctx, req.URL.Host); werr != nil {
 				return nil, werr
@@ -194,9 +213,34 @@ func (c *Client) doWith(ctx context.Context, req *http.Request, h *http.Client) 
 		}
 		resp, err = h.Do(req)
 		if err != nil {
-			// Network/transport error: proxy pool already scored this;
-			// don't retry here (avoid double-counting against the proxy).
-			return nil, err
+			// Transport error (dial, TLS, RST, read timeout, etc.). On
+			// an idempotent request, give it another shot with backoff -
+			// a transient network blip, or with a proxy pool a single
+			// bad proxy, shouldn't sink the whole request. The proxy
+			// pool scores each attempt independently, so retrying is
+			// what lets it route around a degraded proxy.
+			//
+			// Bail immediately if ctx is canceled (the error is
+			// non-recoverable) or we're out of attempts. Don't penalize
+			// the limiter: transport errors aren't target pushback.
+			if ctx.Err() != nil || attempt == attempts-1 {
+				return nil, err
+			}
+			wait := c.retryWait(nil, attempt)
+			if serr := c.sleepFn(ctx, wait); serr != nil {
+				return nil, err
+			}
+			if req.Body != nil {
+				if req.GetBody == nil {
+					return nil, err
+				}
+				body, gerr := req.GetBody()
+				if gerr != nil {
+					return nil, err
+				}
+				req.Body = body
+			}
+			continue
 		}
 		if !shouldRetryStatus(resp.StatusCode) {
 			return resp, nil
@@ -250,17 +294,20 @@ func shouldRetryStatus(code int) bool {
 }
 
 // retryWait derives the per-attempt sleep from Retry-After, capped by
-// maxRetryWait. When no Retry-After is present, falls back to a bounded
-// exponential backoff (1s, 2s, 4s, ...).
+// maxRetryWait. When no Retry-After is present - or resp is nil, as on a
+// transport error - falls back to a bounded exponential backoff
+// (1s, 2s, 4s, ...).
 func (c *Client) retryWait(resp *http.Response, attempt int) time.Duration {
-	if d, ok := parseRetryAfter(resp.Header.Get("Retry-After"), c.nowFn()); ok {
-		if d < 0 {
-			d = 0
+	if resp != nil {
+		if d, ok := parseRetryAfter(resp.Header.Get("Retry-After"), c.nowFn()); ok {
+			if d < 0 {
+				d = 0
+			}
+			if d > c.maxRetryWait {
+				d = c.maxRetryWait
+			}
+			return d
 		}
-		if d > c.maxRetryWait {
-			d = c.maxRetryWait
-		}
-		return d
 	}
 	backoff := time.Second << attempt
 	if backoff > c.maxRetryWait {

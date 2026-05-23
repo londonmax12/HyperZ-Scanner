@@ -10,6 +10,7 @@ import (
 
 	"github.com/londonball/hyperz/internal/checks"
 	"github.com/londonball/hyperz/internal/fingerprint"
+	"github.com/londonball/hyperz/internal/httpclient"
 )
 
 // PDF reporter emits a minimal, dependency-free PDF 1.4 document using
@@ -46,7 +47,7 @@ type pdfReporter struct{}
 func (pdfReporter) Write(ctx context.Context, w io.Writer, in <-chan checks.Finding, meta Metadata) error {
 	findings := drain(ctx, in)
 	d := newPDFDoc()
-	d.renderReport(findings, meta.Stacks)
+	d.renderReport(findings, meta.Stacks, meta.Budget)
 	d.addFooters()
 	return d.serialize(w)
 }
@@ -151,9 +152,10 @@ var severityOrder = []checks.Severity{
 	checks.SeverityInfo,
 }
 
-func (d *pdfDoc) renderReport(findings []checks.Finding, stacks map[string]*fingerprint.Stack) {
+func (d *pdfDoc) renderReport(findings []checks.Finding, stacks map[string]*fingerprint.Stack, budget *httpclient.Budget) {
 	d.renderCover(findings)
 	d.renderStacks(stacks)
+	d.renderBudget(budget)
 	if len(findings) == 0 {
 		return
 	}
@@ -176,6 +178,36 @@ func (d *pdfDoc) renderReport(findings []checks.Finding, stacks map[string]*fing
 				d.separator()
 			}
 		}
+	}
+}
+
+// renderBudget adds a "Request budget" page when a scan-wide budget was in
+// effect. Skipped when both knobs were off so the section never appears as
+// a phantom "0 / 0" page.
+func (d *pdfDoc) renderBudget(budget *httpclient.Budget) {
+	if budget == nil {
+		return
+	}
+	s := budget.Snapshot()
+	if s.Max == 0 && s.GlobalRPS == 0 {
+		return
+	}
+	d.newPage()
+	d.writeLine("Request budget", fontBold, pdfSizeH2, 0.10, 0.10, 0.10)
+	d.gap(4)
+	d.hline(pdfBodyLeft, pdfBodyRight, d.y, 0.5, 0.85, 0.85, 0.85)
+	d.gap(8)
+	if s.Max > 0 {
+		line := fmt.Sprintf("requests: %d / %d", s.Requests, s.Max)
+		if s.Exhausted {
+			line += fmt.Sprintf("  (exhausted at %s)", s.ExhaustedAt.UTC().Format(time.RFC3339))
+		}
+		d.writeLine(line, fontReg, pdfSizeBase, 0, 0, 0)
+	} else {
+		d.writeLine(fmt.Sprintf("requests: %d", s.Requests), fontReg, pdfSizeBase, 0, 0, 0)
+	}
+	if s.GlobalRPS > 0 {
+		d.writeLine(fmt.Sprintf("global rate: %g rps", s.GlobalRPS), fontReg, pdfSizeBase, 0, 0, 0)
 	}
 }
 

@@ -3,6 +3,7 @@ package httpclient
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -366,6 +367,136 @@ func TestClientDoNoRetryWhenMaxRetriesZero(t *testing.T) {
 	}
 	if got := lim.Limit(u.Host); got != 5 {
 		t.Fatalf("limiter rate after 1 429 = %v, want 5 (penalized once)", got)
+	}
+}
+
+// transportErrThenOK fails the first failures attempts with err, then
+// returns 200 OK. Used to test transport-error retry without a real network.
+type transportErrThenOK struct {
+	failures int32
+	err      error
+	hits     atomic.Int32
+}
+
+func (t *transportErrThenOK) RoundTrip(req *http.Request) (*http.Response, error) {
+	n := t.hits.Add(1)
+	if int32(n) <= t.failures {
+		return nil, t.err
+	}
+	return &http.Response{
+		StatusCode: 200,
+		Body:       io.NopCloser(strings.NewReader("ok")),
+		Header:     make(http.Header),
+		Request:    req,
+	}, nil
+}
+
+func TestClientDoRetriesOnTransportError(t *testing.T) {
+	rt := &transportErrThenOK{failures: 2, err: io.ErrUnexpectedEOF}
+	c := New(Config{
+		Timeout: 5 * time.Second, UserAgent: "test",
+		Transport: rt, MaxRetries: 3, MaxRetryWait: time.Hour,
+	})
+	sleeps := &recordingSleep{}
+	c.sleepFn = sleeps.fn
+
+	resp, err := c.Get(context.Background(), "http://example.invalid/")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		t.Fatalf("status = %d, want 200 after recovery", resp.StatusCode)
+	}
+	if rt.hits.Load() != 3 {
+		t.Fatalf("transport hits = %d, want 3 (2 fails + 1 success)", rt.hits.Load())
+	}
+	// Exponential backoff on transport errors: 1s, 2s.
+	want := []time.Duration{time.Second, 2 * time.Second}
+	if len(sleeps.waits) != len(want) {
+		t.Fatalf("sleeps = %v, want %v", sleeps.waits, want)
+	}
+	for i := range want {
+		if sleeps.waits[i] != want[i] {
+			t.Fatalf("sleep[%d] = %v, want %v", i, sleeps.waits[i], want[i])
+		}
+	}
+}
+
+func TestClientDoTransportErrorGivesUpAfterMaxRetries(t *testing.T) {
+	rt := &transportErrThenOK{failures: 100, err: io.ErrUnexpectedEOF}
+	c := New(Config{
+		Timeout: 5 * time.Second, UserAgent: "test",
+		Transport: rt, MaxRetries: 2, MaxRetryWait: time.Hour,
+	})
+	c.sleepFn = (&recordingSleep{}).fn
+
+	_, err := c.Get(context.Background(), "http://example.invalid/")
+	if err == nil {
+		t.Fatal("expected transport error after exhausting retries")
+	}
+	if rt.hits.Load() != 3 { // initial + 2 retries
+		t.Fatalf("hits = %d, want 3", rt.hits.Load())
+	}
+}
+
+func TestClientDoDoesNotRetryTransportErrorForPOST(t *testing.T) {
+	rt := &transportErrThenOK{failures: 100, err: io.ErrUnexpectedEOF}
+	c := New(Config{
+		Timeout: 5 * time.Second, UserAgent: "test",
+		Transport: rt, MaxRetries: 3,
+	})
+	c.sleepFn = (&recordingSleep{}).fn
+
+	req, _ := http.NewRequest(http.MethodPost, "http://example.invalid/", strings.NewReader("x=1"))
+	_, err := c.Do(context.Background(), req)
+	if err == nil {
+		t.Fatal("expected transport error")
+	}
+	if rt.hits.Load() != 1 {
+		t.Fatalf("hits = %d, want 1 (POST is not idempotent, no retry)", rt.hits.Load())
+	}
+}
+
+func TestClientDoTransportErrorBailsOnCanceledCtx(t *testing.T) {
+	rt := &transportErrThenOK{failures: 100, err: io.ErrUnexpectedEOF}
+	c := New(Config{
+		Timeout: 5 * time.Second, UserAgent: "test",
+		Transport: rt, MaxRetries: 5,
+	})
+	c.sleepFn = (&recordingSleep{}).fn
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := c.Get(ctx, "http://example.invalid/")
+	if err == nil {
+		t.Fatal("expected error from canceled ctx")
+	}
+	// One hit max: either the http.Client refuses upfront because ctx is
+	// done, or the first RoundTrip returns and the ctx-done check bails
+	// before scheduling a retry.
+	if rt.hits.Load() > 1 {
+		t.Fatalf("hits = %d, want <=1 (canceled ctx must short-circuit retry)", rt.hits.Load())
+	}
+}
+
+func TestClientDoTransportErrorDoesNotPenalizeLimiter(t *testing.T) {
+	rt := &transportErrThenOK{failures: 100, err: io.ErrUnexpectedEOF}
+	lim := NewHostLimiter(10, 1)
+	c := New(Config{
+		Timeout: 5 * time.Second, UserAgent: "test",
+		Transport: rt, Limiter: lim, MaxRetries: 3, MaxRetryWait: time.Hour,
+	})
+	c.sleepFn = (&recordingSleep{}).fn
+
+	_, err := c.Get(context.Background(), "http://example.invalid/")
+	if err == nil {
+		t.Fatal("expected transport error")
+	}
+	if got := lim.Limit("example.invalid"); got != 10 {
+		t.Fatalf("limiter rate = %v, want 10 (transport errors must not penalize)", got)
 	}
 }
 
@@ -810,5 +941,71 @@ func TestDoStillFollowsRedirects(t *testing.T) {
 	}
 	if n := landed.Load(); n != 1 {
 		t.Errorf("/landed was hit %d times, want 1 (Do should follow)", n)
+	}
+}
+
+func TestClientGetSurfacesBudgetExhaustedAndStopsHittingServer(t *testing.T) {
+	// Budget of 2 requests: the first two land at the server, the third
+	// must fail fast with ErrBudgetExhausted before any network attempt.
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := New(Config{
+		Timeout:   5 * time.Second,
+		UserAgent: "test",
+		Budget:    NewBudget(2, 0, 1),
+	})
+	for i := 0; i < 2; i++ {
+		resp, err := c.Get(context.Background(), srv.URL)
+		if err != nil {
+			t.Fatalf("Get %d: %v", i, err)
+		}
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}
+	_, err := c.Get(context.Background(), srv.URL)
+	if !errors.Is(err, ErrBudgetExhausted) {
+		t.Fatalf("third Get err = %v, want ErrBudgetExhausted", err)
+	}
+	if got := hits.Load(); got != 2 {
+		t.Fatalf("server hits = %d, want 2 (request past budget must not reach the server)", got)
+	}
+}
+
+func TestClientGetBudgetCountsEachRetry(t *testing.T) {
+	// A 429 with retries set up: every attempt is one request against the
+	// budget. With budget=2 and one 429 + one retry, the budget should be
+	// fully consumed; a follow-up Get must fail fast.
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Retry-After", "0")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	c := New(Config{
+		Timeout:    5 * time.Second,
+		UserAgent:  "test",
+		MaxRetries: 1, // initial + 1 retry = 2 attempts
+		Budget:     NewBudget(2, 0, 1),
+	})
+	c.sleepFn = (&recordingSleep{}).fn
+
+	resp, err := c.Get(context.Background(), srv.URL)
+	if err != nil {
+		t.Fatalf("first Get: %v", err)
+	}
+	resp.Body.Close()
+	if got := hits.Load(); got != 2 {
+		t.Fatalf("first Get server hits = %d, want 2 (initial + 1 retry)", got)
+	}
+	// Budget should now be exhausted by the two attempts above.
+	if _, err := c.Get(context.Background(), srv.URL); !errors.Is(err, ErrBudgetExhausted) {
+		t.Fatalf("second Get err = %v, want ErrBudgetExhausted (retries consumed the budget)", err)
 	}
 }

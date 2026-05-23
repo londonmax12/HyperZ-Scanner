@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -35,6 +36,9 @@ type scanConfig struct {
 	checkConcurrency int
 	rps              float64
 	burst            int
+	maxRequests      int64
+	globalRPS        float64
+	globalBurst      int
 	maxRetries       int
 	maxRetryWait     time.Duration
 	outputPath       string
@@ -131,6 +135,14 @@ Modes:
 		"max checks running in parallel per target (0 = unlimited)")
 	f.Float64Var(&cfg.rps, "rate", 5, "max requests per second per host")
 	f.IntVar(&cfg.burst, "burst", 5, "per-host rate limiter burst")
+	f.Int64Var(&cfg.maxRequests, "max-requests", 0,
+		"scan-wide cap on total HTTP requests; once hit, in-flight findings are flushed "+
+			"and further requests fail fast as scan-request-budget-exhausted (0 = unlimited)")
+	f.Float64Var(&cfg.globalRPS, "rate-global", 0,
+		"scan-wide RPS ceiling layered on top of --rate so fan-out across many hosts "+
+			"can't slip past a global noise budget (0 = unlimited)")
+	f.IntVar(&cfg.globalBurst, "burst-global", 1,
+		"burst for --rate-global; default 1 keeps the global pace strict")
 	f.IntVar(&cfg.maxRetries, "max-retries", 2,
 		"retry idempotent requests this many times on 429/503 (0 disables)")
 	f.DurationVar(&cfg.maxRetryWait, "max-retry-wait", 30*time.Second,
@@ -219,10 +231,18 @@ func runScan(ctx context.Context, cfg *scanConfig, level checks.Level) int {
 		return exitFailure
 	}
 
+	budget := httpclient.NewBudget(cfg.maxRequests, cfg.globalRPS, cfg.globalBurst)
+	if budget != nil {
+		log.Info("scan-wide budget enabled",
+			"max_requests", cfg.maxRequests,
+			"global_rps", cfg.globalRPS,
+			"global_burst", cfg.globalBurst)
+	}
 	clientCfg := httpclient.Config{
 		Timeout:      cfg.timeout,
 		UserAgent:    cfg.userAgent,
 		Limiter:      httpclient.NewHostLimiter(cfg.rps, cfg.burst),
+		Budget:       budget,
 		MaxRetries:   cfg.maxRetries,
 		MaxRetryWait: cfg.maxRetryWait,
 	}
@@ -287,6 +307,13 @@ func runScan(ctx context.Context, cfg *scanConfig, level checks.Level) int {
 
 	var checkErrors atomic.Int64
 	scannerOpts = append(scannerOpts, scanner.WithErrorHandler(func(target, check string, err error) {
+		// Budget exhaustion is a planned ceiling, not a malfunction. Surface
+		// it in the report (via meta.Budget) rather than as a noisy per-check
+		// failure, and don't bump the exit code: the scan ended cleanly at
+		// the cap the operator set.
+		if errors.Is(err, httpclient.ErrBudgetExhausted) {
+			return
+		}
 		checkErrors.Add(1)
 		log.Warn("check error", "check", check, "target", target, "err", err)
 	}))
@@ -324,7 +351,7 @@ func runScan(ctx context.Context, cfg *scanConfig, level checks.Level) int {
 	deduped := report.Dedupe(findings)
 
 	exit := exitOK
-	if err := rep.Write(ctx, out, deduped, report.Metadata{Stacks: stacks}); err != nil {
+	if err := rep.Write(ctx, out, deduped, report.Metadata{Stacks: stacks, Budget: budget}); err != nil {
 		log.Error("report write failed", "err", err)
 		exit = exitFailure
 	}
@@ -347,6 +374,16 @@ func runScan(ctx context.Context, cfg *scanConfig, level checks.Level) int {
 	}
 	if pool != nil {
 		logProxyStats(log, pool, cfg.proxyStatsTopN)
+	}
+	if budget != nil {
+		s := budget.Snapshot()
+		if s.Exhausted {
+			log.Warn("scan request budget exhausted",
+				"requests", s.Requests, "max", s.Max, "exhausted_at", s.ExhaustedAt.UTC())
+		} else if s.Max > 0 || s.GlobalRPS > 0 {
+			log.Info("scan request budget summary",
+				"requests", s.Requests, "max", s.Max, "global_rps", s.GlobalRPS)
+		}
 	}
 	return exit
 }
