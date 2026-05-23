@@ -157,6 +157,144 @@ func TestDetectReturnsErrorOnUnreachableHost(t *testing.T) {
 	}
 }
 
+func TestDetectFallbackProbeLiftsSPAEmptyHead(t *testing.T) {
+	// SPA shell: empty <head>, no CMS/framework signal in headers or body.
+	// /robots.txt exposes the wp-admin path; fallback probe should pick it up
+	// and lift the CMS to wordpress even though the seed yielded nothing.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/robots.txt":
+			w.Header().Set("Content-Type", "text/plain")
+			_, _ = w.Write([]byte("User-agent: *\nDisallow: /wp-admin/\n"))
+		default:
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			_, _ = w.Write([]byte(`<!doctype html><html><head></head><body><div id="app"></div></body></html>`))
+		}
+	}))
+	defer srv.Close()
+
+	d := New(newTestClient(t), WithFallbackProbes("/robots.txt"))
+	stack, err := d.Detect(context.Background(), page.FromURL(srv.URL))
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if stack.CMS != "wordpress" {
+		t.Errorf("CMS = %q, want wordpress (fallback probe should have lifted it)", stack.CMS)
+	}
+	if stack.Language != "php" {
+		t.Errorf("Language = %q, want php", stack.Language)
+	}
+}
+
+func TestDetectFallbackProbeShortCircuitsOnSignal(t *testing.T) {
+	// First probe yields wordpress; the second probe must not be requested.
+	var probeHits atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/robots.txt":
+			probeHits.Add(1)
+			w.Header().Set("Content-Type", "text/plain")
+			_, _ = w.Write([]byte("Disallow: /wp-content/\n"))
+		case "/wp-login.php":
+			probeHits.Add(1)
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			_, _ = w.Write([]byte(`<meta name="generator" content="WordPress 6.4">`))
+		default:
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			_, _ = w.Write([]byte(`<!doctype html><html><head></head></html>`))
+		}
+	}))
+	defer srv.Close()
+
+	d := New(newTestClient(t), WithFallbackProbes("/robots.txt", "/wp-login.php"))
+	if _, err := d.Detect(context.Background(), page.FromURL(srv.URL)); err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if got := probeHits.Load(); got != 1 {
+		t.Errorf("probe hits = %d, want 1 (walk must stop after first signal)", got)
+	}
+}
+
+func TestDetectFallbackProbeSkippedWhenSeedAlreadyKnowsCMS(t *testing.T) {
+	// Seed already pins the CMS via meta-generator; the detector must not
+	// burn a request on the fallback probe.
+	var probeHits atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/robots.txt" {
+			probeHits.Add(1)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(`<meta name="generator" content="WordPress 6.4">`))
+	}))
+	defer srv.Close()
+
+	d := New(newTestClient(t), WithFallbackProbes("/robots.txt"))
+	if _, err := d.Detect(context.Background(), page.FromURL(srv.URL)); err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if got := probeHits.Load(); got != 0 {
+		t.Errorf("probe hits = %d, want 0 (seed already populated CMS)", got)
+	}
+}
+
+func TestDetectFallbackProbeDoesNotOverwriteSeedSignal(t *testing.T) {
+	// Seed pins Server=nginx via header. A probe response carrying a different
+	// Server value must not overwrite that - seed wins ties.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/robots.txt":
+			w.Header().Set("Server", "apache/2.4.49")
+			w.Header().Set("Content-Type", "text/plain")
+			_, _ = w.Write([]byte("Disallow: /wp-admin/\n"))
+		default:
+			w.Header().Set("Server", "nginx/1.25.0")
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			_, _ = w.Write([]byte(`<!doctype html><html><head></head></html>`))
+		}
+	}))
+	defer srv.Close()
+
+	d := New(newTestClient(t), WithFallbackProbes("/robots.txt"))
+	stack, err := d.Detect(context.Background(), page.FromURL(srv.URL))
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if stack.Server != "nginx" {
+		t.Errorf("Server = %q, want nginx (seed must win over probe)", stack.Server)
+	}
+	if stack.CMS != "wordpress" {
+		t.Errorf("CMS = %q, want wordpress (probe should still lift empty field)", stack.CMS)
+	}
+}
+
+func TestDetectFallbackProbeSwallowsProbeErrors(t *testing.T) {
+	// First probe path 404s, second yields the WordPress signal. The 404 must
+	// not abort the walk; detection still completes.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/dead":
+			http.NotFound(w, r)
+		case "/robots.txt":
+			w.Header().Set("Content-Type", "text/plain")
+			_, _ = w.Write([]byte("Disallow: /wp-admin/\n"))
+		default:
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			_, _ = w.Write([]byte(`<!doctype html><html><head></head></html>`))
+		}
+	}))
+	defer srv.Close()
+
+	d := New(newTestClient(t), WithFallbackProbes("/dead", "/robots.txt"))
+	stack, err := d.Detect(context.Background(), page.FromURL(srv.URL))
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if stack.CMS != "wordpress" {
+		t.Errorf("CMS = %q, want wordpress (404 probe should not abort walk)", stack.CMS)
+	}
+}
+
 func TestStackMatchesAndHas(t *testing.T) {
 	s := Stack{Server: "nginx", Language: "php", CMS: "wordpress"}
 	if !s.Matches("wordpress") {

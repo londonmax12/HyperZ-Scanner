@@ -219,10 +219,11 @@ type StackGated interface {
 // use; the per-host sync.Once ensures only one GET fires per host even
 // under heavy parallel scanning.
 type Detector struct {
-	client       *httpclient.Client
-	cache        sync.Map // host -> *cacheEntry
-	maxBodyBytes int64
-	onDetect     func(host string, stack *Stack)
+	client         *httpclient.Client
+	cache          sync.Map // host -> *cacheEntry
+	maxBodyBytes   int64
+	onDetect       func(host string, stack *Stack)
+	fallbackProbes []string
 }
 
 type cacheEntry struct {
@@ -248,6 +249,29 @@ func WithMaxBodyBytes(n int64) Option {
 // without printing duplicates per crawled page.
 func WithOnDetect(fn func(host string, stack *Stack)) Option {
 	return func(d *Detector) { d.onDetect = fn }
+}
+
+// WithFallbackProbes installs additional host-relative paths to GET when the
+// seed response leaves CMS and Framework empty - the SPA case where the
+// document <head> is rendered client-side and the initial body carries no
+// fingerprint signal. Probes are walked in order, classified, and merged
+// into the seed Stack without overwriting fields the seed already pinned;
+// the walk short-circuits as soon as CMS or Framework gets populated.
+//
+// All probes share the existing per-host sync.Once, so a fingerprint that
+// would have cost one request still costs at most 1+len(probes) on the
+// host's first observation and zero on every subsequent page from that
+// host. Choose paths that look like ordinary client-side fetches at the
+// chosen scan level: /robots.txt is fine at passive, /wp-login.php and the
+// other CMS login URLs look like recon and should be gated to default+.
+func WithFallbackProbes(paths ...string) Option {
+	return func(d *Detector) {
+		for _, p := range paths {
+			if p != "" {
+				d.fallbackProbes = append(d.fallbackProbes, p)
+			}
+		}
+	}
 }
 
 func New(client *httpclient.Client, opts ...Option) *Detector {
@@ -289,21 +313,122 @@ func (d *Detector) Detect(ctx context.Context, p page.Page) (*Stack, error) {
 // detect runs classification on p. If p has no captured headers (e.g. the
 // caller built it from a bare URL) we fetch the URL ourselves; otherwise
 // we reuse what the crawler already saw, which is the common case.
+//
+// When the seed classification leaves CMS and Framework empty and the
+// detector was configured with fallback probes, detect follows up with
+// those probes to lift the SPA case (empty <head>) where the seed alone
+// carries no signal.
 func (d *Detector) detect(ctx context.Context, p page.Page) (*Stack, error) {
+	var stack *Stack
 	if p.Headers != nil {
-		return classifyHeaders(p.Headers, p.Status, p.Body), nil
+		stack = classifyHeaders(p.Headers, p.Status, p.Body)
+	} else {
+		resp, err := d.client.Get(ctx, p.URL)
+		if err != nil {
+			return &Stack{}, err
+		}
+		body, readErr := readClassifyBody(resp, d.maxBodyBytes, true)
+		resp.Body.Close()
+		if readErr != nil {
+			return &Stack{}, readErr
+		}
+		stack = classify(resp, body)
 	}
-	resp, err := d.client.Get(ctx, p.URL)
-	if err != nil {
-		return &Stack{}, err
+	if d.shouldFallback(stack) {
+		d.runFallbackProbes(ctx, p.URL, stack)
 	}
-	defer resp.Body.Close()
+	return stack, nil
+}
 
-	var body []byte
-	if isHTML(resp.Header.Get("Content-Type")) {
-		body, _ = httpclient.ReadBody(resp, d.maxBodyBytes)
+// readClassifyBody reads at most max bytes from resp.Body when the response
+// looks like text we can run body rules against. htmlOnly mirrors the seed
+// path's gate: only text/html bodies feed the rule walk. Probe responses
+// pass htmlOnly=false so robots.txt and sitemap.xml are classified too.
+func readClassifyBody(resp *http.Response, max int64, htmlOnly bool) ([]byte, error) {
+	if htmlOnly && !isHTML(resp.Header.Get("Content-Type")) {
+		return nil, nil
 	}
-	return classify(resp, body), nil
+	return httpclient.ReadBody(resp, max)
+}
+
+// shouldFallback reports whether the seed Stack is thin enough to justify
+// running the fallback probes. We consider CMS and Framework the load-
+// bearing fields - server/CDN/WAF usually show up in headers regardless of
+// SPA rendering, so their absence isn't itself a reason to probe further.
+func (d *Detector) shouldFallback(s *Stack) bool {
+	if len(d.fallbackProbes) == 0 {
+		return false
+	}
+	return s.CMS == "" && s.Framework == ""
+}
+
+// runFallbackProbes walks d.fallbackProbes against seedURL's host, merging
+// any signal each probe yields into stack. The walk stops as soon as the
+// stack is no longer thin (CMS or Framework populated) or ctx cancels.
+// Probe errors are swallowed: the seed Stack we already have is still
+// returned, just without the extra hints.
+func (d *Detector) runFallbackProbes(ctx context.Context, seedURL string, stack *Stack) {
+	base, err := url.Parse(seedURL)
+	if err != nil || base.Host == "" {
+		return
+	}
+	for _, path := range d.fallbackProbes {
+		if ctx.Err() != nil {
+			return
+		}
+		probeURL := base.Scheme + "://" + base.Host + path
+		resp, err := d.client.Get(ctx, probeURL)
+		if err != nil {
+			continue
+		}
+		body, _ := readClassifyBody(resp, d.maxBodyBytes, false)
+		resp.Body.Close()
+		mergeStack(stack, classify(resp, body), "probe:"+path)
+		if !d.shouldFallback(stack) {
+			return
+		}
+	}
+}
+
+// mergeStack folds src into dst, preserving fields dst already populated -
+// the seed pass wins ties so headers from the actual user-supplied URL
+// outrank header echoes from a probe. Signals from src are prefixed so
+// reports can tell probe-derived hints from seed-derived ones.
+func mergeStack(dst, src *Stack, signalPrefix string) {
+	if dst.Server == "" {
+		dst.Server = src.Server
+	}
+	if dst.Language == "" {
+		dst.Language = src.Language
+	}
+	if dst.Framework == "" {
+		dst.Framework = src.Framework
+	}
+	if dst.CMS == "" {
+		dst.CMS = src.CMS
+	}
+	if dst.CDN == "" {
+		dst.CDN = src.CDN
+	}
+	if dst.WAF == "" {
+		dst.WAF = src.WAF
+	}
+	for k, v := range src.Versions {
+		if v == "" {
+			continue
+		}
+		if _, ok := dst.Versions[k]; ok {
+			continue
+		}
+		if dst.Versions == nil {
+			dst.Versions = map[string]string{}
+		}
+		dst.Versions[k] = v
+	}
+	for _, sig := range src.Signals {
+		dst.Signals = append(dst.Signals, signalPrefix+":"+sig)
+	}
+	dst.Confidence = confidenceOf(dst)
 }
 
 // classifyHeaders is the response-less classify path: when we already have

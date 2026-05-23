@@ -278,6 +278,7 @@ func runScan(ctx context.Context, cfg *scanConfig, level checks.Level) int {
 					"stack", stack.Summary(),
 					"confidence", stack.Confidence)
 			}),
+			fingerprint.WithFallbackProbes(fingerprintFallbackProbes(level)...),
 		)
 		scannerOpts = append(scannerOpts, scanner.WithFingerprint(det))
 	} else {
@@ -348,6 +349,24 @@ func runScan(ctx context.Context, cfg *scanConfig, level checks.Level) int {
 		logProxyStats(log, pool, cfg.proxyStatsTopN)
 	}
 	return exit
+}
+
+// fingerprintFallbackProbes returns the host-relative paths the detector
+// should walk when the seed response leaves CMS and Framework empty (the
+// SPA case where the document <head> carries no signal). robots.txt and
+// sitemap.xml are conventional client-discoverable resources, so they run
+// at every level; the CMS login URLs look like recon to defenders and are
+// gated to LevelDefault+.
+func fingerprintFallbackProbes(level checks.Level) []string {
+	probes := []string{"/robots.txt", "/sitemap.xml"}
+	if level >= checks.LevelDefault {
+		probes = append(probes,
+			"/wp-login.php",
+			"/administrator/",
+			"/user/login",
+		)
+	}
+	return probes
 }
 
 // buildScope assembles the scan scope from CLI flags. When --scope-host is

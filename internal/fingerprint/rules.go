@@ -270,7 +270,7 @@ var bodyRules = []bodyRule{
 	},
 	{
 		label: "wp-content-path",
-		re:    regexp.MustCompile(`/wp-(?:content|includes)/`),
+		re:    regexp.MustCompile(`/wp-(?:admin|content|includes)/`),
 		set: func(s *Stack) {
 			s.CMS = "wordpress"
 			s.Language = "php"
