@@ -2,11 +2,13 @@ package checks
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/url"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/londonball/hyperz/internal/page"
@@ -216,12 +218,154 @@ func TestMutateRequestCookie(t *testing.T) {
 	}
 }
 
-func TestMutateRequestUnsupportedLoc(t *testing.T) {
-	for _, loc := range []Loc{LocJSON, LocPath, Loc("totally-fake")} {
-		s := Sink{Method: "GET", URL: "http://example.com/", Loc: loc, Name: "x"}
-		if _, err := s.MutateRequest(context.Background(), "p"); err == nil {
-			t.Errorf("MutateRequest for loc %q returned nil error; want loud failure", loc)
+func TestSinksForSpecOps(t *testing.T) {
+	p := page.Page{
+		URL: "http://example.com/items/1",
+		SpecOps: []page.SpecOp{
+			{
+				Method: "GET",
+				URL:    "http://example.com/items/1",
+				Tpl:    "http://example.com/items/{id}",
+				Params: []page.SpecParam{
+					{In: "path", Name: "id"},
+					{In: "query", Name: "verbose"},
+					{In: "header", Name: "X-Trace"},
+					{In: "cookie", Name: "session"},
+				},
+			},
+			{
+				Method: "POST",
+				URL:    "http://example.com/items/1",
+				Tpl:    "http://example.com/items/{id}",
+				Params: []page.SpecParam{
+					{In: "body", Name: "title"},
+					{In: "formData", Name: "qty"},
+				},
+			},
+		},
+	}
+	got := SinksFor(p)
+	want := map[string]Sink{
+		"GET|http://example.com/items/{id}|path|id":      {Method: "GET", URL: "http://example.com/items/{id}", Loc: LocPath, Name: "id"},
+		"GET|http://example.com/items/1|query|verbose":   {Method: "GET", URL: "http://example.com/items/1", Loc: LocQuery, Name: "verbose"},
+		"GET|http://example.com/items/1|header|X-Trace":  {Method: "GET", URL: "http://example.com/items/1", Loc: LocHeader, Name: "X-Trace"},
+		"GET|http://example.com/items/1|cookie|session":  {Method: "GET", URL: "http://example.com/items/1", Loc: LocCookie, Name: "session"},
+		"POST|http://example.com/items/{id}|path|id":     {Method: "POST", URL: "http://example.com/items/{id}", Loc: LocPath, Name: "id"},
+		"POST|http://example.com/items/1|json|title":     {Method: "POST", URL: "http://example.com/items/1", Loc: LocJSON, Name: "title"},
+		"POST|http://example.com/items/1|form|qty":       {Method: "POST", URL: "http://example.com/items/1", Loc: LocForm, Name: "qty"},
+	}
+	// Want path:id from GET op but POST op has no path:id - check that
+	// only the GET path-sink shows up.
+	delete(want, "POST|http://example.com/items/{id}|path|id")
+	gotMap := map[string]Sink{}
+	for _, s := range got {
+		k := s.Method + "|" + s.URL + "|" + string(s.Loc) + "|" + s.Name
+		gotMap[k] = s
+	}
+	if !reflect.DeepEqual(gotMap, want) {
+		t.Fatalf("\ngot:  %+v\nwant: %+v", gotMap, want)
+	}
+}
+
+func TestSinksForSpecOpsMultiplePathParams(t *testing.T) {
+	// Two path params on one URL: each becomes its own LocPath sink
+	// whose URL keeps only its own placeholder while the other path
+	// param is filled to "1".
+	p := page.Page{
+		URL: "http://example.com/u/1/items/1",
+		SpecOps: []page.SpecOp{{
+			Method: "GET",
+			URL:    "http://example.com/u/1/items/1",
+			Tpl:    "http://example.com/u/{userId}/items/{itemId}",
+			Params: []page.SpecParam{
+				{In: "path", Name: "userId"},
+				{In: "path", Name: "itemId"},
+			},
+		}},
+	}
+	got := SinksFor(p)
+	if len(got) != 2 {
+		t.Fatalf("want 2 path sinks, got %+v", got)
+	}
+	urlByName := map[string]string{}
+	for _, s := range got {
+		if s.Loc != LocPath {
+			t.Fatalf("expected LocPath, got %+v", s)
 		}
+		urlByName[s.Name] = s.URL
+	}
+	if u := urlByName["userId"]; u != "http://example.com/u/{userId}/items/1" {
+		t.Errorf("userId sink URL = %q", u)
+	}
+	if u := urlByName["itemId"]; u != "http://example.com/u/1/items/{itemId}" {
+		t.Errorf("itemId sink URL = %q", u)
+	}
+}
+
+func TestMutateRequestJSON(t *testing.T) {
+	s := Sink{Method: "POST", URL: "http://example.com/items", Loc: LocJSON, Name: "title"}
+	req, err := s.MutateRequest(context.Background(), "p\"yld")
+	if err != nil {
+		t.Fatalf("MutateRequest: %v", err)
+	}
+	if got := req.Header.Get("Content-Type"); got != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", got)
+	}
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	var got map[string]string
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("body not valid JSON: %v (raw=%q)", err, string(body))
+	}
+	if got["title"] != "p\"yld" {
+		t.Errorf("title = %q, want payload", got["title"])
+	}
+}
+
+func TestMutateRequestPath(t *testing.T) {
+	s := Sink{Method: "GET", URL: "http://example.com/items/{id}", Loc: LocPath, Name: "id"}
+	req, err := s.MutateRequest(context.Background(), "999")
+	if err != nil {
+		t.Fatalf("MutateRequest: %v", err)
+	}
+	if got := req.URL.String(); got != "http://example.com/items/999" {
+		t.Errorf("URL = %q, want substituted path", got)
+	}
+}
+
+func TestMutateRequestPathEscapesPayload(t *testing.T) {
+	s := Sink{Method: "GET", URL: "http://example.com/items/{id}", Loc: LocPath, Name: "id"}
+	req, err := s.MutateRequest(context.Background(), "../etc/passwd")
+	if err != nil {
+		t.Fatalf("MutateRequest: %v", err)
+	}
+	// PathEscape escapes "/" so the traversal stays a single path segment.
+	if strings.Contains(req.URL.Path, "..") && strings.Contains(req.URL.RawPath, "/") {
+		// The escaped form should not let "/" through.
+	}
+	if !strings.Contains(req.URL.String(), "%2F") {
+		t.Errorf("URL %q did not escape `/` in payload", req.URL.String())
+	}
+}
+
+func TestMutateRequestPathMissingPlaceholder(t *testing.T) {
+	// Defensive: if a path sink's URL never carried the placeholder
+	// (caller bug), MutateRequest should fail loudly instead of sending
+	// the unsubstituted URL to the target.
+	s := Sink{Method: "GET", URL: "http://example.com/items/1", Loc: LocPath, Name: "id"}
+	if _, err := s.MutateRequest(context.Background(), "p"); err == nil {
+		t.Fatal("expected error when URL has no placeholder")
+	}
+}
+
+func TestMutateRequestUnsupportedLoc(t *testing.T) {
+	// LocJSON / LocPath are wired now; only an unknown loc constant
+	// should still fail loudly so callers don't silently drop coverage.
+	s := Sink{Method: "GET", URL: "http://example.com/", Loc: Loc("totally-fake"), Name: "x"}
+	if _, err := s.MutateRequest(context.Background(), "p"); err == nil {
+		t.Errorf("MutateRequest for loc %q returned nil error; want loud failure", s.Loc)
 	}
 }
 

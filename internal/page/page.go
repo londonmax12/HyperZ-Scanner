@@ -36,6 +36,13 @@ type Page struct {
 	Body    []byte
 	Forms   []Form
 	Fetched bool
+	// SpecOps is the input surface the crawler harvested from an OpenAPI
+	// or Swagger document whose `paths` resolved to this URL. Crawl emits
+	// one Page per fetched URL, but a spec may describe multiple HTTP
+	// methods (GET + POST + ...) at the same URL with different inputs;
+	// all of them ride here so input-fuzzing checks can fan out per
+	// operation. Empty for pages discovered by crawling HTML.
+	SpecOps []SpecOp
 }
 
 // Form captures one <form> element discovered on a page.
@@ -61,6 +68,38 @@ type Form struct {
 type FormInput struct {
 	Name  string
 	Type  string
+	Value string
+}
+
+// SpecOp is one OpenAPI / Swagger operation whose request URL the
+// crawler also planned to fetch. Method is uppercase (GET / POST / ...).
+// URL is the request URL with all `{param}` path placeholders filled to
+// "1" - the same form Page.URL takes after the crawler submits it. Tpl
+// is the original path-templated URL with `{name}` placeholders still
+// present, used by input-fuzzing checks so a path-parameter probe can
+// substitute its own value into the right segment.
+//
+// Params is the inventory of named inputs the spec declared for this
+// operation: query, path, header, cookie, and body (JSON or form). It
+// is what `checks.SinksFor` mines to produce sinks beyond the query
+// and form surface visible from HTML alone.
+type SpecOp struct {
+	Method string
+	URL    string
+	Tpl    string
+	Params []SpecParam
+}
+
+// SpecParam is one named input on a SpecOp. In matches the OpenAPI
+// `in:` field ("query", "path", "header", "cookie", "body", "formData")
+// and is left as-is so callers can apply their own Loc mapping. Name is
+// the parameter name; for body params (in: body / formData) it's the
+// top-level JSON / form field name extracted from the schema, not the
+// schema name. Value is an example or default value if the spec gave
+// one, "" otherwise.
+type SpecParam struct {
+	In    string
+	Name  string
 	Value string
 }
 

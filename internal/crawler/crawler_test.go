@@ -363,6 +363,85 @@ func TestCrawlAPIDiscoveryDisabledSkipsNonHTML(t *testing.T) {
 	}
 }
 
+func TestCrawlAPIDiscoveryAttachesSpecOpsToEmittedPages(t *testing.T) {
+	// The whole point of the wiring: when a spec is parsed, the input
+	// inventory it declared for each operation must ride on the Page
+	// emitted for that operation's URL. Without this, SinksFor only
+	// sees query strings on the URL and forms on HTML, and the params
+	// the spec told us about (path / header / json body) are lost.
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `<p>home</p>`)
+	})
+	mux.HandleFunc("/openapi.json", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{
+			"openapi":"3.0.0",
+			"paths":{
+				"/items/{id}":{
+					"get":{
+						"parameters":[
+							{"name":"id","in":"path"},
+							{"name":"verbose","in":"query"}
+						]
+					},
+					"post":{
+						"parameters":[{"name":"id","in":"path"}],
+						"requestBody":{
+							"content":{
+								"application/json":{
+									"schema":{"properties":{"title":{"type":"string"}}}
+								}
+							}
+						}
+					}
+				}
+			}
+		}`)
+	})
+	// The crawler will GET each spec-derived URL too; respond cheaply.
+	mux.HandleFunc("/items/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{}`)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New(newCrawlerClient(), Config{
+		Scope:        seedScope(t, 2, srv.URL),
+		APIDiscovery: true,
+	})
+	out := make(chan page.Page, 64)
+	if err := c.Crawl(context.Background(), []string{srv.URL + "/"}, out); err != nil {
+		t.Fatalf("Crawl: %v", err)
+	}
+
+	var target *page.Page
+	for p := range out {
+		if strings.HasSuffix(p.URL, "/items/1") {
+			pp := p
+			target = &pp
+		}
+	}
+	if target == nil {
+		t.Fatal("no Page emitted for /items/1")
+	}
+	if len(target.SpecOps) != 2 {
+		t.Fatalf("want 2 SpecOps on /items/1, got %d: %+v", len(target.SpecOps), target.SpecOps)
+	}
+	methods := map[string]bool{}
+	for _, op := range target.SpecOps {
+		methods[op.Method] = true
+		if !strings.HasSuffix(op.Tpl, "/items/{id}") {
+			t.Errorf("op %s missing path template, got Tpl=%q", op.Method, op.Tpl)
+		}
+	}
+	if !methods["GET"] || !methods["POST"] {
+		t.Errorf("expected GET and POST SpecOps, got %v", methods)
+	}
+}
+
 func TestCrawlDedupesAcrossFragments(t *testing.T) {
 	// /home is linked from /, /a, /b → must still be emitted only once.
 	mux := http.NewServeMux()

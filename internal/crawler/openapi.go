@@ -7,6 +7,8 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+
+	"github.com/londonball/hyperz/internal/page"
 )
 
 // wellKnownSpecPaths is the set of conventional URLs that frameworks expose
@@ -53,10 +55,42 @@ func looksLikeSpec(contentType, urlPath string) bool {
 // `paths` map. specURL anchors relative server URLs and provides a
 // fallback origin when the spec omits servers/host. Returns nil if body
 // isn't a recognizable spec.
+//
+// Callers that need per-operation parameter inventory (input-fuzzing
+// checks) should use extractAPIOperations; this helper is kept as a
+// thin URL view for the crawler's submit loop and existing tests.
 func extractAPIEndpoints(body []byte, specURL *url.URL) []string {
-	servers, paths := parseJSONSpec(body)
+	ops := extractAPIOperations(body, specURL)
+	if len(ops) == 0 {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(ops))
+	for _, op := range ops {
+		if _, ok := seen[op.URL]; ok {
+			continue
+		}
+		seen[op.URL] = struct{}{}
+		out = append(out, op.URL)
+	}
+	return out
+}
+
+// extractAPIOperations parses body as an OpenAPI 3 or Swagger 2 document
+// and returns one entry per documented operation, complete with its
+// declared parameter inventory. The YAML path is URL-only - we don't
+// run a YAML library here, and the hand-rolled scanner only descends
+// far enough to extract `paths:` keys. Specs served as JSON give full
+// parameter coverage (query / path / header / cookie / body / formData).
+//
+// Each operation's URL is path-templated with "1" to be reachable; the
+// raw `{param}` template is preserved on op.Tpl so callers building
+// path sinks can substitute their own value into the right segment.
+func extractAPIOperations(body []byte, specURL *url.URL) []page.SpecOp {
+	servers, paths, jsonOps := parseJSONSpec(body)
 	if len(paths) == 0 {
 		servers, paths = parseYAMLSpec(body)
+		jsonOps = nil
 	}
 	if len(paths) == 0 {
 		return nil
@@ -64,35 +98,76 @@ func extractAPIEndpoints(body []byte, specURL *url.URL) []string {
 	if len(servers) == 0 {
 		servers = []string{specOrigin(specURL)}
 	}
-	return combineServersAndPaths(servers, paths, specURL)
+	return combineServersAndOperations(servers, paths, jsonOps, specURL)
 }
 
-// combineServersAndPaths joins each server URL with each path template,
-// substituting `{param}` placeholders so the resulting URL is reachable.
-// Results are deduped to avoid the cartesian product blowing up when a
-// spec lists multiple equivalent servers.
-func combineServersAndPaths(servers, paths []string, specURL *url.URL) []string {
-	seen := map[string]struct{}{}
-	out := make([]string, 0, len(servers)*len(paths))
+// combineServersAndOperations joins each server URL with each path
+// template into one page.SpecOp per (server, path, method) triple,
+// substituting `{param}` placeholders so the URL is reachable.
+// jsonOps may be nil (YAML path) - the result then carries a single
+// synthetic GET operation per path with no params, matching the old
+// URL-only behavior. Results are deduped on (Method, URL).
+func combineServersAndOperations(servers, paths []string, jsonOps map[string][]apiOp, specURL *url.URL) []page.SpecOp {
+	type key struct{ method, url string }
+	seen := map[key]int{}
+	var out []page.SpecOp
 	for _, s := range servers {
 		base, err := resolveServerURL(s, specURL)
 		if err != nil {
 			continue
 		}
 		for _, p := range paths {
-			u := *base
-			u.Path = joinPath(base.Path, fillPathTemplate(p))
-			u.RawQuery = ""
-			u.Fragment = ""
-			full := u.String()
-			if _, ok := seen[full]; ok {
-				continue
+			tplURL := joinedURL(base, p, false)
+			fullURL := joinedURL(base, p, true)
+			ops := jsonOps[p]
+			if len(ops) == 0 {
+				ops = []apiOp{{Method: "GET"}}
 			}
-			seen[full] = struct{}{}
-			out = append(out, full)
+			for _, op := range ops {
+				k := key{op.Method, fullURL}
+				if _, ok := seen[k]; ok {
+					continue
+				}
+				seen[k] = len(out)
+				out = append(out, page.SpecOp{
+					Method: op.Method,
+					URL:    fullURL,
+					Tpl:    tplURL,
+					Params: op.Params,
+				})
+			}
 		}
 	}
 	return out
+}
+
+// joinedURL returns the absolute URL for path p anchored at base.
+// fillTemplate=true replaces `{param}` segments with "1" via the URL
+// machinery so escaping matches the request the crawler will send.
+// fillTemplate=false skips url.URL.String() entirely and concatenates
+// pieces so OpenAPI `{param}` placeholders survive unescaped - the
+// path-templated URL is consumed by SinksFor, not by an HTTP request,
+// and percent-encoded braces would break placeholder substitution.
+func joinedURL(base *url.URL, p string, fillTemplate bool) string {
+	if fillTemplate {
+		u := *base
+		u.Path = joinPath(base.Path, fillPathTemplate(p))
+		u.RawQuery = ""
+		u.Fragment = ""
+		return u.String()
+	}
+	prefix := base.Scheme + "://" + base.Host
+	return prefix + joinPath(base.Path, p)
+}
+
+// apiOp is the internal per-operation record assembled from one HTTP
+// method entry under a path item. Method is uppercase. Params is the
+// merged parameter list (path-item-level + operation-level) plus any
+// body/formData fields extracted from requestBody (OAS3) or `in: body`
+// parameters (Swagger 2).
+type apiOp struct {
+	Method string
+	Params []page.SpecParam
 }
 
 func resolveServerURL(server string, specURL *url.URL) (*url.URL, error) {
@@ -149,40 +224,215 @@ func specOrigin(u *url.URL) string {
 // --- JSON ---
 
 type jsonSpec struct {
-	Servers  []jsonServer               `json:"servers"`
-	Paths    map[string]json.RawMessage `json:"paths"`
-	Host     string                     `json:"host"`
-	BasePath string                     `json:"basePath"`
-	Schemes  []string                   `json:"schemes"`
+	Servers  []jsonServer            `json:"servers"`
+	Paths    map[string]jsonPathItem `json:"paths"`
+	Host     string                  `json:"host"`
+	BasePath string                  `json:"basePath"`
+	Schemes  []string                `json:"schemes"`
 }
 
 type jsonServer struct {
 	URL string `json:"url"`
 }
 
-func parseJSONSpec(body []byte) (servers, paths []string) {
+// jsonPathItem mirrors the OpenAPI / Swagger path-item shape. Unknown
+// keys (summary, description, $ref, servers, etc.) are ignored by
+// encoding/json. Parameters declared at the path-item level apply to
+// every operation under it; we merge them into each operation's params.
+type jsonPathItem struct {
+	Parameters []jsonParam     `json:"parameters"`
+	Get        *jsonOperation  `json:"get"`
+	Post       *jsonOperation  `json:"post"`
+	Put        *jsonOperation  `json:"put"`
+	Delete     *jsonOperation  `json:"delete"`
+	Patch      *jsonOperation  `json:"patch"`
+	Head       *jsonOperation  `json:"head"`
+	Options    *jsonOperation  `json:"options"`
+}
+
+type jsonOperation struct {
+	Parameters  []jsonParam      `json:"parameters"`
+	RequestBody *jsonRequestBody `json:"requestBody"` // OAS3
+}
+
+// jsonParam covers both OAS3 (where in: body never appears - body lives
+// on requestBody) and Swagger 2 (where in: body / formData carry the
+// body inputs inline). Schema is parsed lazily because its shape varies
+// by `in:` and we only walk it for body params.
+type jsonParam struct {
+	Name    string          `json:"name"`
+	In      string          `json:"in"`
+	Example string          `json:"example"`
+	Schema  json.RawMessage `json:"schema"`
+}
+
+type jsonRequestBody struct {
+	Content map[string]jsonMediaType `json:"content"`
+}
+
+type jsonMediaType struct {
+	Schema json.RawMessage `json:"schema"`
+}
+
+// jsonSchema is the slice of OpenAPI's schema we care about: top-level
+// property names. We deliberately do not recurse into nested objects -
+// the goal is to fuzz the request body's surface, and most active checks
+// just need a flat list of field names with reasonable mutation targets.
+type jsonSchema struct {
+	Properties map[string]json.RawMessage `json:"properties"`
+}
+
+// parseJSONSpec returns the document's servers, ordered path keys, and
+// per-path operations. paths preserves only keys that start with "/"
+// (real route templates, not $refs or extension keys). ops is keyed by
+// the path string and lists every documented method on it. Returns all
+// nil when body isn't a recognizable JSON spec.
+func parseJSONSpec(body []byte) (servers, paths []string, ops map[string][]apiOp) {
 	body = bytes.TrimSpace(body)
 	if len(body) == 0 || body[0] != '{' {
-		return nil, nil
+		return nil, nil, nil
 	}
 	var s jsonSpec
 	if err := json.Unmarshal(body, &s); err != nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if len(s.Paths) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	paths = make([]string, 0, len(s.Paths))
-	for p := range s.Paths {
-		if strings.HasPrefix(p, "/") {
-			paths = append(paths, p)
+	ops = make(map[string][]apiOp, len(s.Paths))
+	for p, item := range s.Paths {
+		if !strings.HasPrefix(p, "/") {
+			continue
 		}
+		paths = append(paths, p)
+		ops[p] = pathItemOperations(item)
 	}
 	if len(paths) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	servers = collectJSONServers(&s)
-	return servers, paths
+	return servers, paths, ops
+}
+
+// pathItemOperations expands one path item into one apiOp per declared
+// HTTP method, merging path-item-level parameters with operation-level
+// parameters and walking the requestBody (OAS3) or in:body params
+// (Swagger 2) for top-level JSON / formData field names.
+func pathItemOperations(item jsonPathItem) []apiOp {
+	type methodOp struct {
+		name string
+		op   *jsonOperation
+	}
+	methods := []methodOp{
+		{"GET", item.Get},
+		{"POST", item.Post},
+		{"PUT", item.Put},
+		{"DELETE", item.Delete},
+		{"PATCH", item.Patch},
+		{"HEAD", item.Head},
+		{"OPTIONS", item.Options},
+	}
+	var out []apiOp
+	for _, m := range methods {
+		if m.op == nil {
+			continue
+		}
+		params := mergeParams(item.Parameters, m.op.Parameters)
+		params = append(params, requestBodyParams(m.op.RequestBody)...)
+		out = append(out, apiOp{Method: m.name, Params: params})
+	}
+	return out
+}
+
+// mergeParams produces the combined parameter list for one operation,
+// with operation-level params shadowing path-item-level params that
+// share the same (in, name) - matches the OpenAPI override rule.
+// in:body / formData entries are expanded into one SpecParam per
+// top-level property of their schema (Swagger 2 body / form surface).
+// Entries missing a name or `in:` are dropped.
+func mergeParams(itemLevel, opLevel []jsonParam) []page.SpecParam {
+	type key struct{ in, name string }
+	seen := map[key]struct{}{}
+	var out []page.SpecParam
+	add := func(ps []jsonParam) {
+		for _, p := range ps {
+			if p.In == "" {
+				continue
+			}
+			if p.In == "body" {
+				// Swagger 2 body param: walk the schema for top-level
+				// JSON field names. Name on the param itself is the
+				// schema name (e.g. "user"), not a wire field.
+				for _, fp := range jsonSchemaProperties(p.Schema, "body") {
+					k := key{fp.In, fp.Name}
+					if _, ok := seen[k]; ok {
+						continue
+					}
+					seen[k] = struct{}{}
+					out = append(out, fp)
+				}
+				continue
+			}
+			if p.Name == "" {
+				continue
+			}
+			k := key{p.In, p.Name}
+			if _, ok := seen[k]; ok {
+				continue
+			}
+			seen[k] = struct{}{}
+			out = append(out, page.SpecParam{In: p.In, Name: p.Name, Value: p.Example})
+		}
+	}
+	// Operation-level first so it wins the (in,name) shadow check.
+	add(opLevel)
+	add(itemLevel)
+	return out
+}
+
+// requestBodyParams turns an OAS3 requestBody into SpecParams, one per
+// top-level property of the JSON schema (or form-urlencoded schema).
+// Other media types are ignored - they're either binary (multipart,
+// octet-stream) or text the fuzzer would need a body template for,
+// neither of which the sink layer handles yet.
+func requestBodyParams(rb *jsonRequestBody) []page.SpecParam {
+	if rb == nil {
+		return nil
+	}
+	var out []page.SpecParam
+	if mt, ok := rb.Content["application/json"]; ok {
+		out = append(out, jsonSchemaProperties(mt.Schema, "body")...)
+	}
+	if mt, ok := rb.Content["application/x-www-form-urlencoded"]; ok {
+		out = append(out, jsonSchemaProperties(mt.Schema, "formData")...)
+	}
+	return out
+}
+
+// jsonSchemaProperties returns one SpecParam per top-level property
+// name in schema. in is stamped onto each returned param so callers
+// don't have to remember whether they walked a body or form schema.
+// Nested object / array schemas are intentionally not flattened.
+func jsonSchemaProperties(schema json.RawMessage, in string) []page.SpecParam {
+	if len(schema) == 0 {
+		return nil
+	}
+	var s jsonSchema
+	if err := json.Unmarshal(schema, &s); err != nil {
+		return nil
+	}
+	if len(s.Properties) == 0 {
+		return nil
+	}
+	out := make([]page.SpecParam, 0, len(s.Properties))
+	for name := range s.Properties {
+		if name == "" {
+			continue
+		}
+		out = append(out, page.SpecParam{In: in, Name: name})
+	}
+	return out
 }
 
 func collectJSONServers(s *jsonSpec) []string {

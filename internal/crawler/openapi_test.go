@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/londonball/hyperz/internal/page"
 )
 
 func mustURL(t *testing.T, raw string) *url.URL {
@@ -262,6 +264,185 @@ func TestJoinPath(t *testing.T) {
 		if got := joinPath(c.a, c.b); got != c.want {
 			t.Errorf("joinPath(%q,%q) = %q, want %q", c.a, c.b, got, c.want)
 		}
+	}
+}
+
+// findOp locates the op in ops with the given Method and URL or fails.
+func findOp(t *testing.T, ops []page.SpecOp, method, urlStr string) page.SpecOp {
+	t.Helper()
+	for _, op := range ops {
+		if op.Method == method && op.URL == urlStr {
+			return op
+		}
+	}
+	t.Fatalf("no op %s %s in %+v", method, urlStr, ops)
+	return page.SpecOp{}
+}
+
+func paramSet(params []page.SpecParam) map[string]string {
+	out := make(map[string]string, len(params))
+	for _, p := range params {
+		out[p.In+":"+p.Name] = p.Value
+	}
+	return out
+}
+
+func TestExtractAPIOperationsParametersByIn(t *testing.T) {
+	body := []byte(`{
+		"openapi": "3.0.0",
+		"servers": [{"url": "https://api.example.com"}],
+		"paths": {
+			"/items/{id}": {
+				"parameters": [
+					{"name": "id", "in": "path"}
+				],
+				"get": {
+					"parameters": [
+						{"name": "verbose", "in": "query"},
+						{"name": "X-Trace", "in": "header"},
+						{"name": "session", "in": "cookie"}
+					]
+				},
+				"post": {
+					"parameters": [
+						{"name": "id", "in": "path"}
+					],
+					"requestBody": {
+						"content": {
+							"application/json": {
+								"schema": {
+									"properties": {
+										"title": {"type": "string"},
+										"qty":   {"type": "integer"}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}`)
+	ops := extractAPIOperations(body, mustURL(t, "https://example.com/openapi.json"))
+	if len(ops) != 2 {
+		t.Fatalf("want 2 ops, got %d: %+v", len(ops), ops)
+	}
+
+	get := findOp(t, ops, "GET", "https://api.example.com/items/1")
+	if get.Tpl != "https://api.example.com/items/{id}" {
+		t.Errorf("GET Tpl = %q", get.Tpl)
+	}
+	wantGet := map[string]string{
+		"path:id": "", "query:verbose": "", "header:X-Trace": "", "cookie:session": "",
+	}
+	if got := paramSet(get.Params); !reflect.DeepEqual(got, wantGet) {
+		t.Errorf("GET params = %v, want %v", got, wantGet)
+	}
+
+	post := findOp(t, ops, "POST", "https://api.example.com/items/1")
+	postParams := paramSet(post.Params)
+	if _, ok := postParams["path:id"]; !ok {
+		t.Errorf("POST missing path:id (operation override of path-item param), got %v", postParams)
+	}
+	if _, ok := postParams["body:title"]; !ok {
+		t.Errorf("POST missing body:title from requestBody, got %v", postParams)
+	}
+	if _, ok := postParams["body:qty"]; !ok {
+		t.Errorf("POST missing body:qty from requestBody, got %v", postParams)
+	}
+}
+
+func TestExtractAPIOperationsSwagger2Body(t *testing.T) {
+	// Swagger 2 carries body fields inline on the parameter as a schema.
+	body := []byte(`{
+		"swagger": "2.0",
+		"host": "api.example.com",
+		"basePath": "/v2",
+		"schemes": ["https"],
+		"paths": {
+			"/users": {
+				"post": {
+					"parameters": [
+						{"name": "user", "in": "body", "schema": {
+							"properties": {
+								"username": {"type": "string"},
+								"email":    {"type": "string"}
+							}
+						}},
+						{"name": "X-CSRF", "in": "header"}
+					]
+				}
+			}
+		}
+	}`)
+	ops := extractAPIOperations(body, mustURL(t, "https://example.com/swagger.json"))
+	if len(ops) != 1 {
+		t.Fatalf("want 1 op, got %d: %+v", len(ops), ops)
+	}
+	op := ops[0]
+	if op.Method != "POST" || op.URL != "https://api.example.com/v2/users" {
+		t.Fatalf("unexpected op: %+v", op)
+	}
+	got := paramSet(op.Params)
+	want := map[string]string{
+		"body:username": "", "body:email": "", "header:X-CSRF": "",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("params = %v, want %v", got, want)
+	}
+}
+
+func TestExtractAPIOperationsFormUrlEncoded(t *testing.T) {
+	body := []byte(`{
+		"openapi": "3.0.0",
+		"paths": {
+			"/login": {
+				"post": {
+					"requestBody": {
+						"content": {
+							"application/x-www-form-urlencoded": {
+								"schema": {
+									"properties": {
+										"user": {"type": "string"},
+										"pass": {"type": "string"}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}`)
+	ops := extractAPIOperations(body, mustURL(t, "https://example.com/openapi.json"))
+	if len(ops) != 1 {
+		t.Fatalf("want 1 op, got %d", len(ops))
+	}
+	got := paramSet(ops[0].Params)
+	want := map[string]string{"formData:user": "", "formData:pass": ""}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("params = %v, want %v", got, want)
+	}
+}
+
+func TestExtractAPIOperationsYAMLHasNoParams(t *testing.T) {
+	// YAML extraction is URL-only by design - the hand-rolled scanner
+	// doesn't recurse into operation bodies. This pins the contract so
+	// the wrapper above doesn't accidentally start emitting partial info.
+	body := []byte(`openapi: 3.0.0
+paths:
+  /items:
+    get:
+      parameters:
+        - name: x
+          in: query
+`)
+	ops := extractAPIOperations(body, mustURL(t, "https://example.com/openapi.yaml"))
+	if len(ops) != 1 {
+		t.Fatalf("want 1 op, got %d", len(ops))
+	}
+	if ops[0].Method != "GET" || len(ops[0].Params) != 0 {
+		t.Errorf("YAML path expected GET op with empty Params, got %+v", ops[0])
 	}
 }
 

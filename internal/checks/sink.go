@@ -2,9 +2,11 @@ package checks
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -110,6 +112,24 @@ func SinksFor(p page.Page) []Sink {
 		}
 	}
 
+	for _, op := range p.SpecOps {
+		method := strings.ToUpper(op.Method)
+		if method == "" {
+			method = http.MethodGet
+		}
+		for _, prm := range op.Params {
+			loc, ok := specInToLoc(prm.In)
+			if !ok {
+				continue
+			}
+			sinkURL := op.URL
+			if loc == LocPath {
+				sinkURL = pathSinkURL(op.Tpl, prm.Name)
+			}
+			add(Sink{Method: method, URL: sinkURL, Loc: loc, Name: prm.Name, Value: prm.Value})
+		}
+	}
+
 	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].URL != out[j].URL {
 			return out[i].URL < out[j].URL
@@ -176,10 +196,75 @@ func (s Sink) MutateRequest(ctx context.Context, payload string) (*http.Request,
 		}
 		req.AddCookie(&http.Cookie{Name: s.Name, Value: payload})
 		return req, nil
-	case LocJSON, LocPath:
-		return nil, fmt.Errorf("sink loc %q is not yet wired", s.Loc)
+	case LocJSON:
+		body, err := json.Marshal(map[string]string{s.Name: payload})
+		if err != nil {
+			return nil, fmt.Errorf("marshal json body: %w", err)
+		}
+		req, err := http.NewRequestWithContext(ctx, method, s.URL, strings.NewReader(string(body)))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		return req, nil
+	case LocPath:
+		// s.URL still carries a `{Name}` placeholder for this sink and
+		// "1" wherever other path params were templated; substitute the
+		// payload (URL-escaped) into our placeholder.
+		placeholder := "{" + s.Name + "}"
+		if !strings.Contains(s.URL, placeholder) {
+			return nil, fmt.Errorf("path sink %q: url %q missing placeholder %s", s.Name, s.URL, placeholder)
+		}
+		swapped := strings.Replace(s.URL, placeholder, url.PathEscape(payload), 1)
+		return http.NewRequestWithContext(ctx, method, swapped, nil)
 	default:
 		return nil, fmt.Errorf("unknown sink loc %q", s.Loc)
 	}
+}
+
+// specInToLoc maps an OpenAPI / Swagger `in:` value to a Sink Loc.
+// The mapping is intentionally narrow - unknown / unsupported values
+// (e.g. "matrix", future additions) are dropped at the SinksFor layer
+// so the check fleet doesn't choke on them.
+func specInToLoc(in string) (Loc, bool) {
+	switch strings.ToLower(in) {
+	case "query":
+		return LocQuery, true
+	case "path":
+		return LocPath, true
+	case "header":
+		return LocHeader, true
+	case "cookie":
+		return LocCookie, true
+	case "body":
+		return LocJSON, true
+	case "formdata":
+		return LocForm, true
+	default:
+		return "", false
+	}
+}
+
+// pathParamRe matches an OpenAPI path placeholder, e.g. `{id}`.
+var pathParamRe = regexp.MustCompile(`\{([^{}]+)\}`)
+
+// pathSinkURL returns the templated URL with every `{name}` placeholder
+// other than the target's filled to "1", leaving `{target}` in place so
+// MutateRequest's LocPath case can swap our payload into the correct
+// segment. If tpl carries no placeholders (no path params) or doesn't
+// contain `{target}`, the result still ends with `{target}` appended in
+// an unreachable form - callers tolerate the missing-placeholder error
+// MutateRequest then returns.
+func pathSinkURL(tpl, target string) string {
+	if tpl == "" {
+		return ""
+	}
+	keep := "{" + target + "}"
+	return pathParamRe.ReplaceAllStringFunc(tpl, func(m string) string {
+		if m == keep {
+			return m
+		}
+		return "1"
+	})
 }
 

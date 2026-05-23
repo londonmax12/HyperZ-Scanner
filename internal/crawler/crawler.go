@@ -86,6 +86,16 @@ func (c *Crawler) Crawl(ctx context.Context, seeds []string, out chan<- page.Pag
 		queued    atomic.Int64
 		closeOnce sync.Once
 		visited   sync.Map
+		// specOpsMu guards specOps. specOps maps a spec-derived URL to
+		// the operations a parsed OpenAPI / Swagger document declared
+		// for it. The map is written when a worker parses a spec body
+		// (one or more operations per documented URL) and read when a
+		// worker later emits the Page for that URL, so the input-fuzzing
+		// surface declared by the spec rides on the Page that downstream
+		// checks already see. Concurrent workers may parse different
+		// specs that overlap on a URL; appends merge their contributions.
+		specOpsMu sync.Mutex
+		specOps   = map[string][]page.SpecOp{}
 	)
 
 	closeWork := func() { closeOnce.Do(func() { close(work) }) }
@@ -96,6 +106,35 @@ func (c *Crawler) Crawl(ctx context.Context, seeds []string, out chan<- page.Pag
 		if pending.Add(-1) == 0 {
 			closeWork()
 		}
+	}
+
+	// recordSpecOps registers the operations a parsed spec declared at
+	// canonical URL, keyed by the URL the crawler will submit. Called
+	// before submit() so the next worker to fetch this URL sees the
+	// ops when it goes to emit. Overlapping specs (rare; same URL from
+	// two different documents) accumulate rather than replace.
+	recordSpecOps := func(canonical string, ops []page.SpecOp) {
+		if len(ops) == 0 {
+			return
+		}
+		specOpsMu.Lock()
+		specOps[canonical] = append(specOps[canonical], ops...)
+		specOpsMu.Unlock()
+	}
+
+	// takeSpecOps returns and removes any spec ops registered for the
+	// URL. The map entry is dropped because each URL gets emitted once;
+	// keeping the entry around would just grow the map for the rest of
+	// the crawl.
+	takeSpecOps := func(canonical string) []page.SpecOp {
+		specOpsMu.Lock()
+		defer specOpsMu.Unlock()
+		ops, ok := specOps[canonical]
+		if !ok {
+			return nil
+		}
+		delete(specOps, canonical)
+		return ops
 	}
 
 	var submit func(rawurl string, depth int)
@@ -134,7 +173,7 @@ func (c *Crawler) Crawl(ctx context.Context, seeds []string, out chan<- page.Pag
 		go func() {
 			defer wg.Done()
 			for it := range work {
-				c.process(ctx, it, out, submit)
+				c.process(ctx, it, out, submit, recordSpecOps, takeSpecOps)
 				finish()
 			}
 		}()
@@ -170,10 +209,22 @@ func (c *Crawler) Crawl(ctx context.Context, seeds []string, out chan<- page.Pag
 	return ctx.Err()
 }
 
-func (c *Crawler) process(ctx context.Context, it item, out chan<- page.Page, submit func(string, int)) {
+func (c *Crawler) process(
+	ctx context.Context,
+	it item,
+	out chan<- page.Page,
+	submit func(string, int),
+	recordSpecOps func(string, []page.SpecOp),
+	takeSpecOps func(string) []page.SpecOp,
+) {
 	// emit drops a Page onto out, respecting ctx cancellation. Returns
 	// false if the send was abandoned so the caller can stop processing.
+	// Any spec ops registered for this URL by an earlier spec parse are
+	// attached just before the send so input-fuzzing checks see them.
 	emit := func(p page.Page) bool {
+		if ops := takeSpecOps(p.URL); len(ops) > 0 {
+			p.SpecOps = ops
+		}
 		select {
 		case <-ctx.Done():
 			return false
@@ -260,7 +311,15 @@ func (c *Crawler) process(ctx context.Context, it item, out chan<- page.Page, su
 	if !c.cfg.Scope.AllowsDepth(it.depth + 1) {
 		return
 	}
-	for _, link := range extractAPIEndpoints(body, base) {
-		submit(link, it.depth+1)
+	// Group ops by URL so the per-URL bucket lands as one stash. submit
+	// dedups on URL, so we only push each distinct URL once even when
+	// the spec describes multiple methods on it.
+	byURL := map[string][]page.SpecOp{}
+	for _, op := range extractAPIOperations(body, base) {
+		byURL[op.URL] = append(byURL[op.URL], op)
+	}
+	for u, ops := range byURL {
+		recordSpecOps(u, ops)
+		submit(u, it.depth+1)
 	}
 }
