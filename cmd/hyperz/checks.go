@@ -19,6 +19,8 @@ func registry() []checks.Check {
 		checks.TLSAudit{},
 		checks.MixedContent{},
 		checks.OpenRedirect{},
+		checks.ReflectedXSS{},
+		checks.SQLiError{},
 	}
 }
 
