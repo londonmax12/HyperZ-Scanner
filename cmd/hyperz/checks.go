@@ -21,6 +21,7 @@ func registry() []checks.Check {
 		checks.OpenRedirect{},
 		checks.ReflectedXSS{},
 		checks.SQLiError{},
+		checks.SQLiBoolean{},
 	}
 }
 

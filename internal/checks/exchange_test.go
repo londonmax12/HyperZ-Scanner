@@ -102,3 +102,12 @@ func TestRecordExchangeReturnsNilWhenNothingToRecord(t *testing.T) {
 		t.Errorf("expected nil for empty input, got %+v", got)
 	}
 }
+
+func TestStatusOfNilResponse(t *testing.T) {
+	if got := statusOf(nil); got != 0 {
+		t.Errorf("statusOf(nil) = %d, want 0", got)
+	}
+	if got := statusOf(&http.Response{StatusCode: 418}); got != 418 {
+		t.Errorf("statusOf(418) = %d, want 418", got)
+	}
+}

@@ -134,10 +134,7 @@ func (c SQLiError) probe(ctx context.Context, client *httpclient.Client, target 
 				probeURL = req.URL.String()
 			}
 		}
-		status := 0
-		if resp != nil {
-			status = resp.StatusCode
-		}
+		status := statusOf(resp)
 		// First payload that introduces a new error pattern wins: dedupe
 		// key collapses any further hits on the same (loc, param) into
 		// this same finding, so continuing to probe would burn requests
