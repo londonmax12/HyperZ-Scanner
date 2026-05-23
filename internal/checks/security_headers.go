@@ -68,7 +68,6 @@ func (c SecurityHeaders) Run(ctx context.Context, client *httpclient.Client, _ *
 	if err != nil {
 		return nil, err
 	}
-	hostScope := HostScope(p.URL)
 	evidence := BuildEvidence("GET", p.URL, snap.Status, snap.Headers, "")
 
 	// Iterate in sorted header order so the output is stable across runs.
@@ -98,7 +97,7 @@ func (c SecurityHeaders) Run(ctx context.Context, client *httpclient.Client, _ *
 			// Per-host: missing CSP on example.com is one issue, not one per
 			// crawled page. Including the header name prevents collisions
 			// between rules at the same scope.
-			DedupeKey: MakeDedupeKey(c.Name(), hostScope, "missing-header:"+header),
+			DedupeKey: MakeKey(c.Name(), ScopeHost, p.URL, "missing-header:"+header),
 		})
 	}
 	return findings, nil

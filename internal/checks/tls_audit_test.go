@@ -83,7 +83,7 @@ func TestTLSAuditVersionFindings(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			fs := TLSAudit{}.versionFinding("https://x", "https://x", tt.version)
+			fs := TLSAudit{}.versionFinding("https://x", tt.version)
 			if len(fs) != tt.want {
 				t.Fatalf("got %d findings, want %d: %+v", len(fs), tt.want, fs)
 			}
@@ -105,7 +105,7 @@ func TestTLSAuditExpiryExpired(t *testing.T) {
 		NotBefore: now.Add(-365 * 24 * time.Hour),
 		NotAfter:  now.Add(-24 * time.Hour),
 	}
-	fs := TLSAudit{}.expiryFindings("https://x", "https://x", leaf)
+	fs := TLSAudit{}.expiryFindings("https://x", leaf)
 	if len(fs) != 1 || fs[0].Severity != SeverityHigh {
 		t.Fatalf("want 1 high finding, got %+v", fs)
 	}
@@ -122,7 +122,7 @@ func TestTLSAuditExpiryNotYetValid(t *testing.T) {
 		NotBefore: now.Add(24 * time.Hour),
 		NotAfter:  now.Add(365 * 24 * time.Hour),
 	}
-	fs := TLSAudit{}.expiryFindings("https://x", "https://x", leaf)
+	fs := TLSAudit{}.expiryFindings("https://x", leaf)
 	if len(fs) != 1 || fs[0].Severity != SeverityHigh {
 		t.Fatalf("want 1 high finding, got %+v", fs)
 	}
@@ -139,7 +139,7 @@ func TestTLSAuditExpiryUrgentWindow(t *testing.T) {
 		NotBefore: now.Add(-30 * 24 * time.Hour),
 		NotAfter:  now.Add(5 * 24 * time.Hour),
 	}
-	fs := TLSAudit{}.expiryFindings("https://x", "https://x", leaf)
+	fs := TLSAudit{}.expiryFindings("https://x", leaf)
 	if len(fs) != 1 || fs[0].Severity != SeverityMedium {
 		t.Fatalf("want 1 medium finding (within 14d), got %+v", fs)
 	}
@@ -153,7 +153,7 @@ func TestTLSAuditExpirySoonWindow(t *testing.T) {
 		NotBefore: now.Add(-30 * 24 * time.Hour),
 		NotAfter:  now.Add(20 * 24 * time.Hour),
 	}
-	fs := TLSAudit{}.expiryFindings("https://x", "https://x", leaf)
+	fs := TLSAudit{}.expiryFindings("https://x", leaf)
 	if len(fs) != 1 || fs[0].Severity != SeverityLow {
 		t.Fatalf("want 1 low finding (within 30d), got %+v", fs)
 	}
@@ -167,7 +167,7 @@ func TestTLSAuditExpiryHealthyQuiet(t *testing.T) {
 		NotBefore: now.Add(-30 * 24 * time.Hour),
 		NotAfter:  now.Add(180 * 24 * time.Hour),
 	}
-	fs := TLSAudit{}.expiryFindings("https://x", "https://x", leaf)
+	fs := TLSAudit{}.expiryFindings("https://x", leaf)
 	if len(fs) != 0 {
 		t.Fatalf("want 0 findings for cert valid >30d, got %+v", fs)
 	}
@@ -178,7 +178,7 @@ func TestTLSAuditHostnameUnitMatch(t *testing.T) {
 		Subject:  pkix.Name{CommonName: "example.com"},
 		DNSNames: []string{"example.com"},
 	}
-	if _, ok := (TLSAudit{}).hostnameFinding("https://x", "https://x", "example.com", leaf); ok {
+	if _, ok := (TLSAudit{}).hostnameFinding("https://x", "example.com", leaf); ok {
 		t.Fatal("want no finding when hostname matches")
 	}
 }
@@ -188,7 +188,7 @@ func TestTLSAuditHostnameUnitMismatch(t *testing.T) {
 		Subject:  pkix.Name{CommonName: "other.example.com"},
 		DNSNames: []string{"other.example.com"},
 	}
-	f, ok := (TLSAudit{}).hostnameFinding("https://x", "https://x", "example.com", leaf)
+	f, ok := (TLSAudit{}).hostnameFinding("https://x", "example.com", leaf)
 	if !ok {
 		t.Fatal("want a finding when hostname mismatches")
 	}

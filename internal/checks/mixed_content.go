@@ -89,7 +89,6 @@ func (c MixedContent) Run(ctx context.Context, client *httpclient.Client, _ *sco
 	// Strip comments first so commented-out tags don't produce false positives.
 	html := mixedCommentRE.ReplaceAllString(string(snap.Body), "")
 
-	hostScope := HostScope(p.URL)
 	evidence := BuildEvidence("GET", p.URL, snap.Status, snap.Headers, "")
 
 	// Group by offending URL so a resource referenced N times on the page
@@ -156,7 +155,7 @@ func (c MixedContent) Run(ctx context.Context, client *httpclient.Client, _ *sco
 			// Per-host + offending URL: the same insecure resource shared
 			// across many crawled pages is one issue. Tag is excluded from
 			// the key, the URL is what actually needs fixing.
-			DedupeKey: MakeDedupeKey(c.Name(), hostScope, "url:"+u),
+			DedupeKey: MakeKey(c.Name(), ScopeHost, p.URL, "url:"+u),
 		})
 	}
 	return findings, nil

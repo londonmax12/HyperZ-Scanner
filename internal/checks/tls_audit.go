@@ -81,10 +81,9 @@ func (c TLSAudit) Run(ctx context.Context, _ *httpclient.Client, _ *scope.Scope,
 	defer conn.Close()
 
 	state := conn.ConnectionState()
-	hostScope := HostScope(target)
 
 	var findings []Finding
-	findings = append(findings, c.versionFinding(target, hostScope, state.Version)...)
+	findings = append(findings, c.versionFinding(target, state.Version)...)
 
 	if len(state.PeerCertificates) == 0 {
 		findings = append(findings, Finding{
@@ -97,19 +96,19 @@ func (c TLSAudit) Run(ctx context.Context, _ *httpclient.Client, _ *scope.Scope,
 			CWE:         "CWE-295",
 			OWASP:       "A02:2021 Cryptographic Failures",
 			Remediation: "Configure the server to present a certificate chain that begins with a valid leaf certificate for the requested hostname.",
-			DedupeKey:   MakeDedupeKey(c.Name(), hostScope, "no-cert"),
+			DedupeKey:   MakeKey(c.Name(), ScopeHost, target, "no-cert"),
 		})
 		return findings, nil
 	}
 	leaf := state.PeerCertificates[0]
-	findings = append(findings, c.expiryFindings(target, hostScope, leaf)...)
-	if f, ok := c.hostnameFinding(target, hostScope, host, leaf); ok {
+	findings = append(findings, c.expiryFindings(target, leaf)...)
+	if f, ok := c.hostnameFinding(target, host, leaf); ok {
 		findings = append(findings, f)
 	}
 	return findings, nil
 }
 
-func (c TLSAudit) versionFinding(target, hostScope string, version uint16) []Finding {
+func (c TLSAudit) versionFinding(target string, version uint16) []Finding {
 	var severity Severity
 	var name string
 	switch version {
@@ -133,11 +132,11 @@ func (c TLSAudit) versionFinding(target, hostScope string, version uint16) []Fin
 		CWE:         "CWE-327",
 		OWASP:       "A02:2021 Cryptographic Failures",
 		Remediation: "Disable TLS 1.1 and below; allow only TLS 1.2 and TLS 1.3 with modern cipher suites.",
-		DedupeKey:   MakeDedupeKey(c.Name(), hostScope, "version:"+name),
+		DedupeKey:   MakeKey(c.Name(), ScopeHost, target, "version:"+name),
 	}}
 }
 
-func (c TLSAudit) expiryFindings(target, hostScope string, leaf *x509.Certificate) []Finding {
+func (c TLSAudit) expiryFindings(target string, leaf *x509.Certificate) []Finding {
 	now := tlsAuditNow()
 	cn := leaf.Subject.CommonName
 	if now.After(leaf.NotAfter) {
@@ -151,7 +150,7 @@ func (c TLSAudit) expiryFindings(target, hostScope string, leaf *x509.Certificat
 			CWE:         "CWE-298",
 			OWASP:       "A02:2021 Cryptographic Failures",
 			Remediation: "Renew the certificate immediately and automate renewal (e.g., ACME / Let's Encrypt) to prevent recurrence.",
-			DedupeKey:   MakeDedupeKey(c.Name(), hostScope, "cert-expired"),
+			DedupeKey:   MakeKey(c.Name(), ScopeHost, target, "cert-expired"),
 		}}
 	}
 	if now.Before(leaf.NotBefore) {
@@ -165,7 +164,7 @@ func (c TLSAudit) expiryFindings(target, hostScope string, leaf *x509.Certificat
 			CWE:         "CWE-298",
 			OWASP:       "A02:2021 Cryptographic Failures",
 			Remediation: "Verify the server clock is correct, or reissue the certificate if its NotBefore was set in the future by mistake.",
-			DedupeKey:   MakeDedupeKey(c.Name(), hostScope, "cert-not-yet-valid"),
+			DedupeKey:   MakeKey(c.Name(), ScopeHost, target, "cert-not-yet-valid"),
 		}}
 	}
 	until := leaf.NotAfter.Sub(now)
@@ -191,11 +190,11 @@ func (c TLSAudit) expiryFindings(target, hostScope string, leaf *x509.Certificat
 		OWASP:       "A02:2021 Cryptographic Failures",
 		Remediation: "Renew the certificate ahead of expiry and verify automated renewal jobs are healthy.",
 		// Day count drifts each run; key off scope so repeated runs collapse.
-		DedupeKey: MakeDedupeKey(c.Name(), hostScope, "cert-expiry-soon"),
+		DedupeKey: MakeKey(c.Name(), ScopeHost, target, "cert-expiry-soon"),
 	}}
 }
 
-func (c TLSAudit) hostnameFinding(target, hostScope, host string, leaf *x509.Certificate) (Finding, bool) {
+func (c TLSAudit) hostnameFinding(target, host string, leaf *x509.Certificate) (Finding, bool) {
 	if leaf.VerifyHostname(host) == nil {
 		return Finding{}, false
 	}
@@ -217,6 +216,6 @@ func (c TLSAudit) hostnameFinding(target, hostScope, host string, leaf *x509.Cer
 		CWE:         "CWE-297",
 		OWASP:       "A02:2021 Cryptographic Failures",
 		Remediation: "Reissue the certificate with the correct Subject Alternative Names, or route traffic to a host the existing certificate covers.",
-		DedupeKey:   MakeDedupeKey(c.Name(), hostScope, "hostname-mismatch"),
+		DedupeKey:   MakeKey(c.Name(), ScopeHost, target, "hostname-mismatch"),
 	}, true
 }

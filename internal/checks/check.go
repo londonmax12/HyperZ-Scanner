@@ -196,6 +196,9 @@ type Finding struct {
 // 0x00 separator prevents accidental collisions when one part borrows from
 // the next (e.g. "ab"|"c" vs "a"|"bc"). SHA-1's collision weakness doesn't
 // matter here; there's no adversary, only deterministic grouping.
+//
+// Prefer MakeKey at call sites: it standardizes the (check, scope, parts)
+// shape so checks don't drift on how they assemble their URL scope.
 func MakeDedupeKey(parts ...string) string {
 	h := sha1.New()
 	for i, p := range parts {
@@ -207,10 +210,79 @@ func MakeDedupeKey(parts ...string) string {
 	return hex.EncodeToString(h.Sum(nil))[:16]
 }
 
+// Scope is the URL granularity at which MakeKey collapses findings into a
+// single dedupe key. Pick the narrowest scope that still groups truly
+// identical issues - per-host for site-wide misconfiguration, per-page for
+// URL-specific bugs, per-input for findings that vary by parameter.
+type Scope int
+
+const (
+	// ScopeHost groups per scheme://host. Use for site-wide misconfig
+	// (missing security headers, weak TLS, banner leaks) where every
+	// crawled page sees the same defect.
+	ScopeHost Scope = iota + 1
+	// ScopePage groups per scheme://host/path. Use for bugs that live at
+	// a specific URL (reflected XSS on /search, SSRF on /fetch). Query
+	// strings are excluded so probes that rewrite them produce stable keys.
+	ScopePage
+	// ScopeParam shares ScopePage's URL component but lives in its own
+	// hash subspace. Use for input-surface findings (open redirect, SQLi)
+	// where the same page can have multiple independently-vulnerable
+	// inputs; pass the parameter identifier(s) as variadic parts so each
+	// input dedupes separately.
+	ScopeParam
+)
+
+func (s Scope) String() string {
+	switch s {
+	case ScopeHost:
+		return "host"
+	case ScopePage:
+		return "page"
+	case ScopeParam:
+		return "param"
+	default:
+		return fmt.Sprintf("scope(%d)", int(s))
+	}
+}
+
+// MakeKey wraps MakeDedupeKey with structured URL scope extraction. It
+// hashes (check, scope tag, derived URL scope, parts...) so the same
+// logical issue always produces the same key regardless of which check
+// site assembles it.
+//
+// target is the URL where the finding was observed; scope picks how much
+// of it is folded into the key (see the Scope constants). An unparseable
+// target is used verbatim rather than collapsing every malformed input to
+// the same hash. Prefer this over assembling MakeDedupeKey parts inline -
+// the helper keeps the scope shape consistent across checks.
+func MakeKey(check string, scope Scope, target string, parts ...string) string {
+	sc := target
+	if u, err := url.Parse(target); err == nil && u.Host != "" {
+		switch scope {
+		case ScopeHost:
+			sc = u.Scheme + "://" + u.Host
+		case ScopePage, ScopeParam:
+			path := u.EscapedPath()
+			if path == "" {
+				path = "/"
+			}
+			sc = u.Scheme + "://" + u.Host + path
+		}
+	}
+	all := make([]string, 0, 3+len(parts))
+	all = append(all, check, scope.String(), sc)
+	all = append(all, parts...)
+	return MakeDedupeKey(all...)
+}
+
 // HostScope returns "scheme://host" for use as a dedupe scope. Site-wide
 // checks (headers, TLS config, cookie flags) should dedupe at this scope so
 // the same misconfiguration doesn't fire once per crawled page. Returns the
 // input unchanged if it can't be parsed.
+//
+// New call sites should prefer MakeKey with ScopeHost; HostScope is kept
+// for callers that need the bare scope string outside a dedupe key.
 func HostScope(rawurl string) string {
 	u, err := url.Parse(rawurl)
 	if err != nil || u.Host == "" {

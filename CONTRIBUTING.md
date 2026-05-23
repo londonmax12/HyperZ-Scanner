@@ -63,9 +63,13 @@ Every check returns `[]checks.Finding`. To keep reports useful:
 - Set `Severity`, `CWE`, `OWASP`, and `Remediation` whenever they apply.
 - Populate `Evidence` via `BuildEvidence` so reporters can show what was
   observed.
-- Set `DedupeKey` via `MakeDedupeKey` with a scope as narrow as the issue
-  requires - per-page for XSS, per-host (`HostScope`) for site-wide
-  misconfiguration. The same problem shouldn't flood the report.
+- Set `DedupeKey` via `MakeKey(check, scope, target, parts...)` with the
+  narrowest scope that still represents one logical issue: `ScopeHost` for
+  site-wide misconfiguration (headers, TLS, banner leaks), `ScopePage` for
+  URL-specific bugs, `ScopeParam` for input-surface findings where one page
+  can have multiple vulnerable inputs. The same problem shouldn't flood the
+  report. Reach for the raw `MakeDedupeKey` only if `MakeKey` can't express
+  the scope you need.
 
 ## Adding a check
 

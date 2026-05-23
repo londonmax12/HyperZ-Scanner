@@ -29,7 +29,6 @@ func (c ServerLeak) Run(ctx context.Context, client *httpclient.Client, _ *scope
 	if err != nil {
 		return nil, err
 	}
-	hostScope := HostScope(p.URL)
 	evidence := BuildEvidence("GET", p.URL, snap.Status, snap.Headers, "")
 
 	// Sorted iteration so multi-header responses produce stable output.
@@ -55,7 +54,7 @@ func (c ServerLeak) Run(ctx context.Context, client *httpclient.Client, _ *scope
 			Evidence:    evidence,
 			// Per-host + header: same leak across crawled pages is one issue.
 			// Header name in the key keeps Server and X-Powered-By distinct.
-			DedupeKey: MakeDedupeKey(c.Name(), hostScope, "leak-header:"+header),
+			DedupeKey: MakeKey(c.Name(), ScopeHost, p.URL, "leak-header:"+header),
 		})
 	}
 	return findings, nil

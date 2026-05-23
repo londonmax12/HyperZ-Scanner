@@ -228,3 +228,46 @@ func TestHostScope(t *testing.T) {
 		}
 	}
 }
+
+func TestMakeKeyScopesProduceDistinctKeys(t *testing.T) {
+	const check = "demo"
+	const target = "https://example.com/login?next=/"
+	host := MakeKey(check, ScopeHost, target, "rule:x")
+	page := MakeKey(check, ScopePage, target, "rule:x")
+	param := MakeKey(check, ScopeParam, target, "rule:x")
+	// Same (check, parts) at different scopes must not collide, even though
+	// ScopePage and ScopeParam derive the same URL component - the scope
+	// tag in the hash keeps the keyspaces separate.
+	if host == page || page == param || host == param {
+		t.Fatalf("scopes collapsed: host=%q page=%q param=%q", host, page, param)
+	}
+}
+
+func TestMakeKeyScopeHostStableAcrossPaths(t *testing.T) {
+	// ScopeHost ignores path and query: the same site-wide misconfig hit on
+	// every crawled page must produce one key.
+	a := MakeKey("hdr", ScopeHost, "https://example.com/login", "missing-header:CSP")
+	b := MakeKey("hdr", ScopeHost, "https://example.com/admin?x=1", "missing-header:CSP")
+	if a != b {
+		t.Errorf("ScopeHost should ignore path/query: %q vs %q", a, b)
+	}
+}
+
+func TestMakeKeyScopePageIgnoresQuery(t *testing.T) {
+	// Probes typically rewrite the query string; the key shouldn't fragment
+	// just because the probe URL has a different ?foo= than the page URL.
+	a := MakeKey("redir", ScopePage, "https://example.com/login", "param:next")
+	b := MakeKey("redir", ScopePage, "https://example.com/login?next=evil", "param:next")
+	if a != b {
+		t.Errorf("ScopePage should ignore query: %q vs %q", a, b)
+	}
+}
+
+func TestMakeKeyFallsBackToRawTargetWhenUnparseable(t *testing.T) {
+	// Two distinct garbage inputs must not collapse to the same hash.
+	a := MakeKey("c", ScopeHost, "garbage-one", "x")
+	b := MakeKey("c", ScopeHost, "garbage-two", "x")
+	if a == b {
+		t.Fatalf("unparseable targets collapsed to one key: %q", a)
+	}
+}

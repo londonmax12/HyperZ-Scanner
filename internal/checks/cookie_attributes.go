@@ -60,7 +60,6 @@ func (c CookieAttributes) Run(ctx context.Context, client *httpclient.Client, _ 
 	}
 
 	isHTTPS := strings.HasPrefix(strings.ToLower(p.URL), "https://")
-	hostScope := HostScope(p.URL)
 	evidence := BuildEvidence("GET", p.URL, snap.Status, snap.Headers, "")
 
 	// http.Response.Cookies parses Set-Cookie headers; build a synthetic
@@ -77,10 +76,10 @@ func (c CookieAttributes) Run(ctx context.Context, client *httpclient.Client, _ 
 		// avoid noise. The Secure-requires-HTTPS guidance shows up via the
 		// HSTS missing-header check instead.
 		if !ck.Secure && isHTTPS {
-			findings = append(findings, c.finding(p.URL, hostScope, ck.Name, "Secure", evidence))
+			findings = append(findings, c.finding(p.URL, ck.Name, "Secure", evidence))
 		}
 		if !ck.HttpOnly {
-			findings = append(findings, c.finding(p.URL, hostScope, ck.Name, "HttpOnly", evidence))
+			findings = append(findings, c.finding(p.URL, ck.Name, "HttpOnly", evidence))
 		}
 		// Flag anything that isn't an explicit Lax/Strict/None. Two cases
 		// both fall here: the SameSite attribute was absent (parser leaves
@@ -91,13 +90,13 @@ func (c CookieAttributes) Run(ctx context.Context, client *httpclient.Client, _ 
 		if ck.SameSite != http.SameSiteLaxMode &&
 			ck.SameSite != http.SameSiteStrictMode &&
 			ck.SameSite != http.SameSiteNoneMode {
-			findings = append(findings, c.finding(p.URL, hostScope, ck.Name, "SameSite", evidence))
+			findings = append(findings, c.finding(p.URL, ck.Name, "SameSite", evidence))
 		}
 	}
 	return findings, nil
 }
 
-func (c CookieAttributes) finding(targetURL, hostScope, cookieName, attr string, ev *Evidence) Finding {
+func (c CookieAttributes) finding(targetURL, cookieName, attr string, ev *Evidence) Finding {
 	rule := cookieAttrRules[attr]
 	return Finding{
 		Check:       c.Name(),
@@ -113,6 +112,6 @@ func (c CookieAttributes) finding(targetURL, hostScope, cookieName, attr string,
 		// Per-host + cookie name + attribute: the same cookie missing the
 		// same flag on every crawled page is one issue, not N. Different
 		// cookies or different attributes get distinct keys.
-		DedupeKey: MakeDedupeKey(c.Name(), hostScope, "cookie:"+cookieName, "attr:"+attr),
+		DedupeKey: MakeKey(c.Name(), ScopeHost, targetURL, "cookie:"+cookieName, "attr:"+attr),
 	}
 }

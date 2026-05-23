@@ -246,7 +246,6 @@ func (c OpenRedirect) probe(ctx context.Context, client *httpclient.Client, targ
 		return nil, err
 	}
 	probeURL := req.URL.String()
-	scopeURL, _ := url.Parse(probeURL)
 	return &Finding{
 		Check:    c.Name(),
 		Target:   target,
@@ -271,7 +270,7 @@ func (c OpenRedirect) probe(ctx context.Context, client *httpclient.Client, targ
 		// crawler from many entry points is one issue per param. Including
 		// the param name + loc keeps distinct vulnerabilities (e.g. both
 		// `next` query and `next` form) from collapsing into a single finding.
-		DedupeKey: MakeDedupeKey(c.Name(), pageScope(scopeURL), "loc:"+string(sink.Loc), "param:"+sink.Name),
+		DedupeKey: MakeKey(c.Name(), ScopeParam, target, "loc:"+string(sink.Loc), "param:"+sink.Name),
 	}, nil
 }
 
@@ -312,18 +311,4 @@ func openRedirectMatches(location, canary string) bool {
 		return false
 	}
 	return strings.EqualFold(lu.Host, cu.Host)
-}
-
-// pageScope returns scheme://host/path (no query, no fragment) for use as a
-// dedupe scope. Open redirect on /foo and /bar are separate issues; the
-// query string shouldn't fragment the key (the probe always rewrites it).
-func pageScope(u *url.URL) string {
-	if u == nil {
-		return ""
-	}
-	path := u.EscapedPath()
-	if path == "" {
-		path = "/"
-	}
-	return u.Scheme + "://" + u.Host + path
 }
