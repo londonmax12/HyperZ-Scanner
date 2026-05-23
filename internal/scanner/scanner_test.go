@@ -153,6 +153,31 @@ func TestScanErrorHandlerInvoked(t *testing.T) {
 	}
 }
 
+// TestScanSuppressesFetchAlreadyFailed pins the contract that
+// checks.ErrFetchAlreadyFailed is a quiet skip, not an error worth
+// surfacing. The crawler already reported the original network failure
+// once via its own onError; firing the scanner's per-check reporter
+// N times for the same dead URL would just be noise.
+func TestScanSuppressesFetchAlreadyFailed(t *testing.T) {
+	c := &stubCheck{name: "stub", err: checks.ErrFetchAlreadyFailed}
+	var calls atomic.Int64
+	s := New(newNilClient(), []checks.Check{c},
+		WithErrorHandler(func(target, check string, err error) {
+			calls.Add(1)
+		}),
+	)
+	findings, err := runOne(context.Background(), s, "http://dead")
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("got %d findings on suppressed-error path, want 0", len(findings))
+	}
+	if n := calls.Load(); n != 0 {
+		t.Fatalf("error handler fired %d times for ErrFetchAlreadyFailed; want 0 (crawler already reported it)", n)
+	}
+}
+
 // TestScanCancellationFlushesInFlightFindings pins the contract that once a
 // check's Run has returned, all of its findings reach the reporter; even if
 // ctx cancels while the per-finding send loop is mid-flight. Before the fix

@@ -232,6 +232,48 @@ func TestCrawlInvokesErrorHandlerOnFetchFailure(t *testing.T) {
 	}
 }
 
+func TestCrawlMarksFailedFetchesAsFetched(t *testing.T) {
+	// The crawler emits a Page for URLs it failed to fetch so downstream
+	// checks still see the URL. That Page must carry Fetched=true so
+	// per-check ensureResponse calls don't re-GET the dead URL and amplify
+	// one failure into N "connection refused" events.
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `<a href="/dead">dead</a>`)
+	})
+	mux.HandleFunc("/dead", func(w http.ResponseWriter, r *http.Request) {
+		hj, _ := w.(http.Hijacker)
+		conn, _, _ := hj.Hijack()
+		conn.Close()
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New(newCrawlerClient(), Config{Scope: seedScope(t, 3, srv.URL)})
+	out := make(chan page.Page, 8)
+	if err := c.Crawl(context.Background(), []string{srv.URL + "/"}, out); err != nil {
+		t.Fatalf("Crawl: %v", err)
+	}
+
+	var deadPage *page.Page
+	for p := range out {
+		if strings.HasSuffix(p.URL, "/dead") {
+			pp := p
+			deadPage = &pp
+		}
+	}
+	if deadPage == nil {
+		t.Fatal("crawler did not emit a Page for /dead")
+	}
+	if !deadPage.Fetched {
+		t.Errorf("Fetched = false on failed page; want true so checks skip the retry")
+	}
+	if deadPage.Headers != nil {
+		t.Errorf("Headers = %v on failed page; want nil", deadPage.Headers)
+	}
+}
+
 func TestCrawlDefaultWorkersAndBody(t *testing.T) {
 	c := New(newCrawlerClient(), Config{})
 	if c.cfg.Workers != 8 {

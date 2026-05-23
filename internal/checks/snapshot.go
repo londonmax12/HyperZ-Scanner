@@ -2,6 +2,7 @@ package checks
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
 	"github.com/londonball/hyperz/internal/httpclient"
@@ -18,10 +19,22 @@ type snapshot struct {
 	Body    []byte
 }
 
+// ErrFetchAlreadyFailed is returned by ensureResponse when the producer
+// (typically the crawler) already attempted the GET for p.URL and got
+// nothing back: p.Fetched is true but p.Headers is still nil. Checks
+// bubble this up; the scanner recognizes it and suppresses the per-check
+// onError event, since the crawler already reported the original failure
+// once for the URL. Without this, N passive checks against a dead host
+// produced 1 crawler error + N duplicate "connection refused" errors and
+// N wasted HTTP requests.
+var ErrFetchAlreadyFailed = errors.New("hyperz: response unavailable; producer already failed to fetch this URL")
+
 // ensureResponse returns a snapshot for p. When the crawler / no-crawl
 // feeder already populated p.Headers, that snapshot is reused as-is and
-// no HTTP request fires. Otherwise the helper issues a GET against p.URL
-// and reads up to maxBody bytes of body.
+// no HTTP request fires. When p.Fetched is set but p.Headers is nil the
+// producer tried and failed; ensureResponse returns ErrFetchAlreadyFailed
+// without issuing a retry. Otherwise the helper issues a GET against
+// p.URL and reads up to maxBody bytes of body.
 //
 // maxBody applies only on the fetch path; when the snapshot comes from p,
 // body is whatever the producer captured (bounded by the crawler's
@@ -37,6 +50,9 @@ func ensureResponse(ctx context.Context, client *httpclient.Client, p page.Page,
 			Headers: p.Headers,
 			Body:    p.Body,
 		}, nil
+	}
+	if p.Fetched {
+		return snapshot{}, ErrFetchAlreadyFailed
 	}
 	resp, err := client.Get(ctx, p.URL)
 	if err != nil {

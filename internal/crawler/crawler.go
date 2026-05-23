@@ -73,8 +73,10 @@ type item struct {
 //
 // A Page is also emitted for URLs that couldn't be fetched (network
 // error, scope-permitted-but-redirect-only, etc.); those carry the URL
-// only and leave Status / Headers / Body / Forms zero-valued. Checks
-// that need the body must tolerate the empty case (or fetch themselves).
+// only and leave Status / Headers / Body / Forms zero-valued, with
+// Fetched=true so downstream helpers (checks/ensureResponse) treat the
+// URL as already-tried and don't re-issue per-check GETs against a host
+// the crawler already failed on.
 func (c *Crawler) Crawl(ctx context.Context, seeds []string, out chan<- page.Page) error {
 	defer close(out)
 
@@ -187,8 +189,9 @@ func (c *Crawler) process(ctx context.Context, it item, out chan<- page.Page, su
 		}
 		// Surface the URL anyway so the scanner / passive checks still see
 		// it - matches the pre-Page behavior where every queued URL was
-		// emitted before fetching.
-		emit(page.Page{URL: it.url})
+		// emitted before fetching. Fetched=true so ensureResponse won't
+		// re-GET the same dead host once per passive check.
+		emit(page.Page{URL: it.url, Fetched: true})
 		return
 	}
 	defer resp.Body.Close()
@@ -202,6 +205,7 @@ func (c *Crawler) process(ctx context.Context, it item, out chan<- page.Page, su
 			URL:     it.url,
 			Status:  resp.StatusCode,
 			Headers: resp.Header,
+			Fetched: true,
 		})
 		return
 	}
@@ -213,6 +217,7 @@ func (c *Crawler) process(ctx context.Context, it item, out chan<- page.Page, su
 			Status:  resp.StatusCode,
 			Headers: resp.Header,
 			Body:    body,
+			Fetched: true,
 		})
 		return
 	}
@@ -223,6 +228,7 @@ func (c *Crawler) process(ctx context.Context, it item, out chan<- page.Page, su
 		Status:  resp.StatusCode,
 		Headers: resp.Header,
 		Body:    body,
+		Fetched: true,
 	}
 
 	if strings.Contains(strings.ToLower(ct), "text/html") {

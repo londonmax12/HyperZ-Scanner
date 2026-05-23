@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -183,6 +184,13 @@ func (s *Scanner) scanOne(ctx context.Context, p page.Page, out chan<- checks.Fi
 			}
 			found, err := c.Run(runCtx, s.client, s.scope, p)
 			if err != nil {
+				// ErrFetchAlreadyFailed means the crawler tried this URL
+				// and got nothing - it already reported the failure once
+				// via its own onError. Re-reporting per check would turn
+				// one dead host into N noisy events with no new signal.
+				if errors.Is(err, checks.ErrFetchAlreadyFailed) {
+					return
+				}
 				if s.onError != nil {
 					s.onError(target, c.Name(), err)
 				}

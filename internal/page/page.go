@@ -21,12 +21,21 @@ import (
 // exceeded the cap, or when reading failed; nil body is not proof the
 // resource was empty. Forms is populated only when Body was an HTML
 // document - non-HTML responses carry nil Forms even when Body is set.
+//
+// Fetched signals "a producer already attempted the HTTP request for this
+// URL." The crawler sets it on every page it emits, including the
+// connect-failed / read-failed paths where Headers stays nil. Downstream
+// helpers (checks/ensureResponse) use it to distinguish a never-tried
+// page (no-crawl seed, page.FromURL in tests) - which they should fetch -
+// from a known-failed page they should skip, so a down host doesn't get
+// re-probed once per passive check.
 type Page struct {
 	URL     string
 	Status  int
 	Headers http.Header
 	Body    []byte
 	Forms   []Form
+	Fetched bool
 }
 
 // Form captures one <form> element discovered on a page.
