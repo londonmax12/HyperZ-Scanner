@@ -15,12 +15,14 @@ func registry() []checks.Check {
 	return []checks.Check{
 		checks.SecurityHeaders{},
 		checks.CookieAttributes{},
+		checks.FormAutocomplete{},
 		checks.CORSConfig{},
 		checks.CORSReflection{},
 		checks.ServerLeak{},
 		checks.TLSAudit{},
 		checks.MixedContent{},
 		checks.OpenRedirect{},
+		checks.HostHeaderInjection{},
 		checks.SSRF{},
 		checks.ReflectedXSS{},
 		checks.SQLiError{},
@@ -29,6 +31,7 @@ func registry() []checks.Check {
 		checks.PathTraversal{},
 		checks.CmdInjection{},
 		checks.CmdInjectionBlind{},
+		checks.JSLibsKnownVuln{},
 		&checks.ContentDiscovery{},
 	}
 }
