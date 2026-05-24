@@ -54,6 +54,7 @@ func registry(pollute bool) []checks.Check {
 		checks.CmdInjection{},
 		checks.CmdInjectionBlind{},
 		checks.XXE{},
+		checks.GraphQLAudit{},
 		checks.JSLibsKnownVuln{},
 		checks.SRIMissing{},
 		checks.SourceMapExposure{},
