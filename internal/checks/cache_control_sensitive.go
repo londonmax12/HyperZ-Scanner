@@ -3,8 +3,6 @@ package checks
 import (
 	"context"
 	"fmt"
-	"mime"
-	"net/http"
 	"strings"
 
 	"github.com/londonmax12/hyperz/internal/httpclient"
@@ -36,7 +34,6 @@ func (c CacheControlSensitive) Run(ctx context.Context, client *httpclient.Clien
 
 	cacheControl := snap.Headers.Get("Cache-Control")
 	pragma := snap.Headers.Get("Pragma")
-	expires := snap.Headers.Get("Expires")
 
 	// Check if the response has appropriate cache-control directives.
 	// Sensitive directives are: private, no-store, no-cache (at minimum).
