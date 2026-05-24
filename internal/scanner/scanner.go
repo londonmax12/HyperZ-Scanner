@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/londonmax12/hyperz/internal/browser"
 	"github.com/londonmax12/hyperz/internal/checks"
 	"github.com/londonmax12/hyperz/internal/fingerprint"
 	"github.com/londonmax12/hyperz/internal/httpclient"
@@ -33,6 +34,7 @@ type Scanner struct {
 	level            checks.Level
 	oobServer        oob.Server
 	oobWait          time.Duration
+	browserPool      browser.Pool
 	onError          func(target, check string, err error)
 	onSkip           func(target, check, reason string)
 }
@@ -121,6 +123,16 @@ func WithOOBWait(d time.Duration) Option {
 			s.oobWait = d
 		}
 	}
+}
+
+// WithBrowser attaches a headless-browser pool. Checks that need runtime
+// JS execution (dom-xss, future client-side prototype-pollution chains)
+// read it via checks.BrowserFrom. Nil pool (the default) disables the
+// JS pipeline entirely - runtime-execution paths in the catalog become
+// no-ops, matching the contract those checks expose. The scanner does
+// not Close the pool; lifetime belongs to the caller that built it.
+func WithBrowser(pool browser.Pool) Option {
+	return func(s *Scanner) { s.browserPool = pool }
 }
 
 // defaultOOBWait is the post-scan delay applied when --oob is on but
@@ -392,6 +404,7 @@ func (s *Scanner) detectOne(ctx context.Context, twoPhase []checks.TwoPhaseCheck
 			runCtx = checks.WithLevel(runCtx, s.level)
 			runCtx = checks.WithStack(runCtx, stack)
 			runCtx = checks.WithOOB(runCtx, s.oobServer)
+			runCtx = checks.WithBrowser(runCtx, s.browserPool)
 			if s.onError != nil {
 				runCtx = checks.WithReporter(runCtx, func(err error) {
 					s.onError(target, c.Name(), err)
@@ -529,6 +542,7 @@ func (s *Scanner) scanOne(ctx context.Context, p page.Page, out chan<- checks.Fi
 			runCtx = checks.WithLevel(runCtx, s.level)
 			runCtx = checks.WithStack(runCtx, stack)
 			runCtx = checks.WithOOB(runCtx, s.oobServer)
+			runCtx = checks.WithBrowser(runCtx, s.browserPool)
 			if s.onError != nil {
 				runCtx = checks.WithReporter(runCtx, func(err error) {
 					s.onError(target, c.Name(), err)

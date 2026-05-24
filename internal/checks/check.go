@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/londonmax12/hyperz/internal/browser"
 	"github.com/londonmax12/hyperz/internal/fingerprint"
 	"github.com/londonmax12/hyperz/internal/httpclient"
 	"github.com/londonmax12/hyperz/internal/oob"
@@ -499,6 +500,36 @@ func OOBFrom(ctx context.Context) oob.Server {
 type OOBCheck interface {
 	Check
 	Drain(ctx context.Context) []Finding
+}
+
+// browserKey carries the active headless-browser pool through the context
+// the scanner hands to Run. Checks that need runtime JS execution (dom-xss,
+// future client-side prototype-pollution chains) read it via BrowserFrom;
+// absence means the operator did not opt into --js and the check must
+// silently skip rather than failing - a scan without --js should not
+// produce dom-xss findings, but should also not log errors for every page.
+type browserKey struct{}
+
+// WithBrowser attaches pool to ctx so checks can dispatch Visit calls. The
+// scanner sets this once per run when the operator opted into --js; checks
+// should treat a nil pool (or absence) as "JS disabled" and skip the
+// runtime-execution paths.
+func WithBrowser(ctx context.Context, pool browser.Pool) context.Context {
+	if pool == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, browserKey{}, pool)
+}
+
+// BrowserFrom returns the browser.Pool attached to ctx, or nil if none was
+// attached. A check that wants to drive a headless browser must guard on
+// the nil return; emitting findings without a Pool would be a bug because
+// there is nothing to dispatch Visit against.
+func BrowserFrom(ctx context.Context) browser.Pool {
+	if pool, ok := ctx.Value(browserKey{}).(browser.Pool); ok {
+		return pool
+	}
+	return nil
 }
 
 // stackKey carries the detected fingerprint.Stack through the context the

@@ -14,6 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/londonmax12/hyperz/internal/browser"
 	"github.com/londonmax12/hyperz/internal/checks"
 	"github.com/londonmax12/hyperz/internal/crawler"
 	"github.com/londonmax12/hyperz/internal/fingerprint"
@@ -59,6 +60,9 @@ type scanConfig struct {
 	oobListen string
 	oobHost   string
 	oobWait   time.Duration
+
+	js           bool
+	jsConcurrent int
 
 	scopeHosts       []string
 	scopeAnyHost     bool
@@ -214,6 +218,17 @@ Modes:
 		"how long the scanner waits after the active phase before draining OOB hits. "+
 			"Async fetch queues and slow webhooks routinely take seconds to fire, so a "+
 			"too-short window misses real positives.")
+
+	f.BoolVar(&cfg.js, "js", false,
+		"enable headless-browser execution for DOM-based checks (dom-xss). Requires a "+
+			"Chrome/Chromium binary on PATH; the scanner launches one process at scan "+
+			"start and opens up to --js-concurrent tabs at a time. Off by default - "+
+			"DOM checks need a real engine and the dependency is heavier than the rest "+
+			"of the scanner.")
+	f.IntVar(&cfg.jsConcurrent, "js-concurrent", 4,
+		"max simultaneous tabs in the --js browser pool. Headless Chrome scales poorly "+
+			"past a few dozen open targets; the cap trades scan parallelism for stability "+
+			"under fan-out.")
 
 	f.StringSliceVar(&cfg.scopeHosts, "scope-host", nil,
 		"hostname allowed in scope (repeatable; defaults to the seed hosts when empty)")
@@ -399,6 +414,15 @@ func runScan(ctx context.Context, cfg *scanConfig, level checks.Level) int {
 		}()
 	}
 
+	browserPool, err := startBrowser(cfg, log)
+	if err != nil {
+		log.Error("browser init failed", "err", err)
+		return exitScanError
+	}
+	if browserPool != nil {
+		defer browserPool.Close()
+	}
+
 	all := registry(cfg.pollute)
 	enabled := checks.Filter(all, level)
 	log.Info("scan starting",
@@ -414,6 +438,7 @@ func runScan(ctx context.Context, cfg *scanConfig, level checks.Level) int {
 		scanner.WithLevel(level),
 		scanner.WithOOB(oobServer),
 		scanner.WithOOBWait(cfg.oobWait),
+		scanner.WithBrowser(browserPool),
 		scanner.WithSkipHandler(func(target, check, reason string) {
 			log.Debug("check skipped", "check", check, "target", target, "reason", reason)
 		}),
@@ -610,6 +635,27 @@ func startOOB(ctx context.Context, cfg *scanConfig, log *slog.Logger) (oob.Serve
 		"callback_host", srv.CallbackHost(),
 		"wait", cfg.oobWait)
 	return srv, nil
+}
+
+// startBrowser launches the headless-browser pool when the operator opted
+// into --js. Returns (nil, nil) when --js is off so the rest of the scan
+// path can treat the pool as optional - DOM checks read browser.Pool from
+// ctx and silently skip when it's missing.
+//
+// Returned Pool is owned by the caller and must be Close'd at scan
+// teardown. A launch failure is surfaced as an error rather than degraded
+// silently: the operator asked for --js, so booting Chrome failing is a
+// scan-misconfiguration condition, not a per-target hiccup.
+func startBrowser(cfg *scanConfig, log *slog.Logger) (browser.Pool, error) {
+	if !cfg.js {
+		return nil, nil
+	}
+	pool, err := browser.NewChromedp(cfg.jsConcurrent)
+	if err != nil {
+		return nil, fmt.Errorf("--js: launch headless browser: %w", err)
+	}
+	log.Info("browser pool ready", "max_concurrent_tabs", cfg.jsConcurrent)
+	return pool, nil
 }
 
 // fingerprintFallbackProbes returns the host-relative paths the detector
