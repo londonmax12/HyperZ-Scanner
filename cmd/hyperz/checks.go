@@ -46,6 +46,7 @@ func registry() []checks.Check {
 		checks.ProtoPollution{},
 		&checks.ContentDiscovery{},
 		&checks.IDOR{},
+		&checks.SubdomainTakeover{},
 	}
 }
 
