@@ -40,6 +40,7 @@ func registry() []checks.Check {
 		checks.XXE{},
 		checks.JSLibsKnownVuln{},
 		checks.SRIMissing{},
+		checks.SourceMapExposure{},
 		&checks.ContentDiscovery{},
 	}
 }
