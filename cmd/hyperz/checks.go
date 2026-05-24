@@ -38,6 +38,7 @@ func registry(pollute bool) []checks.Check {
 		checks.CORSReflection{},
 		checks.ServerLeak{},
 		checks.SecretsInBody{},
+		&checks.OAuthDiscovery{},
 		checks.TLSAudit{},
 		checks.MixedContent{},
 		checks.OpenRedirect{},
