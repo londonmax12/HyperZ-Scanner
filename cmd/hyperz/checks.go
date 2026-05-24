@@ -24,6 +24,8 @@ func registry() []checks.Check {
 		checks.ReflectedXSS{},
 		checks.SQLiError{},
 		checks.SQLiBoolean{},
+		checks.SQLiTime{},
+		checks.PathTraversal{},
 	}
 }
 
