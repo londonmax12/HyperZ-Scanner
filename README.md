@@ -34,15 +34,37 @@ Built-in checks:
 | --- | --- | --- |
 | `security-headers` | passive | missing or weak security response headers (HSTS, CSP, etc.) |
 | `cookie-attributes` | passive | cookies missing `Secure`, `HttpOnly`, or `SameSite` |
+| `cache-control-sensitive` | passive | sensitive responses served without `Cache-Control: no-store` |
+| `csp-weak` | passive | Content-Security-Policy weakness (`unsafe-inline`/`unsafe-eval`, wildcard sources, missing directives) |
+| `hsts-weak` | passive | HSTS missing, short `max-age`, no `includeSubDomains`, no `preload` |
+| `cross-origin-isolation` | passive | missing / weak COOP, COEP, CORP headers |
+| `form-autocomplete` | passive | sensitive form inputs missing `autocomplete=off` / `new-password` |
+| `form-action-insecure` | passive | form posts over plain HTTP from an HTTPS page |
 | `cors-config` | passive | wildcard / null / credentialed CORS misconfiguration on the seed response |
 | `server-leak` | passive | banner disclosure via `Server` / `X-Powered-By` |
+| `secrets-in-body` | passive | API keys, tokens, private keys, and other secrets leaking in response bodies |
 | `tls-audit` | passive | TLS version, certificate expiry, hostname mismatch |
 | `mixed-content` | passive | passive mixed content referenced from HTTPS pages |
+| `js-libs-known-vuln` | passive | bundled JS libraries detected at known-vulnerable versions |
+| `sri-missing` | passive | external `<script>` / `<link>` tags missing Subresource Integrity hashes |
+| `source-map-exposure` | passive | `.map` files served alongside JS / CSS that expose original source |
+| `target-blank-noopener` | passive | `target="_blank"` anchors missing `rel="noopener"` |
 | `cors-reflection` | default | `Access-Control-Allow-Origin` reflection probe with a crafted `Origin` |
 | `open-redirect` | default | redirect parameter probing on links and forms |
+| `host-header-injection` | default | `Host` / `X-Forwarded-Host` rewrite probes |
+| `ssrf` | default | server-side request forgery probes against URL-bearing parameters |
 | `reflected-xss` | default | reflected XSS probes across query, form, and header inputs |
 | `sqli-error` | default | error-based SQL injection probes |
 | `sqli-boolean` | default | boolean-based SQL injection probes |
+| `sqli-time` | default | time-based blind SQL injection probes |
+| `nosqli` | default | NoSQL operator injection probes (Mongo-style operators, JS payloads) |
+| `path-traversal` | default | `../` traversal probes against path-bearing parameters |
+| `cmd-injection` | default | in-band OS command injection probes |
+| `cmd-injection-blind` | default | out-of-band / time-based command injection probes |
+| `xxe` | default | XML external entity probes against XML endpoints |
+| `content-discovery` | default | directory and file brute-forcing against allowed roots |
+| `proto-pollution` | aggressive | prototype pollution probes via JSON bodies and query parameters |
+| `idor` | aggressive | insecure direct object reference probing on numeric / UUID identifiers |
 
 `hyperz checks list` prints the current registry at runtime.
 
@@ -172,8 +194,11 @@ sets the number of parallel fetchers.
 OpenAPI / Swagger paths on each seed origin and enqueues every documented
 endpoint as an additional crawl target.
 
-### Rate limiting & request budget
+### Concurrency, rate limiting & request budget
 
+- `--concurrency` sets the number of targets scanned in parallel (default
+  8); `--check-concurrency` caps how many checks fan out per target
+  (default 16, `0` = unlimited).
 - `--rate` / `--burst` set the per-host RPS and burst (default 5 RPS,
   burst 5).
 - `--rate-global` / `--burst-global` layer a scan-wide RPS ceiling on top
@@ -183,6 +208,13 @@ endpoint as an additional crawl target.
   fail fast with `scan-request-budget-exhausted`.
 - `--max-retries` / `--max-retry-wait` control retry behavior on 429/503;
   the client honors `Retry-After` up to the cap.
+
+### Logging
+
+`--log-level` controls verbosity (`debug` | `info` | `warn` | `error`);
+`debug` surfaces per-target check skip events. `--log-format text` (the
+default) prints `key=value` records; `--log-format json` emits one JSON
+record per line, ready to pipe into `jq`.
 
 ### Baseline diff & fail-on
 
@@ -209,18 +241,19 @@ Exit codes:
 ## Layout
 
 ```
-cmd/hyperz/          CLI entrypoint
-internal/scanner/    orchestrator that runs checks against a target
-internal/crawler/    crawler, HTML link extractor, robots.txt, sitemap,
-                     OpenAPI/Swagger discovery
-internal/httpclient/ shared HTTP client, host limiter, budget, session
-                     sentinel, CSRF middleware
-internal/checks/     Check interface + Finding type, one check per file
+cmd/hyperz/           CLI entrypoint, flag wiring, check catalog, auth wiring
+internal/scanner/     orchestrator that runs checks against a target
+internal/crawler/     crawler, HTML link extractor, robots.txt, sitemap,
+                      OpenAPI/Swagger discovery
+internal/httpclient/  shared HTTP client, host limiter, budget, session
+                      sentinel, CSRF middleware
+internal/proxy/       proxy loader, scraper, epsilon-greedy pool, transport
+internal/checks/      Check interface + Finding type, one check per file
 internal/fingerprint/ stack detection rules and per-host cache
-internal/scope/      host/port/path/depth scope rules
-internal/page/       crawler -> check page artifact
-internal/report/     text / JSON / JSONL / CSV / SARIF / Markdown / PDF
-                     reporters, dedupe, baseline diff
+internal/scope/       host/port/path/depth scope rules
+internal/page/        crawler -> check page artifact
+internal/report/      text / JSON / JSONL / CSV / SARIF / Markdown / PDF
+                      reporters, dedupe, baseline diff
 ```
 
 ## Adding a check
