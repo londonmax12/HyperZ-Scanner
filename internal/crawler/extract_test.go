@@ -293,7 +293,7 @@ func TestExtractFormsTextareaAndSelectInputs(t *testing.T) {
 		t.Fatalf("got %d forms, want 1", len(got))
 	}
 	want := []page.FormInput{
-		{Name: "country", Type: "select", Value: ""},
+		{Name: "country", Type: "select", Value: "", Options: []string{"US"}},
 		{Name: "comment", Type: "textarea", Value: "hello world"},
 	}
 	// The walker emits inputs in document order: <textarea>'s close
@@ -309,6 +309,74 @@ func TestExtractFormsTextareaAndSelectInputs(t *testing.T) {
 	}
 	if !reflect.DeepEqual(gotSet, wantSet) {
 		t.Errorf("Inputs = %+v\nwant %+v", gotSet, wantSet)
+	}
+}
+
+func TestExtractFormsSelectOptions(t *testing.T) {
+	// <select> options - both value="..." and text-only - are captured in
+	// document order. The pollute-gated crawler uses Options to fan one
+	// POST out per choice; if we drop a value here the walk skips that
+	// destination on every site that uses select-driven navigation.
+	base := mustParseURL(t, "http://example.com/")
+	body := []byte(`
+		<form action="/portal" method="post">
+			<select name="bug">
+				<option value="1">First</option>
+				<option value="2">Second</option>
+				<option>Third</option>
+				<option value="">Empty</option>
+			</select>
+		</form>
+	`)
+	got := extractForms(base, body)
+	if len(got) != 1 {
+		t.Fatalf("got %d forms, want 1", len(got))
+	}
+	var sel page.FormInput
+	for _, in := range got[0].Inputs {
+		if in.Type == "select" {
+			sel = in
+		}
+	}
+	want := []string{"1", "2", "Third", ""}
+	if !reflect.DeepEqual(sel.Options, want) {
+		t.Errorf("Options = %v, want %v", sel.Options, want)
+	}
+}
+
+func TestExtractFormsSelectResetsBetweenSelects(t *testing.T) {
+	// Two selects in one form must not bleed options into each other,
+	// and an unnamed select (dropped at the start tag) must not let its
+	// options leak onto the previous named select.
+	base := mustParseURL(t, "http://example.com/")
+	body := []byte(`
+		<form action="/x" method="post">
+			<select name="a">
+				<option value="a1">a1</option>
+			</select>
+			<select>
+				<option value="ghost">ghost</option>
+			</select>
+			<select name="b">
+				<option value="b1">b1</option>
+			</select>
+		</form>
+	`)
+	got := extractForms(base, body)
+	if len(got) != 1 {
+		t.Fatalf("got %d forms, want 1", len(got))
+	}
+	bySel := map[string][]string{}
+	for _, in := range got[0].Inputs {
+		if in.Type == "select" {
+			bySel[in.Name] = in.Options
+		}
+	}
+	if !reflect.DeepEqual(bySel["a"], []string{"a1"}) {
+		t.Errorf("select a Options = %v, want [a1]", bySel["a"])
+	}
+	if !reflect.DeepEqual(bySel["b"], []string{"b1"}) {
+		t.Errorf("select b Options = %v, want [b1]", bySel["b"])
 	}
 }
 

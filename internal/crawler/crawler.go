@@ -5,6 +5,7 @@ package crawler
 
 import (
 	"context"
+	"net/http"
 	"net/url"
 	"strings"
 	"sync"
@@ -32,6 +33,15 @@ type Config struct {
 	// Without this the crawler skips non-HTML responses and never sees
 	// API surface that isn't linked from a rendered page.
 	APIDiscovery bool
+	// Pollute opts the crawler into state-mutating discovery: submit
+	// select-driven navigation forms (a <form method="POST"> whose only
+	// non-trivial input is a <select>, the pattern used by bWAPP's
+	// portal, lots of CMS admin panels, and old PHP control panels) one
+	// option at a time and enqueue every distinct redirect target the
+	// server points us at. Off by default because POSTing forms can
+	// trigger side effects we can't reverse - turn it on only against
+	// targets you have authorization to mutate.
+	Pollute bool
 }
 
 type Crawler struct {
@@ -294,6 +304,9 @@ func (c *Crawler) process(
 		for _, link := range links {
 			submit(link, it.depth+1)
 		}
+		if c.cfg.Pollute {
+			c.walkSelectForms(ctx, forms, it.depth+1, submit)
+		}
 		return
 	}
 
@@ -322,4 +335,126 @@ func (c *Crawler) process(
 		recordSpecOps(u, ops)
 		submit(u, it.depth+1)
 	}
+}
+
+// walkSelectForms POSTs every option of every select-driven navigation
+// form on the page and queues the redirect target each submission yields.
+// Only fires when Config.Pollute is true. Forms are gated by
+// isSelectNavForm so we never blind-submit something that looks like a
+// destructive action (visible text/file inputs disqualify it).
+//
+// We deliberately don't enqueue the POST's own response body, only the
+// Location header of a 3xx. Two reasons: (1) the POST may have mutated
+// state and refetching it as a GET target risks running active checks
+// against side-effected pages, and (2) the redirect target is what a
+// real user would land on, which is what we want to scan.
+func (c *Crawler) walkSelectForms(
+	ctx context.Context,
+	forms []page.Form,
+	depth int,
+	submit func(string, int),
+) {
+	for _, form := range forms {
+		sel, ok := isSelectNavForm(form)
+		if !ok {
+			continue
+		}
+		seenOpt := map[string]struct{}{}
+		for _, opt := range sel.Options {
+			if _, dup := seenOpt[opt]; dup {
+				continue
+			}
+			seenOpt[opt] = struct{}{}
+			body := buildSelectFormBody(form, sel.Name, opt)
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, form.Action,
+				strings.NewReader(body))
+			if err != nil {
+				continue
+			}
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			resp, err := c.client.DoNoFollow(ctx, req)
+			if err != nil {
+				if c.onError != nil {
+					c.onError(form.Action, err)
+				}
+				continue
+			}
+			loc := resp.Header.Get("Location")
+			resp.Body.Close()
+			if loc == "" {
+				continue
+			}
+			base, perr := url.Parse(form.Action)
+			if perr != nil {
+				continue
+			}
+			ref, perr := url.Parse(loc)
+			if perr != nil {
+				continue
+			}
+			target := base.ResolveReference(ref)
+			if target.String() == form.Action {
+				// Server bounced back to the form (a "no-op" option like
+				// a separator or category header). Skip.
+				continue
+			}
+			submit(target.String(), depth)
+		}
+	}
+}
+
+// isSelectNavForm decides whether form looks like a select-driven
+// navigation form safe to enumerate. Heuristic: exactly one named
+// <select> with options, plus any number of hidden / submit / button
+// inputs, and no visible text-bearing controls (text, email, password,
+// search, tel, url, number, textarea, file). A form with a visible
+// field is almost certainly a real submission, not nav.
+func isSelectNavForm(form page.Form) (page.FormInput, bool) {
+	if strings.ToUpper(form.Method) != "POST" || form.Action == "" {
+		return page.FormInput{}, false
+	}
+	var sel page.FormInput
+	selects := 0
+	for _, in := range form.Inputs {
+		switch in.Type {
+		case "select":
+			selects++
+			sel = in
+		case "hidden", "submit", "reset", "image", "button":
+			// safe to carry along
+		default:
+			// any visible / data-bearing control disqualifies the form
+			return page.FormInput{}, false
+		}
+	}
+	if selects != 1 || len(sel.Options) == 0 || sel.Name == "" {
+		return page.FormInput{}, false
+	}
+	return sel, true
+}
+
+// buildSelectFormBody builds the urlencoded body for a select-form
+// submission: the select's name pinned to optValue, every hidden input
+// carried verbatim, and every submit button pinned to its default value
+// (server-side handlers often branch on the button name to decide what
+// the form does).
+func buildSelectFormBody(form page.Form, selName, optValue string) string {
+	v := url.Values{}
+	v.Set(selName, optValue)
+	for _, in := range form.Inputs {
+		if in.Name == "" || in.Name == selName {
+			continue
+		}
+		switch in.Type {
+		case "hidden":
+			v.Set(in.Name, in.Value)
+		case "submit", "button", "image":
+			val := in.Value
+			if val == "" {
+				val = "submit"
+			}
+			v.Set(in.Name, val)
+		}
+	}
+	return v.Encode()
 }

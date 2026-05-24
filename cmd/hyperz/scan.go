@@ -50,6 +50,7 @@ type scanConfig struct {
 	crawlPages   int
 	crawlWorkers int
 	apiDiscovery bool
+	pollute      bool
 
 	noFingerprint bool
 
@@ -179,6 +180,11 @@ Modes:
 	f.IntVar(&cfg.crawlWorkers, "crawl-workers", 8, "number of parallel crawl fetchers")
 	f.BoolVar(&cfg.apiDiscovery, "api-discovery", true,
 		"probe well-known OpenAPI/Swagger paths on each seed origin and enqueue every documented endpoint (requires --crawl)")
+	f.BoolVar(&cfg.pollute, "pollute", false,
+		"opt in to state-mutating discovery and checks: walks select-driven navigation forms "+
+			"(POSTs every <option> through and queues the redirect target) and enables the "+
+			"proto-pollution check, which leaves a (best-effort cleaned-up) modification on a "+
+			"Node target. Off by default; turn on only against systems you may safely mutate.")
 
 	f.BoolVar(&cfg.noFingerprint, "no-fingerprint", false,
 		"disable stack detection; runs every check against every target")
@@ -351,9 +357,13 @@ func runScan(ctx context.Context, cfg *scanConfig, level checks.Level) int {
 		log.Info("scope configured", "hosts", "*", "depth", sc.MaxDepth())
 	}
 
-	all := registry()
+	all := registry(cfg.pollute)
 	enabled := checks.Filter(all, level)
-	log.Info("scan starting", "scan_level", level.String(), "enabled", len(enabled), "total", len(all))
+	log.Info("scan starting",
+		"scan_level", level.String(),
+		"enabled", len(enabled),
+		"total", len(all),
+		"pollute", cfg.pollute)
 
 	scannerOpts := []scanner.Option{
 		scanner.WithConcurrency(cfg.concurrency),
@@ -411,6 +421,7 @@ func runScan(ctx context.Context, cfg *scanConfig, level checks.Level) int {
 			MaxPages:     cfg.crawlPages,
 			Scope:        sc,
 			APIDiscovery: cfg.apiDiscovery,
+			Pollute:      cfg.pollute,
 		}, crawler.WithErrorHandler(func(target string, err error) {
 			log.Warn("crawl error", "target", target, "err", err)
 		}))

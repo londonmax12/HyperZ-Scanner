@@ -480,3 +480,131 @@ func TestCrawlDedupesAcrossFragments(t *testing.T) {
 		t.Fatalf("/home emitted %d times, want 1 (got %v)", homeCount, got)
 	}
 }
+
+// selectPortalSite mimics bWAPP's portal: a single <select name="bug"> whose
+// POST to /portal redirects to a per-option destination. Options 1 and 4 are
+// "category headers" - the server redirects them back to /portal so the
+// walker should drop them as no-ops; the rest land on per-bug pages.
+func selectPortalSite(t *testing.T) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/portal", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			if err := r.ParseForm(); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			if r.FormValue("form") != "submit" {
+				http.Error(w, "missing form=submit", http.StatusBadRequest)
+				return
+			}
+			dest := "/portal"
+			switch r.FormValue("bug") {
+			case "2":
+				dest = "/bug2"
+			case "3":
+				dest = "/bug3"
+			case "5":
+				dest = "/bug5"
+			}
+			http.Redirect(w, r, dest, http.StatusFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, `
+			<form action="/portal" method="POST">
+				<select name="bug">
+					<option value="1">--- category ---</option>
+					<option value="2">Bug 2</option>
+					<option value="3">Bug 3</option>
+					<option value="4">--- category ---</option>
+					<option value="5">Bug 5</option>
+				</select>
+				<button type="submit" name="form" value="submit">Hack</button>
+			</form>
+		`)
+	})
+	for _, p := range []string{"/bug2", "/bug3", "/bug5"} {
+		p := p
+		mux.HandleFunc(p, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/html")
+			fmt.Fprintf(w, "<p>%s</p>", p)
+		})
+	}
+	return httptest.NewServer(mux)
+}
+
+func TestCrawlPolluteWalksSelectForm(t *testing.T) {
+	srv := selectPortalSite(t)
+	defer srv.Close()
+
+	c := New(newCrawlerClient(), Config{
+		Scope:   seedScope(t, 2, srv.URL),
+		Pollute: true,
+	})
+	out := make(chan page.Page, 32)
+	if err := c.Crawl(context.Background(), []string{srv.URL + "/portal"}, out); err != nil {
+		t.Fatalf("Crawl: %v", err)
+	}
+	got := stripHost(collectAll(out))
+	want := []string{"/bug2", "/bug3", "/bug5", "/portal"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v\nwant %v", got, want)
+	}
+}
+
+func TestCrawlPolluteOffSkipsSelectForm(t *testing.T) {
+	srv := selectPortalSite(t)
+	defer srv.Close()
+
+	c := New(newCrawlerClient(), Config{
+		Scope: seedScope(t, 2, srv.URL),
+	})
+	out := make(chan page.Page, 32)
+	if err := c.Crawl(context.Background(), []string{srv.URL + "/portal"}, out); err != nil {
+		t.Fatalf("Crawl: %v", err)
+	}
+	got := stripHost(collectAll(out))
+	if !reflect.DeepEqual(got, []string{"/portal"}) {
+		t.Fatalf("got %v, want only [/portal]", got)
+	}
+}
+
+func TestCrawlPolluteSkipsFormsWithVisibleInputs(t *testing.T) {
+	// A form with a visible text input alongside the select is almost
+	// certainly a real submission (search, comment, ...), not navigation.
+	// The walker must not POST it even when --pollute is on.
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `
+			<form action="/danger" method="POST">
+				<input type="text" name="q">
+				<select name="filter">
+					<option value="a">A</option>
+					<option value="b">B</option>
+				</select>
+				<button type="submit">Go</button>
+			</form>
+		`)
+	})
+	mux.HandleFunc("/danger", func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("/danger should NOT be POSTed by select-form walker")
+		http.Redirect(w, r, "/should-not-appear", http.StatusFound)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New(newCrawlerClient(), Config{
+		Scope:   seedScope(t, 2, srv.URL),
+		Pollute: true,
+	})
+	out := make(chan page.Page, 32)
+	if err := c.Crawl(context.Background(), []string{srv.URL + "/"}, out); err != nil {
+		t.Fatalf("Crawl: %v", err)
+	}
+	got := stripHost(collectAll(out))
+	if !reflect.DeepEqual(got, []string{"/"}) {
+		t.Fatalf("got %v, want only [/]", got)
+	}
+}

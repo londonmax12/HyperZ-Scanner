@@ -11,8 +11,13 @@ import (
 
 // registry lists every check that ships with hyperz. Add new checks here so
 // they appear in `hyperz checks list` and run during `hyperz scan`.
-func registry() []checks.Check {
-	return []checks.Check{
+//
+// pollute gates state-mutating checks: ProtoPollution leaves a (best-effort
+// cleaned-up) modification on a Node target's Object.prototype, so it only
+// loads when the operator has explicitly accepted that with --pollute.
+// Other checks here are read-only or only mutate the request itself.
+func registry(pollute bool) []checks.Check {
+	out := []checks.Check{
 		checks.SecurityHeaders{},
 		checks.CookieAttributes{},
 		checks.CacheControlSensitive{},
@@ -43,11 +48,14 @@ func registry() []checks.Check {
 		checks.SRIMissing{},
 		checks.SourceMapExposure{},
 		checks.TargetBlankNoopener{},
-		checks.ProtoPollution{},
 		&checks.ContentDiscovery{},
 		&checks.IDOR{},
 		&checks.SubdomainTakeover{},
 	}
+	if pollute {
+		out = append(out, checks.ProtoPollution{})
+	}
+	return out
 }
 
 func newChecksCmd() *cobra.Command {
@@ -65,9 +73,12 @@ func newChecksListCmd() *cobra.Command {
 		Short: "List all checks and the level each one runs at",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// pollute=true so the catalog shows the full set, including
+			// state-mutating checks; the operator chooses what to enable
+			// at scan time via --pollute.
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
 			fmt.Fprintln(tw, "NAME\tLEVEL")
-			for _, c := range registry() {
+			for _, c := range registry(true) {
 				fmt.Fprintf(tw, "%s\t%s\n", c.Name(), c.Level())
 			}
 			return tw.Flush()

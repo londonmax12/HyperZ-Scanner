@@ -63,7 +63,7 @@ Built-in checks:
 | `cmd-injection-blind` | default | out-of-band / time-based command injection probes |
 | `xxe` | default | XML external entity probes against XML endpoints |
 | `content-discovery` | default | directory and file brute-forcing against allowed roots |
-| `proto-pollution` | aggressive | prototype pollution probes via JSON bodies and query parameters |
+| `proto-pollution` | aggressive | prototype pollution probes via JSON bodies and query parameters (requires `--pollute`) |
 | `idor` | aggressive | insecure direct object reference probing on numeric / UUID identifiers |
 
 `hyperz checks list` prints the current registry at runtime.
@@ -193,6 +193,26 @@ sets the number of parallel fetchers.
 `--api-discovery` (on by default when `--crawl` is set) probes well-known
 OpenAPI / Swagger paths on each seed origin and enqueues every documented
 endpoint as an additional crawl target.
+
+### State-mutating discovery (`--pollute`)
+
+`--pollute` opts the scan into actions that can leave a footprint on the
+target. Off by default; only turn it on against systems you have explicit
+authorization to mutate.
+
+When set, two things change:
+
+- The crawler walks select-driven navigation forms: any
+  `<form method="POST">` whose only meaningful input is a single `<select>`
+  (plus hidden / submit controls) gets POSTed once per `<option>`, and the
+  redirect target each submission lands on gets enqueued. This is what
+  bWAPP-style portals, lots of CMS admin panels, and legacy PHP control
+  panels use for navigation. Forms with visible text / file inputs are
+  never walked - those are almost certainly real submissions, not nav.
+- The `proto-pollution` check is loaded into the registry. It pollutes
+  `Object.prototype` on a vulnerable Node target with a best-effort
+  cleanup payload afterward; even with cleanup, a successful finding
+  implies a (now-neutralized) modification to the target's shared state.
 
 ### Concurrency, rate limiting & request budget
 

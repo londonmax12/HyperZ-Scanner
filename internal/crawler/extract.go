@@ -56,6 +56,19 @@ func extractAll(base *url.URL, body []byte) ([]string, []page.Form) {
 		inTextarea bool
 		taName     string
 		taBuf      strings.Builder
+		// selectIdx points into current.Inputs at the active <select>'s
+		// FormInput so <option> children can append their values directly
+		// onto it. -1 when not inside a select (or when the select had no
+		// name, since unnamed selects are dropped at the start tag). Reset
+		// on </select> and on </form>.
+		selectIdx = -1
+		// optTextIdx tracks the index inside selectIdx's Options that the
+		// current <option> appended a placeholder for so its text-node
+		// children can replace the placeholder when the tag has no value
+		// attribute. -1 when not inside an option (or when the option
+		// already had a value attribute and needs no text capture).
+		optTextIdx = -1
+		optTextBuf strings.Builder
 	)
 	for {
 		tt := z.Next()
@@ -72,6 +85,9 @@ func extractAll(base *url.URL, body []byte) ([]string, []page.Form) {
 		case html.TextToken:
 			if inTextarea {
 				taBuf.Write(z.Text())
+			}
+			if optTextIdx >= 0 {
+				optTextBuf.Write(z.Text())
 			}
 		case html.StartTagToken, html.SelfClosingTagToken:
 			name, hasAttr := z.TagName()
@@ -110,6 +126,23 @@ func extractAll(base *url.URL, body []byte) ([]string, []page.Form) {
 						current.Inputs = append(current.Inputs, page.FormInput{
 							Name: name, Type: "select", Value: attrs["value"],
 						})
+						selectIdx = len(current.Inputs) - 1
+					}
+				}
+			case "option":
+				if current != nil && selectIdx >= 0 {
+					if v, hasValue := attrs["value"]; hasValue {
+						current.Inputs[selectIdx].Options = append(
+							current.Inputs[selectIdx].Options, v)
+					} else {
+						// HTML lets <option> omit value="..." - browsers
+						// then submit the element's text content. Reserve
+						// a placeholder slot now and fill it from the
+						// text-node children at </option>.
+						current.Inputs[selectIdx].Options = append(
+							current.Inputs[selectIdx].Options, "")
+						optTextIdx = len(current.Inputs[selectIdx].Options) - 1
+						optTextBuf.Reset()
 					}
 				}
 			case "textarea":
@@ -140,6 +173,19 @@ func extractAll(base *url.URL, body []byte) ([]string, []page.Form) {
 					forms = append(forms, *current)
 					current = nil
 				}
+				selectIdx = -1
+				optTextIdx = -1
+				optTextBuf.Reset()
+			case "select":
+				selectIdx = -1
+				optTextIdx = -1
+				optTextBuf.Reset()
+			case "option":
+				if current != nil && selectIdx >= 0 && optTextIdx >= 0 {
+					current.Inputs[selectIdx].Options[optTextIdx] = strings.TrimSpace(optTextBuf.String())
+				}
+				optTextIdx = -1
+				optTextBuf.Reset()
 			case "textarea":
 				if current != nil && inTextarea && taName != "" {
 					current.Inputs = append(current.Inputs, page.FormInput{

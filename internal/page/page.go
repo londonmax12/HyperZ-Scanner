@@ -65,10 +65,18 @@ type Form struct {
 // <input>; for non-input elements it's the tag name ("select", "textarea",
 // "button"). Value is the default value the browser would submit; empty
 // is fine and common, since checks supply their own payload anyway.
+//
+// Options is populated only for Type=="select" and lists every <option>
+// `value` (falling back to option text when value is absent) in document
+// order. Other input types leave it nil. The pollute-gated select-form
+// crawler reads this to fan out one submission per option; checks that
+// want to iterate the choice surface also consume it here instead of
+// re-parsing HTML.
 type FormInput struct {
-	Name  string
-	Type  string
-	Value string
+	Name    string
+	Type    string
+	Value   string
+	Options []string
 }
 
 // SpecOp is one OpenAPI / Swagger operation whose request URL the
