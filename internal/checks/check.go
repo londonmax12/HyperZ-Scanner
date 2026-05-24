@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/londonmax12/hyperz/internal/fingerprint"
 	"github.com/londonmax12/hyperz/internal/httpclient"
 	"github.com/londonmax12/hyperz/internal/page"
 	"github.com/londonmax12/hyperz/internal/scope"
@@ -445,6 +446,35 @@ func LevelFrom(ctx context.Context) Level {
 		return lvl
 	}
 	return LevelDefault
+}
+
+// stackKey carries the detected fingerprint.Stack through the context the
+// scanner hands to Run. Used by checks (notably content-discovery) that
+// want to suppress sub-probes irrelevant to the detected stack - e.g.
+// skipping /web.config on an Apache host where IIS isn't in play.
+//
+// fingerprint.StackGated remains the right tool for gating an entire
+// check; this is for finer-grained, intra-check decisions.
+type stackKey struct{}
+
+// WithStack attaches s to ctx so checks can adjust intra-check behavior
+// (entry filtering, probe selection) based on the detected stack. The
+// scanner sets this once per page; a nil s is allowed and means "no
+// fingerprint available", which checks must treat as permissive rather
+// than as proof of absence.
+func WithStack(ctx context.Context, s *fingerprint.Stack) context.Context {
+	return context.WithValue(ctx, stackKey{}, s)
+}
+
+// StackFrom returns the fingerprint.Stack attached to ctx, or nil if none
+// was attached. A check that wants to gate sub-probes must treat nil as
+// "no information; run everything" - the same contract the scanner uses
+// for whole-check gating when fingerprinting is disabled or fails.
+func StackFrom(ctx context.Context) *fingerprint.Stack {
+	if s, ok := ctx.Value(stackKey{}).(*fingerprint.Stack); ok {
+		return s
+	}
+	return nil
 }
 
 // DefaultBudget is the per-check deadline the scanner applies when a check

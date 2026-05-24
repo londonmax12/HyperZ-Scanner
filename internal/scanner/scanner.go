@@ -177,6 +177,7 @@ func (s *Scanner) scanOne(ctx context.Context, p page.Page, out chan<- checks.Fi
 			// surfaced through this reporter, so a flaky host leaves one
 			// onError event per failure even when the check returns findings.
 			runCtx = checks.WithLevel(runCtx, s.level)
+			runCtx = checks.WithStack(runCtx, stack)
 			if s.onError != nil {
 				runCtx = checks.WithReporter(runCtx, func(err error) {
 					s.onError(target, c.Name(), err)

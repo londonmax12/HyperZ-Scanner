@@ -333,6 +333,57 @@ func TestScanGatedCheckSkippedWhenStackDoesNotMatch(t *testing.T) {
 	}
 }
 
+// stackObservingCheck records the *fingerprint.Stack attached to its
+// runCtx. Used to verify the scanner propagates the detected stack
+// through checks.WithStack so intra-check filters (content-discovery's
+// per-entry gating) can read it.
+type stackObservingCheck struct {
+	stubCheck
+	gotStack *fingerprint.Stack
+}
+
+func (s *stackObservingCheck) Run(ctx context.Context, c *httpclient.Client, sc *scope.Scope, p page.Page) ([]checks.Finding, error) {
+	s.gotStack = checks.StackFrom(ctx)
+	return s.stubCheck.Run(ctx, c, sc, p)
+}
+
+func TestScanAttachesStackToCheckContext(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Server", "Apache/2.4.7")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	client := newNilClient()
+	det := fingerprint.New(client)
+	obs := &stackObservingCheck{stubCheck: stubCheck{name: "obs"}}
+	s := New(client, []checks.Check{obs}, WithFingerprint(det))
+
+	if _, err := runOne(context.Background(), s, srv.URL); err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if obs.gotStack == nil {
+		t.Fatalf("check observed nil stack; scanner did not call WithStack")
+	}
+	if obs.gotStack.Server != "apache" {
+		t.Errorf("observed stack.Server = %q, want apache", obs.gotStack.Server)
+	}
+}
+
+func TestScanWithoutFingerprintLeavesStackNil(t *testing.T) {
+	// Without WithFingerprint wired, scanOne passes a nil stack into
+	// WithStack, and StackFrom must return nil so intra-check filters
+	// fall back to their permissive (no fingerprint) branch.
+	obs := &stackObservingCheck{stubCheck: stubCheck{name: "obs"}}
+	s := New(newNilClient(), []checks.Check{obs})
+	if _, err := runOne(context.Background(), s, "http://t"); err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if obs.gotStack != nil {
+		t.Errorf("expected nil stack without detector, got %+v", obs.gotStack)
+	}
+}
+
 func TestScanWithoutFingerprintAlwaysRunsGatedChecks(t *testing.T) {
 	// No detector wired â†’ AppliesTo must not be consulted, so a check that
 	// would reject every stack still runs.

@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/londonmax12/hyperz/internal/fingerprint"
 	"github.com/londonmax12/hyperz/internal/page"
 )
 
@@ -545,6 +546,104 @@ func TestHostBackupEntries(t *testing.T) {
 	}
 }
 
+// The regression target: an Apache host should never get the IIS-only
+// /web.config probed. Before stack gating, content-discovery would
+// dispatch the probe and any text/xml-shaped response with the
+// "<configuration" needle in the body would fire a false-positive
+// High finding. Confirm the request never reaches the server.
+func TestContentDiscoverySuppressesWebConfigOnApache(t *testing.T) {
+	var webConfigHits int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/web.config" {
+			atomic.AddInt64(&webConfigHits, 1)
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	ctx := WithStack(context.Background(), &fingerprint.Stack{Server: "apache"})
+	if _, err := (&ContentDiscovery{}).Run(ctx, newTestClient(t), nil, page.FromURL(srv.URL+"/")); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := atomic.LoadInt64(&webConfigHits); got != 0 {
+		t.Errorf("/web.config probed on Apache host (stack-gated entry leaked): %d hits", got)
+	}
+}
+
+// Counterpart: a confirmed-IIS host must still probe /web.config. The
+// gate cuts the wrong direction without this; the existing /.git
+// regression suite catches the unconstrained-entry case but not this.
+func TestContentDiscoveryProbesWebConfigOnIIS(t *testing.T) {
+	var webConfigHits int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/web.config" {
+			atomic.AddInt64(&webConfigHits, 1)
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	ctx := WithStack(context.Background(), &fingerprint.Stack{Server: "iis", Language: "dotnet"})
+	if _, err := (&ContentDiscovery{}).Run(ctx, newTestClient(t), nil, page.FromURL(srv.URL+"/")); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if atomic.LoadInt64(&webConfigHits) == 0 {
+		t.Errorf("/web.config not probed on confirmed-IIS host; stack gate is too strict")
+	}
+}
+
+// Unknown stack must remain permissive: /web.config still gets probed
+// when no fingerprint is attached. This is the safer default - we
+// don't suppress on absence of evidence, only on positive disagreement.
+func TestContentDiscoveryProbesWebConfigOnUnknownStack(t *testing.T) {
+	var webConfigHits int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/web.config" {
+			atomic.AddInt64(&webConfigHits, 1)
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	// No WithStack wrapping -> StackFrom returns nil -> permissive.
+	if _, err := (&ContentDiscovery{}).Run(context.Background(), newTestClient(t), nil, page.FromURL(srv.URL+"/")); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if atomic.LoadInt64(&webConfigHits) == 0 {
+		t.Errorf("/web.config not probed without fingerprint; unknown stack should be permissive")
+	}
+}
+
+func TestDiscoveryEntryAppliesTo(t *testing.T) {
+	iisOnly := discoveryEntry{Servers: []string{"iis"}}
+	javaOnly := discoveryEntry{Languages: []string{"java"}}
+	wpOnly := discoveryEntry{CMSes: []string{"wordpress"}}
+	any := discoveryEntry{}
+
+	cases := []struct {
+		name  string
+		entry discoveryEntry
+		stack *fingerprint.Stack
+		want  bool
+	}{
+		{"nil stack permits everything", iisOnly, nil, true},
+		{"unconstrained entry runs anywhere", any, &fingerprint.Stack{Server: "apache"}, true},
+		{"server mismatch suppresses", iisOnly, &fingerprint.Stack{Server: "apache"}, false},
+		{"server match runs", iisOnly, &fingerprint.Stack{Server: "iis"}, true},
+		{"unknown server treated permissively", iisOnly, &fingerprint.Stack{Server: ""}, true},
+		{"language mismatch suppresses", javaOnly, &fingerprint.Stack{Language: "php"}, false},
+		{"language match runs", javaOnly, &fingerprint.Stack{Language: "java"}, true},
+		{"cms mismatch suppresses", wpOnly, &fingerprint.Stack{CMS: "drupal"}, false},
+		{"cms match runs", wpOnly, &fingerprint.Stack{CMS: "wordpress"}, true},
+		{"all constrained fields must pass", discoveryEntry{Servers: []string{"iis"}, Languages: []string{"dotnet"}}, &fingerprint.Stack{Server: "iis", Language: "php"}, false},
+	}
+	for _, c := range cases {
+		if got := c.entry.appliesTo(c.stack); got != c.want {
+			t.Errorf("%s: appliesTo = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
 func TestFollowUpsForExtractsHostPath(t *testing.T) {
 	// followUpsFor pulls the path out of full URLs, then matches
 	// against group triggers. Confirm git triggers expand and the
@@ -555,7 +654,7 @@ func TestFollowUpsForExtractsHostPath(t *testing.T) {
 	probed := map[string]struct{}{
 		"/.git/index": {}, // pretend this already ran
 	}
-	out := followUpsFor(findings, probed)
+	out := followUpsFor(findings, probed, nil)
 	if len(out) == 0 {
 		t.Fatalf("expected follow-ups, got none")
 	}

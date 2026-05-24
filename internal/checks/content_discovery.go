@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/londonmax12/hyperz/internal/fingerprint"
 	"github.com/londonmax12/hyperz/internal/httpclient"
 	"github.com/londonmax12/hyperz/internal/page"
 	"github.com/londonmax12/hyperz/internal/scope"
@@ -141,9 +142,17 @@ func (c *ContentDiscovery) Run(ctx context.Context, client *httpclient.Client, s
 	}
 
 	aggressive := LevelFrom(ctx) >= LevelAggressive
+	stack := StackFrom(ctx)
 	mainEntries := make([]discoveryEntry, 0, len(contentDiscoveryEntries)+8)
 	for _, e := range contentDiscoveryEntries {
 		if e.Aggressive && !aggressive {
+			continue
+		}
+		// Stack gating: a confirmed-Apache host gets /web.config silently
+		// dropped before probe dispatch (the IIS-only constraint), and an
+		// unknown stack still probes everything. host-named backups added
+		// below are stack-agnostic by construction.
+		if !e.appliesTo(stack) {
 			continue
 		}
 		mainEntries = append(mainEntries, e)
@@ -156,7 +165,7 @@ func (c *ContentDiscovery) Run(ctx context.Context, client *httpclient.Client, s
 	// Second wave: expand on any hit whose path triggers a follow-up
 	// group. Skipping when nothing fired keeps the cost zero on hosts
 	// where the curated catalog drew a blank.
-	if followUps := followUpsFor(findings, probed); len(followUps) > 0 && ctx.Err() == nil {
+	if followUps := followUpsFor(findings, probed, stack); len(followUps) > 0 && ctx.Err() == nil {
 		extra := c.runProbes(ctx, client, sc, hostRoot, baseline, followUps, probed)
 		seen := make(map[string]struct{}, len(findings)+len(extra))
 		for _, f := range findings {
@@ -236,9 +245,10 @@ func (c *ContentDiscovery) runProbes(ctx context.Context, client *httpclient.Cli
 
 // followUpsFor walks the configured groups and returns every follow-up
 // entry whose trigger appears in findings, skipping entries whose path
-// is already in probed. Returning a flat slice (rather than per-group)
-// lets the second-wave dispatch share runProbes verbatim.
-func followUpsFor(findings []Finding, probed map[string]struct{}) []discoveryEntry {
+// is already in probed or whose stack constraint disagrees with stack.
+// Returning a flat slice (rather than per-group) lets the second-wave
+// dispatch share runProbes verbatim.
+func followUpsFor(findings []Finding, probed map[string]struct{}, stack *fingerprint.Stack) []discoveryEntry {
 	if len(findings) == 0 {
 		return nil
 	}
@@ -272,6 +282,9 @@ func followUpsFor(findings []Finding, probed map[string]struct{}) []discoveryEnt
 				continue
 			}
 			if _, dup := queued[e.Path]; dup {
+				continue
+			}
+			if !e.appliesTo(stack) {
 				continue
 			}
 			queued[e.Path] = struct{}{}

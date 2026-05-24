@@ -1,5 +1,7 @@
 package checks
 
+import "github.com/londonmax12/hyperz/internal/fingerprint"
+
 // discoveryEntry is one curated path the ContentDiscovery sweep probes.
 //
 // Path is the absolute URL path (with leading slash) joined to the
@@ -30,6 +32,18 @@ package checks
 // aggressive tier adds admin consoles, dev artifacts, and informational
 // endpoints that would otherwise inflate per-host probe count without
 // proportional signal.
+//
+// Servers, Languages, Frameworks, and CMSes - when non-empty - restrict
+// the entry to hosts whose detected stack matches one of the listed
+// values for that field. Empty means "no constraint" (the entry is
+// stack-agnostic; the default). When the host's value for a constrained
+// field is unknown (the fingerprint left it empty), the entry still
+// runs - we don't suppress on absence of evidence, only on positive
+// disagreement with what we did detect. This is the load-bearing
+// false-positive defense for stack-specific paths: probing /web.config
+// against a confirmed-Apache host produces noise (some Apaches happily
+// serve any .config text file the deployer accidentally dropped), so
+// the IIS-only constraint suppresses the probe before it fires.
 type discoveryEntry struct {
 	Path                 string
 	Severity             Severity
@@ -41,6 +55,39 @@ type discoveryEntry struct {
 	Marker               string
 	ExpectedContentTypes []string
 	Aggressive           bool
+	Servers              []string
+	Languages            []string
+	Frameworks           []string
+	CMSes                []string
+}
+
+// appliesTo reports whether this entry should run against a host with
+// the detected stack. A nil stack means "no fingerprint available" and
+// every entry runs (the same permissive contract WithStack documents).
+//
+// For each constrained field the rule is: skip iff the host has a known
+// value AND that value isn't in the allow list. An empty allow list is
+// no constraint; an empty host value (unknown) is permissive. All four
+// fields must individually pass for the entry to run.
+func (e discoveryEntry) appliesTo(s *fingerprint.Stack) bool {
+	if s == nil {
+		return true
+	}
+	check := func(have string, allow []string) bool {
+		if len(allow) == 0 || have == "" {
+			return true
+		}
+		for _, a := range allow {
+			if a == have {
+				return true
+			}
+		}
+		return false
+	}
+	return check(s.Server, e.Servers) &&
+		check(s.Language, e.Languages) &&
+		check(s.Framework, e.Frameworks) &&
+		check(s.CMS, e.CMSes)
 }
 
 // contentDiscoveryEntries is the curated probe catalog. New entries
@@ -154,6 +201,8 @@ var contentDiscoveryEntries = []discoveryEntry{
 		OWASP:       "A05:2021 Security Misconfiguration",
 		Remediation: "IIS should refuse to serve *.config under the document root; verify the staticContent and requestFiltering rules.",
 		Marker:      "<configuration",
+		Servers:     []string{"iis"},
+		Languages:   []string{"dotnet"},
 	},
 	{
 		Path:        "/appsettings.json",
@@ -164,6 +213,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 		OWASP:       "A05:2021 Security Misconfiguration",
 		Remediation: "Move secrets to environment variables, Azure Key Vault, or a user-secrets store; block *.json files under the wwwroot at the IIS or Kestrel layer.",
 		Marker:      "ConnectionStrings",
+		Languages:   []string{"dotnet"},
 	},
 	{
 		Path:        "/application.properties",
@@ -174,6 +224,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 		OWASP:       "A05:2021 Security Misconfiguration",
 		Remediation: "Move secrets out of application.properties (use environment overrides or Spring Cloud Config) and exclude properties files from the served document root.",
 		ExpectedContentTypes: []string{"text/plain", "application/octet-stream"},
+		Languages:            []string{"java"},
 	},
 	{
 		Path:        "/id_rsa",
@@ -195,6 +246,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 		Remediation: "Verify PHP files are executed rather than served; restrict access to wp-config.php at the web server layer as defense in depth.",
 		Marker:      "DB_PASSWORD",
 		Aggressive:  true,
+		CMSes:       []string{"wordpress"},
 	},
 	{
 		Path:        "/.htpasswd",
@@ -205,6 +257,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 		OWASP:       "A05:2021 Security Misconfiguration",
 		Remediation: "Move .htpasswd outside the document root and add a Files directive that denies access to dotfiles as defense in depth.",
 		Aggressive:  true,
+		Servers:     []string{"apache", "litespeed"},
 	},
 	{
 		Path:        "/.npmrc",
@@ -215,6 +268,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 		OWASP:       "A05:2021 Security Misconfiguration",
 		Remediation: "Exclude .npmrc from the document root and rotate any auth tokens present in the disclosed file.",
 		Aggressive:  true,
+		Languages:   []string{"node"},
 	},
 	{
 		Path:        "/private.key",
@@ -258,6 +312,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 		OWASP:       "A05:2021 Security Misconfiguration",
 		Remediation: "Add a Files directive that denies access to dotfiles at the server config level.",
 		Aggressive:  true,
+		Servers:     []string{"apache", "litespeed"},
 	},
 	{
 		Path:        "/application.yml",
@@ -269,6 +324,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 		Remediation: "Move secrets out of application.yml and exclude YAML files from the served document root.",
 		ExpectedContentTypes: []string{"text/yaml", "application/yaml", "text/plain", "application/x-yaml", "application/octet-stream"},
 		Aggressive:           true,
+		Languages:            []string{"java"},
 	},
 
 	// -- Framework debug / introspection endpoints ------------------
@@ -282,6 +338,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 		OWASP:       "A05:2021 Security Misconfiguration",
 		Remediation: "Set management.endpoints.web.exposure.exclude=env (or *) and gate actuator behind authentication on a separate management port.",
 		Marker:      "propertySources",
+		Languages:   []string{"java"},
 	},
 	{
 		Path:        "/actuator/heapdump",
@@ -292,6 +349,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 		OWASP:       "A05:2021 Security Misconfiguration",
 		Remediation: "Exclude heapdump from exposed actuators; gate actuator endpoints behind authentication.",
 		ExpectedContentTypes: []string{"application/octet-stream", "application/vnd.spring-boot.actuator.v3+json"},
+		Languages:            []string{"java"},
 	},
 	{
 		Path:        "/actuator",
@@ -302,6 +360,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 		OWASP:       "A05:2021 Security Misconfiguration",
 		Remediation: "Restrict actuator exposure with management.endpoints.web.exposure.include and gate it behind authentication.",
 		Marker:      "_links",
+		Languages:   []string{"java"},
 	},
 	{
 		Path:        "/debug/pprof/",
@@ -312,6 +371,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 		OWASP:       "A05:2021 Security Misconfiguration",
 		Remediation: "Do not register net/http/pprof handlers on the public mux; serve them on a separate, firewalled debug listener.",
 		Marker:      "Types of profiles available",
+		Languages:   []string{"go"},
 	},
 	{
 		Path:        "/server-status",
@@ -322,6 +382,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 		OWASP:       "A05:2021 Security Misconfiguration",
 		Remediation: "Restrict /server-status to local or admin IPs in the Apache config, or disable mod_status entirely.",
 		Marker:      "Apache Server Status",
+		Servers:     []string{"apache"},
 	},
 	{
 		Path:        "/server-info",
@@ -333,6 +394,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 		Remediation: "Restrict /server-info to local or admin IPs, or disable mod_info.",
 		Marker:      "Apache Server Information",
 		Aggressive:  true,
+		Servers:     []string{"apache"},
 	},
 	{
 		Path:        "/phpinfo.php",
@@ -343,6 +405,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 		OWASP:       "A05:2021 Security Misconfiguration",
 		Remediation: "Remove phpinfo.php from the document root.",
 		Marker:      "PHP Version",
+		Languages:   []string{"php"},
 	},
 	{
 		Path:        "/info.php",
@@ -354,6 +417,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 		Remediation: "Remove info.php from the document root.",
 		Marker:      "PHP Version",
 		Aggressive:  true,
+		Languages:   []string{"php"},
 	},
 	{
 		Path:        "/test.php",
@@ -364,6 +428,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 		OWASP:       "A05:2021 Security Misconfiguration",
 		Remediation: "Remove test scripts from the document root.",
 		Aggressive:  true,
+		Languages:   []string{"php"},
 	},
 	{
 		Path:        "/graphql",
@@ -408,6 +473,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 		Remediation: "Disable springfox in production profiles or gate the endpoint behind authentication.",
 		Marker:      "\"swagger\"",
 		Aggressive:  true,
+		Languages:   []string{"java"},
 	},
 
 	// -- Backup / dump files ----------------------------------------
@@ -497,6 +563,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 		OWASP:       "A01:2021 Broken Access Control",
 		Remediation: "Restrict /administrator/ to trusted ranges; enforce MFA on admin accounts.",
 		Aggressive:  true,
+		CMSes:       []string{"joomla"},
 	},
 	{
 		Path:        "/wp-admin/",
@@ -507,6 +574,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 		OWASP:       "A01:2021 Broken Access Control",
 		Remediation: "Restrict /wp-admin/ to trusted ranges; enforce MFA on admin accounts.",
 		Aggressive:  true,
+		CMSes:       []string{"wordpress"},
 	},
 	{
 		Path:        "/phpmyadmin/",
@@ -517,6 +585,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 		OWASP:       "A01:2021 Broken Access Control",
 		Remediation: "Move phpMyAdmin off the public web or restrict it to admin IPs only.",
 		Aggressive:  true,
+		Languages:   []string{"php"},
 	},
 	{
 		Path:        "/adminer.php",
@@ -527,6 +596,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 		OWASP:       "A01:2021 Broken Access Control",
 		Remediation: "Remove adminer.php from production; if a DB UI is required, gate it behind a network ACL.",
 		Aggressive:  true,
+		Languages:   []string{"php"},
 	},
 	{
 		Path:        "/manager/html",
@@ -537,6 +607,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 		OWASP:       "A01:2021 Broken Access Control",
 		Remediation: "Disable /manager/html on production Tomcat, or restrict it by IP and enforce strong unique credentials.",
 		Aggressive:  true,
+		Languages:   []string{"java"},
 	},
 
 	// -- CI / runtime artifacts -------------------------------------
@@ -614,6 +685,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 		Remediation: "Exclude package.json from the document root; ship only the runtime bundle.",
 		Marker:      "\"dependencies\"",
 		Aggressive:  true,
+		Languages:   []string{"node"},
 	},
 	{
 		Path:        "/package-lock.json",
@@ -625,6 +697,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 		Remediation: "Exclude lockfiles from the document root.",
 		Marker:      "\"lockfileVersion\"",
 		Aggressive:  true,
+		Languages:   []string{"node"},
 	},
 	{
 		Path:        "/yarn.lock",
@@ -636,6 +709,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 		Remediation: "Exclude lockfiles from the document root.",
 		Marker:      "# yarn lockfile",
 		Aggressive:  true,
+		Languages:   []string{"node"},
 	},
 	{
 		Path:        "/composer.json",
@@ -646,6 +720,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 		OWASP:       "A05:2021 Security Misconfiguration",
 		Remediation: "Exclude composer.json from the document root.",
 		Aggressive:  true,
+		Languages:   []string{"php"},
 	},
 	{
 		Path:        "/composer.lock",
@@ -657,6 +732,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 		Remediation: "Exclude composer.lock from the document root.",
 		Marker:      "\"packages\"",
 		Aggressive:  true,
+		Languages:   []string{"php"},
 	},
 
 	// -- Informational ----------------------------------------------
@@ -759,18 +835,18 @@ var contentDiscoveryFollowUpGroups = []discoveryFollowUpGroup{
 	{
 		Triggers: []string{"/actuator", "/actuator/env", "/actuator/heapdump"},
 		Entries: []discoveryEntry{
-			{Path: "/actuator/health", Severity: SeverityLow, Title: "Spring Boot /actuator/health reachable", Detail: "Health endpoint discloses dependency status (DBs, brokers, downstream services).", CWE: "CWE-200", OWASP: "A05:2021 Security Misconfiguration", Remediation: "Set management.endpoints.web.exposure.exclude to drop unintended endpoints and gate actuator behind authentication.", Marker: "\"status\""},
-			{Path: "/actuator/mappings", Severity: SeverityMedium, Title: "Spring Boot /actuator/mappings reachable", Detail: "Lists every request mapping the app exposes - a one-shot endpoint map for an attacker.", CWE: "CWE-200", OWASP: "A05:2021 Security Misconfiguration", Remediation: "Exclude mappings from the exposed actuators.", Marker: "\"mappings\""},
-			{Path: "/actuator/configprops", Severity: SeverityHigh, Title: "Spring Boot /actuator/configprops reachable", Detail: "Discloses every @ConfigurationProperties bean and its resolved values - frequently includes secrets.", CWE: "CWE-200", OWASP: "A05:2021 Security Misconfiguration", Remediation: "Exclude configprops from the exposed actuators.", Marker: "\"contexts\""},
-			{Path: "/actuator/threaddump", Severity: SeverityMedium, Title: "Spring Boot /actuator/threaddump reachable", Detail: "Returns a full JVM thread dump - leaks code paths and any in-flight request data carried on a stack frame.", CWE: "CWE-200", OWASP: "A05:2021 Security Misconfiguration", Remediation: "Exclude threaddump from the exposed actuators.", Marker: "\"threads\""},
+			{Path: "/actuator/health", Severity: SeverityLow, Title: "Spring Boot /actuator/health reachable", Detail: "Health endpoint discloses dependency status (DBs, brokers, downstream services).", CWE: "CWE-200", OWASP: "A05:2021 Security Misconfiguration", Remediation: "Set management.endpoints.web.exposure.exclude to drop unintended endpoints and gate actuator behind authentication.", Marker: "\"status\"", Languages: []string{"java"}},
+			{Path: "/actuator/mappings", Severity: SeverityMedium, Title: "Spring Boot /actuator/mappings reachable", Detail: "Lists every request mapping the app exposes - a one-shot endpoint map for an attacker.", CWE: "CWE-200", OWASP: "A05:2021 Security Misconfiguration", Remediation: "Exclude mappings from the exposed actuators.", Marker: "\"mappings\"", Languages: []string{"java"}},
+			{Path: "/actuator/configprops", Severity: SeverityHigh, Title: "Spring Boot /actuator/configprops reachable", Detail: "Discloses every @ConfigurationProperties bean and its resolved values - frequently includes secrets.", CWE: "CWE-200", OWASP: "A05:2021 Security Misconfiguration", Remediation: "Exclude configprops from the exposed actuators.", Marker: "\"contexts\"", Languages: []string{"java"}},
+			{Path: "/actuator/threaddump", Severity: SeverityMedium, Title: "Spring Boot /actuator/threaddump reachable", Detail: "Returns a full JVM thread dump - leaks code paths and any in-flight request data carried on a stack frame.", CWE: "CWE-200", OWASP: "A05:2021 Security Misconfiguration", Remediation: "Exclude threaddump from the exposed actuators.", Marker: "\"threads\"", Languages: []string{"java"}},
 		},
 	},
 	{
 		Triggers: []string{"/wp-config.php"},
 		Entries: []discoveryEntry{
-			{Path: "/wp-config.php.bak", Severity: SeverityHigh, Title: "WordPress wp-config.php.bak reachable", Detail: "Backup of wp-config.php is served directly, disclosing DB credentials and authentication salts.", CWE: "CWE-538", OWASP: "A05:2021 Security Misconfiguration", Remediation: "Remove backup copies from the document root.", Marker: "DB_PASSWORD"},
-			{Path: "/wp-config.php.old", Severity: SeverityHigh, Title: "WordPress wp-config.php.old reachable", Detail: "Older copy of wp-config.php is served directly.", CWE: "CWE-538", OWASP: "A05:2021 Security Misconfiguration", Remediation: "Remove backup copies from the document root.", Marker: "DB_PASSWORD"},
-			{Path: "/wp-config.php~", Severity: SeverityHigh, Title: "WordPress wp-config.php~ reachable", Detail: "Editor backup of wp-config.php is served directly.", CWE: "CWE-538", OWASP: "A05:2021 Security Misconfiguration", Remediation: "Remove editor backup files from the document root.", Marker: "DB_PASSWORD"},
+			{Path: "/wp-config.php.bak", Severity: SeverityHigh, Title: "WordPress wp-config.php.bak reachable", Detail: "Backup of wp-config.php is served directly, disclosing DB credentials and authentication salts.", CWE: "CWE-538", OWASP: "A05:2021 Security Misconfiguration", Remediation: "Remove backup copies from the document root.", Marker: "DB_PASSWORD", CMSes: []string{"wordpress"}},
+			{Path: "/wp-config.php.old", Severity: SeverityHigh, Title: "WordPress wp-config.php.old reachable", Detail: "Older copy of wp-config.php is served directly.", CWE: "CWE-538", OWASP: "A05:2021 Security Misconfiguration", Remediation: "Remove backup copies from the document root.", Marker: "DB_PASSWORD", CMSes: []string{"wordpress"}},
+			{Path: "/wp-config.php~", Severity: SeverityHigh, Title: "WordPress wp-config.php~ reachable", Detail: "Editor backup of wp-config.php is served directly.", CWE: "CWE-538", OWASP: "A05:2021 Security Misconfiguration", Remediation: "Remove editor backup files from the document root.", Marker: "DB_PASSWORD", CMSes: []string{"wordpress"}},
 		},
 	},
 }
