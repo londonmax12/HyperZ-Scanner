@@ -25,16 +25,17 @@ func (FormAutocomplete) Name() string { return "form-autocomplete" }
 func (FormAutocomplete) Level() Level { return LevelPassive }
 
 // sensitiveInputs maps input type names to their severity when autocomplete
-// is not properly restricted. Password is Critical; email and tel are Medium
-// (less directly credential-related but still sensitive). Credit card / SSN
-// pattern detection (below) is Medium.
+// is not properly restricted. These are informational hardening hints rather
+// than exploitable bugs: the threat model (attacker with browser access)
+// usually means credentials are already compromised, and modern password
+// managers actively rely on autocomplete being enabled.
 var sensitiveInputs = map[string]Severity{
-	"password":    SeverityCritical,
-	"email":       SeverityMedium,
-	"tel":         SeverityMedium,
-	"phone":       SeverityMedium,
-	"url":         SeverityLow,
-	"search":      SeverityLow,
+	"password": SeverityInfo,
+	"email":    SeverityInfo,
+	"tel":      SeverityInfo,
+	"phone":    SeverityInfo,
+	"url":      SeverityInfo,
+	"search":   SeverityInfo,
 }
 
 // safeAutocompletes is the set of autocomplete values that effectively
@@ -134,14 +135,14 @@ func (c FormAutocomplete) detectBySensitivePattern(name string) (Severity, bool)
 	// Common naming patterns for sensitive fields; match on substring so
 	// cc_number, card-number, cardNumber all match "card".
 	patterns := map[string]Severity{
-		"card":     SeverityMedium,    // credit card field
-		"cvv":      SeverityMedium,    // card verification value
-		"cvc":      SeverityMedium,    // same as CVV
-		"ssn":      SeverityMedium,    // social security number
-		"passport": SeverityMedium,    // passport number
-		"tax":      SeverityMedium,    // tax ID
-		"account":  SeverityLow,       // bank account (depends on context)
-		"pin":      SeverityMedium,    // personal identification number
+		"card":     SeverityLow,  // credit card field
+		"cvv":      SeverityLow,  // card verification value
+		"cvc":      SeverityLow,  // same as CVV
+		"ssn":      SeverityLow,  // social security number
+		"passport": SeverityLow,  // passport number
+		"tax":      SeverityLow,  // tax ID
+		"account":  SeverityInfo, // bank account (depends on context)
+		"pin":      SeverityLow,  // personal identification number
 	}
 	for pattern, sev := range patterns {
 		if strings.Contains(lower, pattern) {

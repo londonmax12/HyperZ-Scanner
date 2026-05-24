@@ -18,7 +18,7 @@ func TestFormAutocompletePassword(t *testing.T) {
 			name:    "password without autocomplete",
 			html:    `<form><input type="password" name="pwd"></form>`,
 			wantLen: 1,
-			wantSev: SeverityCritical,
+			wantSev: SeverityInfo,
 		},
 		{
 			name:    "password with autocomplete=off",
@@ -39,7 +39,7 @@ func TestFormAutocompletePassword(t *testing.T) {
 			name:    "multiple password fields, first unsafe",
 			html:    `<form><input type="password" name="pwd1"><input type="password" name="pwd2" autocomplete="off"></form>`,
 			wantLen: 1,
-			wantSev: SeverityCritical,
+			wantSev: SeverityInfo,
 		},
 	}
 
@@ -77,7 +77,7 @@ func TestFormAutocompleteEmail(t *testing.T) {
 			name:    "email without autocomplete",
 			html:    `<form><input type="email" name="email"></form>`,
 			wantLen: 1,
-			wantSev: SeverityMedium,
+			wantSev: SeverityInfo,
 		},
 		{
 			name:    "email with autocomplete=off",
@@ -88,7 +88,7 @@ func TestFormAutocompleteEmail(t *testing.T) {
 			name:    "tel without autocomplete",
 			html:    `<form><input type="tel" name="phone"></form>`,
 			wantLen: 1,
-			wantSev: SeverityMedium,
+			wantSev: SeverityInfo,
 		},
 	}
 
@@ -126,19 +126,19 @@ func TestFormAutocompletePatternDetection(t *testing.T) {
 			name:    "credit card field by name pattern",
 			html:    `<form><input type="text" name="card_number"></form>`,
 			wantLen: 1,
-			wantSev: SeverityMedium,
+			wantSev: SeverityLow,
 		},
 		{
 			name:    "CVV field without autocomplete",
 			html:    `<form><input type="text" name="cvv"></form>`,
 			wantLen: 1,
-			wantSev: SeverityMedium,
+			wantSev: SeverityLow,
 		},
 		{
 			name:    "SSN field without autocomplete",
 			html:    `<form><input type="text" name="ssn"></form>`,
 			wantLen: 1,
-			wantSev: SeverityMedium,
+			wantSev: SeverityLow,
 		},
 		{
 			name:    "card field with autocomplete=off",
@@ -146,10 +146,10 @@ func TestFormAutocompletePatternDetection(t *testing.T) {
 			wantLen: 0,
 		},
 		{
-			name:    "account field (low severity pattern)",
+			name:    "account field (info severity pattern)",
 			html:    `<form><input type="text" name="account_number"></form>`,
 			wantLen: 1,
-			wantSev: SeverityLow,
+			wantSev: SeverityInfo,
 		},
 	}
 
