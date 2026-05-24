@@ -31,6 +31,7 @@ func registry() []checks.Check {
 		checks.SQLiError{},
 		checks.SQLiBoolean{},
 		checks.SQLiTime{},
+		checks.NoSQLi{},
 		checks.PathTraversal{},
 		checks.CmdInjection{},
 		checks.CmdInjectionBlind{},
