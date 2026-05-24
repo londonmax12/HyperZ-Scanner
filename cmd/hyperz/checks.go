@@ -43,6 +43,7 @@ func registry() []checks.Check {
 		checks.SourceMapExposure{},
 		checks.TargetBlankNoopener{},
 		&checks.ContentDiscovery{},
+		&checks.IDOR{},
 	}
 }
 
