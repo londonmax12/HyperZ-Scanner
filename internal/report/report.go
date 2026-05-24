@@ -173,29 +173,28 @@ func Dedupe(in <-chan checks.Finding) <-chan checks.Finding {
 	return out
 }
 
-// ---------- text (streaming) ----------
+// ---------- text (buffered, grouped) ----------
+
+// textGroupURLLimit caps how many affected URLs a grouped finding prints in
+// the CLI text format. The rest are folded into a trailing "... and N more"
+// line; pointing users at jsonl/json/csv for the full list. Without this a
+// React-style flaw rendered hundreds of times across one app drowns the
+// terminal in near-identical URL lines.
+const textGroupURLLimit = 10
 
 type textReporter struct{}
 
-func (textReporter) Write(_ context.Context, w io.Writer, in <-chan checks.Finding, meta Metadata) error {
-	count := 0
-	var writeErr error
-	for f := range in {
-		if writeErr != nil {
-			continue
-		}
-		if err := writeTextFinding(w, f); err != nil {
-			writeErr = err
-			continue
-		}
-		count++
-	}
-	if writeErr != nil {
-		return writeErr
-	}
-	if count == 0 {
+func (textReporter) Write(ctx context.Context, w io.Writer, in <-chan checks.Finding, meta Metadata) error {
+	findings := drain(ctx, in)
+	if len(findings) == 0 {
 		if _, err := fmt.Fprintln(w, "no findings"); err != nil {
 			return err
+		}
+	} else {
+		for _, g := range sortedGroupsBySeverity(groupFindings(findings)) {
+			if err := writeTextCheckGroup(w, g); err != nil {
+				return err
+			}
 		}
 	}
 	if err := writeTextStacks(w, meta.Stacks); err != nil {
@@ -214,6 +213,28 @@ func (textReporter) Write(_ context.Context, w io.Writer, in <-chan checks.Findi
 	return nil
 }
 
+// sortedGroupsBySeverity returns groups in triage order (critical first,
+// info last), tie-breaking on check name so the layout is stable across
+// runs with the same finding set.
+func sortedGroupsBySeverity(groups []checkGroup) []checkGroup {
+	rank := func(s checks.Severity) int {
+		for i, sev := range severityOrder {
+			if sev == s {
+				return i
+			}
+		}
+		return len(severityOrder)
+	}
+	sort.SliceStable(groups, func(i, j int) bool {
+		ri, rj := rank(groups[i].Severity), rank(groups[j].Severity)
+		if ri != rj {
+			return ri < rj
+		}
+		return groups[i].Check < groups[j].Check
+	})
+	return groups
+}
+
 func writeTextStacks(w io.Writer, stacks map[string]*fingerprint.Stack) error {
 	if len(stacks) == 0 {
 		return nil
@@ -224,6 +245,84 @@ func writeTextStacks(w io.Writer, stacks map[string]*fingerprint.Stack) error {
 	for _, host := range sortedHosts(stacks) {
 		if _, err := fmt.Fprintf(w, "  %s - %s (confidence=%.0f%%)\n",
 			host, stacks[host].Summary(), stacks[host].Confidence*100); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// writeTextCheckGroup emits one block per (severity, check). Groups of one
+// degrade to the single-finding format so existing single-instance output
+// stays byte-identical. Groups of many share title/refs/fix/detail once and
+// list affected URLs (truncated to textGroupURLLimit) plus one sample
+// evidence, matching the same fold-many-into-one shape the PDF reporter
+// uses.
+func writeTextCheckGroup(w io.Writer, g checkGroup) error {
+	if len(g.All) == 1 {
+		return writeTextFinding(w, g.Rep)
+	}
+	rep := g.Rep
+	n := len(g.All)
+	if _, err := fmt.Fprintf(w, "%s[%s] %s - %s (%d affected URLs)\n",
+		diffStatusPrefix(rep.DiffStatus), rep.Severity, rep.Check, rep.Title, n); err != nil {
+		return err
+	}
+	if rep.Detail != "" {
+		if _, err := fmt.Fprintf(w, "    %s\n", rep.Detail); err != nil {
+			return err
+		}
+	}
+	for _, item := range rep.Details {
+		if item == "" {
+			continue
+		}
+		if _, err := fmt.Fprintf(w, "      - %s\n", item); err != nil {
+			return err
+		}
+	}
+	if tags := joinNonEmpty(" ", rep.CWE, rep.OWASP); tags != "" {
+		if _, err := fmt.Fprintf(w, "    refs: %s\n", tags); err != nil {
+			return err
+		}
+	}
+	if rep.Remediation != "" {
+		if _, err := fmt.Fprintf(w, "    fix:  %s\n", rep.Remediation); err != nil {
+			return err
+		}
+	}
+	if _, err := fmt.Fprintln(w, "    affected:"); err != nil {
+		return err
+	}
+	limit := textGroupURLLimit
+	if limit > n {
+		limit = n
+	}
+	for i := 0; i < limit; i++ {
+		f := g.All[i]
+		loc := f.URL
+		if loc == "" {
+			loc = f.Target
+		}
+		if _, err := fmt.Fprintf(w, "      - %s%s\n", diffStatusPrefix(f.DiffStatus), loc); err != nil {
+			return err
+		}
+	}
+	if n > limit {
+		if _, err := fmt.Fprintf(w, "      ... and %d more (use --format=jsonl for full list)\n", n-limit); err != nil {
+			return err
+		}
+	}
+	if e := rep.Evidence; e != nil && (e.Method != "" || e.Snippet != "" || e.Status != 0) {
+		reqURL := e.RequestURL
+		if reqURL == "" {
+			if rep.URL != "" {
+				reqURL = rep.URL
+			} else {
+				reqURL = rep.Target
+			}
+		}
+		if _, err := fmt.Fprintf(w, "    sample evidence: %s %s -> %d\n",
+			defaultStr(e.Method, "GET"), reqURL, e.Status); err != nil {
 			return err
 		}
 	}

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"sort"
 	"strings"
@@ -344,6 +345,91 @@ func findingWithDetails() []checks.Finding {
 			"X-Frame-Options: Set XFO",
 		},
 	}}
+}
+
+func TestTextReporterGroupsRepeatedCheck(t *testing.T) {
+	// 25 instances of the same (severity, check) collapse to a single block
+	// with a truncated affected list. The fact tests this is the React-style
+	// "one bad <Link> rendered 500 times" case the grouping was added for.
+	var findings []checks.Finding
+	for i := 0; i < 25; i++ {
+		findings = append(findings, checks.Finding{
+			Check: "tabnabbing", Target: "http://app", URL: fmt.Sprintf("http://app/page/%d", i),
+			Severity: checks.SeverityMedium,
+			Title:    "target=_blank without noopener",
+			Detail:   "anchor opens new tab without rel=noopener",
+			CWE:      "CWE-1022",
+			Evidence: &checks.Evidence{Method: "GET", RequestURL: "http://app/page/0", Status: 200},
+		})
+	}
+	out := writeFormat(t, "text", findings)
+
+	// Heading folds the count and drops the per-URL slot.
+	if !strings.Contains(out, "[medium] tabnabbing - target=_blank without noopener (25 affected URLs)") {
+		t.Errorf("expected grouped heading with instance count, got:\n%s", out)
+	}
+	// Shared block (detail, refs, evidence) is printed exactly once.
+	if got := strings.Count(out, "anchor opens new tab"); got != 1 {
+		t.Errorf("detail printed %d times, want 1 - shared fields should not repeat per URL", got)
+	}
+	if got := strings.Count(out, "refs: CWE-1022"); got != 1 {
+		t.Errorf("refs printed %d times, want 1", got)
+	}
+	if !strings.Contains(out, "sample evidence: GET http://app/page/0 -> 200") {
+		t.Errorf("expected sample evidence line, got:\n%s", out)
+	}
+	// Affected URL list is truncated to textGroupURLLimit with a "more" note.
+	if !strings.Contains(out, "    affected:") {
+		t.Errorf("expected 'affected:' header, got:\n%s", out)
+	}
+	if !strings.Contains(out, "- http://app/page/0") || !strings.Contains(out, "- http://app/page/9") {
+		t.Errorf("expected first %d URLs listed, got:\n%s", textGroupURLLimit, out)
+	}
+	if strings.Contains(out, "- http://app/page/10") {
+		t.Errorf("URL #10 should have been truncated, got:\n%s", out)
+	}
+	if !strings.Contains(out, "... and 15 more (use --format=jsonl for full list)") {
+		t.Errorf("expected truncation hint with remainder count, got:\n%s", out)
+	}
+}
+
+func TestTextReporterSortsGroupsBySeverity(t *testing.T) {
+	// Arrival order is low, high, medium - output must reorder to
+	// critical/high/medium/low/info so triage reads top-down.
+	findings := []checks.Finding{
+		{Check: "a", Severity: checks.SeverityLow, Target: "http://x", Title: "low one"},
+		{Check: "b", Severity: checks.SeverityHigh, Target: "http://y", Title: "high one"},
+		{Check: "c", Severity: checks.SeverityMedium, Target: "http://z", Title: "medium one"},
+	}
+	out := writeFormat(t, "text", findings)
+	hi := strings.Index(out, "[high]")
+	med := strings.Index(out, "[medium]")
+	lo := strings.Index(out, "[low]")
+	if hi < 0 || med < 0 || lo < 0 {
+		t.Fatalf("missing one of the severity blocks:\n%s", out)
+	}
+	if !(hi < med && med < lo) {
+		t.Errorf("severity order = high@%d, medium@%d, low@%d (want hi<med<lo):\n%s",
+			hi, med, lo, out)
+	}
+}
+
+func TestTextReporterSingleInstanceUnchanged(t *testing.T) {
+	// A group of one must degrade to the legacy single-finding layout
+	// (URL inline in heading, "evidence:" not "sample evidence:") so existing
+	// consumers and snapshots aren't disturbed.
+	findings := []checks.Finding{{
+		Check: "tabnabbing", Target: "http://t", URL: "http://t/p",
+		Severity: checks.SeverityMedium, Title: "target=_blank",
+		Evidence: &checks.Evidence{Method: "GET", RequestURL: "http://t/p", Status: 200},
+	}}
+	out := writeFormat(t, "text", findings)
+	if !strings.Contains(out, "[medium] tabnabbing - http://t/p - target=_blank") {
+		t.Errorf("single-instance heading should keep URL inline, got:\n%s", out)
+	}
+	if strings.Contains(out, "affected URLs") || strings.Contains(out, "sample evidence") {
+		t.Errorf("single-instance output leaked grouping artifacts:\n%s", out)
+	}
 }
 
 func TestTextReporterRendersDetailsAsBullets(t *testing.T) {
