@@ -337,3 +337,82 @@ var traversalMarkers = []string{
 	"# Copyright (c) 1993-2009 Microsoft Corp.",
 	"127.0.0.1       localhost",
 }
+
+// SSTIProbe is one expression-evaluation probe for SSTI detection. Template
+// uses {{TOKEN}} as a context marker flanking the engine expression; render by
+// replacing {{TOKEN}} with a fresh canary so the check searches for
+// canary+Expected+canary in the response - the evaluated result proves
+// template execution, and the canary anchors it.
+type SSTIProbe struct {
+	Name     string
+	Template string
+	Expected string
+}
+
+// SSTIExprProbes returns evaluation probes for major template engine families.
+// Each probe uses a canary-flanked math expression; a match confirms the
+// engine evaluated the expression rather than reflecting it verbatim.
+func SSTIExprProbes() []SSTIProbe {
+	out := make([]SSTIProbe, len(sstiExprProbes))
+	copy(out, sstiExprProbes)
+	return out
+}
+
+// SSTIErrorPatterns returns lowercase substrings that, found in a response
+// body, indicate a template engine leaked a parse/execution error.
+// Caller should lowercase the body before matching.
+func SSTIErrorPatterns() []string {
+	out := make([]string, len(sstiErrorPatterns))
+	copy(out, sstiErrorPatterns)
+	return out
+}
+
+// Every SSTIProbe template pivots on the literal "7*7" so a follow-up probe
+// can derive a fresh expression in the same engine syntax by string-replacing
+// the operands - see SSTI.confirmProbe. Keep this invariant when adding new
+// probes: include "7*7" verbatim in Template and "49" as Expected.
+var sstiExprProbes = []SSTIProbe{
+	// Jinja2 (Python), Twig (PHP), Tornado (Python), Pebble (Java)
+	{Name: "jinja2-twig", Template: `{{TOKEN}}{{7*7}}{{TOKEN}}`, Expected: "49"},
+	// FreeMarker (Java), Mako (Python), Spring EL
+	{Name: "freemarker", Template: `{{TOKEN}}${7*7}{{TOKEN}}`, Expected: "49"},
+	// ERB (Ruby on Rails)
+	{Name: "erb", Template: `{{TOKEN}}<%= 7*7 %>{{TOKEN}}`, Expected: "49"},
+	// Smarty (PHP) - single-brace syntax
+	{Name: "smarty", Template: `{{TOKEN}}{7*7}{{TOKEN}}`, Expected: "49"},
+	// Velocity (Apache) - #set directive
+	{Name: "velocity", Template: `{{TOKEN}}#set($x=7*7)$x{{TOKEN}}`, Expected: "49"},
+	// Thymeleaf (Spring/Java) - inline expression
+	{Name: "thymeleaf", Template: `{{TOKEN}}[[${7*7}]]{{TOKEN}}`, Expected: "49"},
+	// Ruby string interpolation (outside template engines)
+	{Name: "ruby-interp", Template: `{{TOKEN}}#{7*7}{{TOKEN}}`, Expected: "49"},
+	// Razor (ASP.NET) - @() expression syntax
+	{Name: "razor", Template: `{{TOKEN}}@(7*7){{TOKEN}}`, Expected: "49"},
+}
+
+var sstiErrorPayloads = []string{
+	`{{`,
+	`${`,
+	`<%`,
+}
+
+var sstiErrorPatterns = []string{
+	"jinja2.exceptions",
+	"templatesyntaxerror",
+	"(erb):",
+	"actionview::template::error",
+	"freemarker.core",
+	"freemarker.template",
+	"org.apache.velocity",
+	"velocityexception",
+	"smarty error",
+	"smarty_internal",
+	"com.mitchellbosecke.pebble",
+	"org.thymeleaf.exceptions",
+	"mako.exceptions",
+	"twig\\error",
+	"tornado.template",
+	"django.template.exceptions",
+	"system.web.razor",
+	"razorengine.templating",
+}
