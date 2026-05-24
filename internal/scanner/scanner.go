@@ -12,6 +12,7 @@ import (
 	"github.com/londonmax12/hyperz/internal/checks"
 	"github.com/londonmax12/hyperz/internal/fingerprint"
 	"github.com/londonmax12/hyperz/internal/httpclient"
+	"github.com/londonmax12/hyperz/internal/oob"
 	"github.com/londonmax12/hyperz/internal/page"
 	"github.com/londonmax12/hyperz/internal/scope"
 )
@@ -30,6 +31,8 @@ type Scanner struct {
 	concurrency      int
 	checkConcurrency int
 	level            checks.Level
+	oobServer        oob.Server
+	oobWait          time.Duration
 	onError          func(target, check string, err error)
 	onSkip           func(target, check, reason string)
 }
@@ -96,8 +99,40 @@ func WithLevel(lvl checks.Level) Option {
 	return func(s *Scanner) { s.level = lvl }
 }
 
+// WithOOB attaches an OOB callback server. Checks that implement
+// checks.OOBCheck read it via checks.OOBFrom to mint canaries during
+// the active phase; after phase 1 (and phase 2, when present) drains,
+// the scanner waits WithOOBWait and then calls Drain on each OOBCheck.
+// Nil server (the default) disables the OOB pipeline entirely - blind
+// paths in the catalog become no-ops.
+func WithOOB(srv oob.Server) Option {
+	return func(s *Scanner) { s.oobServer = srv }
+}
+
+// WithOOBWait sets the post-scan delay before draining OOB hits. Late
+// callbacks (a target's async fetch queue, a slow DNS resolver round
+// trip, a job that runs the smuggled URL after the response) routinely
+// arrive seconds after the probe; the wait pulls those in before the
+// drain pass closes the findings channel. Defaults to defaultOOBWait
+// when unset or non-positive.
+func WithOOBWait(d time.Duration) Option {
+	return func(s *Scanner) {
+		if d > 0 {
+			s.oobWait = d
+		}
+	}
+}
+
+// defaultOOBWait is the post-scan delay applied when --oob is on but
+// --oob-wait was not set. Tuned around blind SSRF / blind XXE response
+// latencies on real targets: most callbacks land within a few seconds
+// of the probe, but async fetchers (webhook queues, fetch jobs that
+// run on a cron) commonly delay tens of seconds. 10s balances catching
+// the long tail against keeping scan wall-clock low.
+const defaultOOBWait = 10 * time.Second
+
 func New(client *httpclient.Client, c []checks.Check, opts ...Option) *Scanner {
-	s := &Scanner{client: client, checks: c, concurrency: 8, level: checks.LevelDefault}
+	s := &Scanner{client: client, checks: c, concurrency: 8, level: checks.LevelDefault, oobWait: defaultOOBWait}
 	for _, o := range opts {
 		o(s)
 	}
@@ -165,7 +200,61 @@ func (s *Scanner) ScanAll(ctx context.Context, pages <-chan page.Page, out chan<
 	if len(twoPhase) > 0 && ctx.Err() == nil {
 		s.runPhase2(ctx, twoPhase, visited, out)
 	}
+	if s.oobServer != nil && ctx.Err() == nil {
+		s.runOOBDrain(ctx, out)
+	}
 	return ctx.Err()
+}
+
+// oobChecks returns the subset of registered checks that implement
+// OOBCheck. Computed once per ScanAll to keep the drain dispatch
+// branch-free.
+func (s *Scanner) oobChecks() []checks.OOBCheck {
+	var out []checks.OOBCheck
+	for _, c := range s.checks {
+		if oc, ok := c.(checks.OOBCheck); ok {
+			out = append(out, oc)
+		}
+	}
+	return out
+}
+
+// runOOBDrain waits the configured oobWait for late callbacks to land,
+// then asks every OOBCheck to translate its server-side registrations
+// into findings. Findings flow through the same out channel as phase
+// 1; the caller (ScanAll) closes it after this returns.
+//
+// The wait is interruptible: ctx cancel skips both the sleep and the
+// drain, since a canceled scan should not produce additional findings.
+func (s *Scanner) runOOBDrain(ctx context.Context, out chan<- checks.Finding) {
+	oobChecks := s.oobChecks()
+	if len(oobChecks) == 0 {
+		return
+	}
+	wait := s.oobWait
+	if wait <= 0 {
+		wait = defaultOOBWait
+	}
+	select {
+	case <-time.After(wait):
+	case <-ctx.Done():
+		return
+	}
+	for _, c := range oobChecks {
+		if ctx.Err() != nil {
+			return
+		}
+		drainCtx := checks.WithLevel(ctx, s.level)
+		drainCtx = checks.WithOOB(drainCtx, s.oobServer)
+		if s.onError != nil {
+			drainCtx = checks.WithReporter(drainCtx, func(err error) {
+				s.onError("oob-drain", c.Name(), err)
+			})
+		}
+		for _, f := range c.Drain(drainCtx) {
+			out <- f
+		}
+	}
 }
 
 // twoPhaseChecks returns the subset of registered checks that implement
@@ -302,6 +391,7 @@ func (s *Scanner) detectOne(ctx context.Context, twoPhase []checks.TwoPhaseCheck
 			defer cancel()
 			runCtx = checks.WithLevel(runCtx, s.level)
 			runCtx = checks.WithStack(runCtx, stack)
+			runCtx = checks.WithOOB(runCtx, s.oobServer)
 			if s.onError != nil {
 				runCtx = checks.WithReporter(runCtx, func(err error) {
 					s.onError(target, c.Name(), err)
@@ -438,6 +528,7 @@ func (s *Scanner) scanOne(ctx context.Context, p page.Page, out chan<- checks.Fi
 			// onError event per failure even when the check returns findings.
 			runCtx = checks.WithLevel(runCtx, s.level)
 			runCtx = checks.WithStack(runCtx, stack)
+			runCtx = checks.WithOOB(runCtx, s.oobServer)
 			if s.onError != nil {
 				runCtx = checks.WithReporter(runCtx, func(err error) {
 					s.onError(target, c.Name(), err)

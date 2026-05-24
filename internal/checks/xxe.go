@@ -8,8 +8,10 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/londonmax12/hyperz/internal/httpclient"
+	"github.com/londonmax12/hyperz/internal/oob"
 	"github.com/londonmax12/hyperz/internal/page"
 	"github.com/londonmax12/hyperz/internal/scope"
 )
@@ -151,6 +153,8 @@ func (c XXE) Run(ctx context.Context, client *httpclient.Client, sc *scope.Scope
 		return nil, nil
 	}
 
+	oobSrv := OOBFrom(ctx)
+
 	var findings []Finding
 	var firstErr error
 	seen := map[string]struct{}{}
@@ -167,21 +171,110 @@ func (c XXE) Run(ctx context.Context, client *httpclient.Client, sc *scope.Scope
 			if firstErr == nil {
 				firstErr = err
 			}
-			continue
+		} else if f != nil {
+			if _, dup := seen[f.DedupeKey]; !dup {
+				seen[f.DedupeKey] = struct{}{}
+				findings = append(findings, *f)
+			}
 		}
-		if f == nil {
-			continue
+		// OOB blind variant: detection for parsers that resolve external
+		// entities but neither echo the file content (sandboxed file://
+		// scheme) nor leak parser error strings (silent acceptance).
+		// Such parsers still issue the HTTP fetch for an external entity
+		// URL when DTD processing is enabled, which is the broadest XXE
+		// precondition. Listener-side callback proves the entity was
+		// resolved over the wire.
+		if oobSrv != nil {
+			if err := c.probeOOB(ctx, client, oobSrv, p.URL, cand); err != nil {
+				Report(ctx, fmt.Errorf("oob probe %s %s: %w", cand.Method, cand.URL, err))
+			}
 		}
-		if _, dup := seen[f.DedupeKey]; dup {
-			continue
-		}
-		seen[f.DedupeKey] = struct{}{}
-		findings = append(findings, *f)
 	}
 	if firstErr != nil && len(findings) == 0 {
 		return nil, firstErr
 	}
 	return findings, nil
+}
+
+// probeOOB sends one XML document declaring an external entity whose
+// SYSTEM target is the canary URL. The check does not emit a finding
+// from this call; Drain translates listener-side callbacks into
+// findings after the scanner's wait window elapses.
+func (c XXE) probeOOB(ctx context.Context, client *httpclient.Client, srv oob.Server, target string, cand xxeCandidate) error {
+	canary := srv.Register("xxe", map[string]string{
+		"target": target,
+		"method": cand.Method,
+		"url":    cand.URL,
+	})
+	doc := `<?xml version="1.0" encoding="UTF-8"?>` +
+		`<!DOCTYPE foo [<!ENTITY xxe SYSTEM "` + canary.HTTPURL + `">]>` +
+		`<foo>&xxe;</foo>`
+	_, _, _, _, err := c.send(ctx, client, cand, doc)
+	return err
+}
+
+// Drain emits one finding per OOB registration that observed at least
+// one callback during the scan. Implements OOBCheck.
+func (c XXE) Drain(ctx context.Context) []Finding {
+	srv := OOBFrom(ctx)
+	if srv == nil {
+		return nil
+	}
+	var out []Finding
+	for _, reg := range srv.Registrations(c.Name()) {
+		hits := srv.Hits(reg.Canary.Token)
+		if len(hits) == 0 {
+			continue
+		}
+		out = append(out, buildXXEOOBFinding(reg, hits))
+	}
+	return out
+}
+
+// buildXXEOOBFinding renders one OOB-confirmed XXE finding. Severity is
+// Critical: a callback from an XML external entity proves the parser
+// resolves SYSTEM URLs, which is the precondition for in-band file
+// disclosure (file://), out-of-band exfiltration (parameter entities
+// over HTTP), and parser-side SSRF.
+func buildXXEOOBFinding(reg oob.Registration, hits []oob.Hit) Finding {
+	target := reg.Extra["target"]
+	method := reg.Extra["method"]
+	endpointURL := reg.Extra["url"]
+	hit := hits[0]
+	ua := hit.Headers.Get("User-Agent")
+	return Finding{
+		Check:    "xxe",
+		Target:   target,
+		URL:      endpointURL,
+		Severity: SeverityCritical,
+		Title:    fmt.Sprintf("XML External Entity (OOB-confirmed) in %s %s", method, endpointURL),
+		Detail: fmt.Sprintf(
+			"Endpoint %s %s parses XML with external entity resolution enabled and reaches "+
+				"the OOB listener over HTTP: probe with canary %s caused %d callback(s) "+
+				"(first hit: method=%s, source=%s, user-agent=%q). "+
+				"An attacker can chain this into file disclosure (file://), out-of-band data "+
+				"exfiltration via parameter entities, and parser-side SSRF against internal services.",
+			method, endpointURL, reg.Canary.HTTPURL, len(hits),
+			hit.Method, hit.SourceAddr, ua),
+		CWE:   "CWE-611",
+		OWASP: "A05:2021 Security Misconfiguration",
+		Remediation: "Disable external entity and DTD processing in the XML parser. " +
+			"For Java SAX/DOM/StAX set XMLConstants.FEATURE_SECURE_PROCESSING and disable external general/parameter entities. " +
+			"For .NET XmlReader, set XmlReaderSettings.DtdProcessing = Prohibit. " +
+			"For PHP libxml, call libxml_disable_entity_loader(true) (or use parsers with externals off by default). " +
+			"For Python lxml, parse with resolve_entities=False and no_network=True. " +
+			"Prefer JSON over XML where the protocol permits.",
+		Evidence: &Evidence{
+			Method:     method,
+			RequestURL: endpointURL,
+			Snippet: fmt.Sprintf(
+				"Canary URL: %s\nFirst hit: %s %s from %s at %s\nUser-Agent: %s\nTotal hits: %d\n",
+				reg.Canary.HTTPURL,
+				hit.Method, hit.Path, hit.SourceAddr,
+				hit.Timestamp.Format(time.RFC3339), ua, len(hits)),
+		},
+		DedupeKey: MakeKey("xxe", ScopePage, target, "endpoint:"+method+" "+endpointURL, "oob"),
+	}
 }
 
 // xxeCandidate is one endpoint the XXE check will POST XML at. method is

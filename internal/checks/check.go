@@ -13,6 +13,7 @@ import (
 
 	"github.com/londonmax12/hyperz/internal/fingerprint"
 	"github.com/londonmax12/hyperz/internal/httpclient"
+	"github.com/londonmax12/hyperz/internal/oob"
 	"github.com/londonmax12/hyperz/internal/page"
 	"github.com/londonmax12/hyperz/internal/scope"
 )
@@ -446,6 +447,58 @@ func LevelFrom(ctx context.Context) Level {
 		return lvl
 	}
 	return LevelDefault
+}
+
+// oobKey carries the active OOB callback server through the context the
+// scanner hands to Run. Checks that mint canaries (blind SSRF, blind XXE,
+// blind SSTI, ...) read it via OOBFrom; absence means no listener is
+// configured and the check must skip its OOB paths rather than fall
+// back to a default that would emit unattributable findings.
+type oobKey struct{}
+
+// WithOOB attaches srv to ctx so checks can mint canaries against a live
+// listener. The scanner sets this once per run when the operator opted
+// into --oob; checks should treat a nil srv (or absence) as "OOB
+// disabled" and skip the OOB-only paths.
+func WithOOB(ctx context.Context, srv oob.Server) context.Context {
+	if srv == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, oobKey{}, srv)
+}
+
+// OOBFrom returns the oob.Server attached to ctx, or nil if none was
+// attached. A check that wants to mint a canary must guard on the nil
+// return - emitting OOB findings without a listener attached would
+// have no callback to correlate against.
+func OOBFrom(ctx context.Context) oob.Server {
+	if srv, ok := ctx.Value(oobKey{}).(oob.Server); ok {
+		return srv
+	}
+	return nil
+}
+
+// OOBCheck is implemented by checks that mint OOB canaries during Run
+// and need a post-scan pass to emit findings when those canaries
+// receive callbacks. Drain is called once per check after the main
+// scan phase drains and the operator-configured wait window elapses;
+// the implementation should query OOBFrom(ctx) for its registrations
+// and return one Finding per registration whose token observed at
+// least one hit.
+//
+// Drain runs on a scanner-owned goroutine; the check's own Run may
+// have completed across many goroutines, so any state Drain reads
+// must be appropriately synchronized (the server's Registrations /
+// Hits methods are already safe to call). The findings flow through
+// the same out channel as phase 1.
+//
+// Implementations must be safe alongside the value-receiver Run shape
+// that the rest of the catalog uses. The recommended pattern: store
+// no state on the check struct - read everything back from
+// OOBFrom(ctx).Registrations(c.Name()) during Drain.
+type OOBCheck interface {
+	Check
+	Drain(ctx context.Context) []Finding
 }
 
 // stackKey carries the detected fingerprint.Stack through the context the

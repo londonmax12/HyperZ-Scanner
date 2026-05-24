@@ -18,6 +18,7 @@ import (
 	"github.com/londonmax12/hyperz/internal/crawler"
 	"github.com/londonmax12/hyperz/internal/fingerprint"
 	"github.com/londonmax12/hyperz/internal/httpclient"
+	"github.com/londonmax12/hyperz/internal/oob"
 	"github.com/londonmax12/hyperz/internal/page"
 	"github.com/londonmax12/hyperz/internal/proxy"
 	"github.com/londonmax12/hyperz/internal/report"
@@ -53,6 +54,11 @@ type scanConfig struct {
 	pollute      bool
 
 	noFingerprint bool
+
+	oob       bool
+	oobListen string
+	oobHost   string
+	oobWait   time.Duration
 
 	scopeHosts       []string
 	scopeAnyHost     bool
@@ -191,6 +197,23 @@ Modes:
 
 	f.BoolVar(&cfg.noFingerprint, "no-fingerprint", false,
 		"disable stack detection; runs every check against every target")
+
+	f.BoolVar(&cfg.oob, "oob", false,
+		"enable the out-of-band callback backbone: starts a built-in HTTP listener "+
+			"and threads canary URLs into blind SSRF/XXE/SSTI probes. Findings fire "+
+			"when a target's request reaches the listener. Requires --oob-host so "+
+			"the canary URLs use an address the target can reach.")
+	f.StringVar(&cfg.oobListen, "oob-listen", ":7777",
+		"bind address for the built-in OOB listener (host:port or :port). Only "+
+			"used when --oob is set.")
+	f.StringVar(&cfg.oobHost, "oob-host", "",
+		"callback host:port targets see in canary URLs (e.g. scanner.example.com:7777). "+
+			"Required when --oob is set. Usually matches --oob-listen unless a proxy or "+
+			"reverse port-forward sits in front of the listener.")
+	f.DurationVar(&cfg.oobWait, "oob-wait", 10*time.Second,
+		"how long the scanner waits after the active phase before draining OOB hits. "+
+			"Async fetch queues and slow webhooks routinely take seconds to fire, so a "+
+			"too-short window misses real positives.")
 
 	f.StringSliceVar(&cfg.scopeHosts, "scope-host", nil,
 		"hostname allowed in scope (repeatable; defaults to the seed hosts when empty)")
@@ -360,6 +383,22 @@ func runScan(ctx context.Context, cfg *scanConfig, level checks.Level) int {
 		log.Info("scope configured", "hosts", "*", "depth", sc.MaxDepth())
 	}
 
+	oobServer, err := startOOB(ctx, cfg, log)
+	if err != nil {
+		log.Error("oob init failed", "err", err)
+		return exitScanError
+	}
+	if oobServer != nil {
+		defer func() {
+			// Shutdown is best-effort: the listener may have already
+			// torn down via ctx cancel. Use a short deadline so a
+			// stuck connection doesn't pin scan teardown.
+			stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = oobServer.Stop(stopCtx)
+		}()
+	}
+
 	all := registry(cfg.pollute)
 	enabled := checks.Filter(all, level)
 	log.Info("scan starting",
@@ -373,6 +412,8 @@ func runScan(ctx context.Context, cfg *scanConfig, level checks.Level) int {
 		scanner.WithCheckConcurrency(cfg.checkConcurrency),
 		scanner.WithScope(sc),
 		scanner.WithLevel(level),
+		scanner.WithOOB(oobServer),
+		scanner.WithOOBWait(cfg.oobWait),
 		scanner.WithSkipHandler(func(target, check, reason string) {
 			log.Debug("check skipped", "check", check, "target", target, "reason", reason)
 		}),
@@ -544,6 +585,31 @@ func parseFailOn(s string) (rank int, enabled bool, err error) {
 		return 0, false, err
 	}
 	return checks.SeverityRank(sev), true, nil
+}
+
+// startOOB builds and starts the out-of-band callback server when the
+// operator opted into --oob. Returns nil (no error) when --oob is off;
+// returns an error when --oob is on but the configuration is incomplete
+// (e.g. --oob-host empty) or the listener could not bind.
+//
+// The returned Server is owned by the caller and must be Stop'd at
+// scan teardown.
+func startOOB(ctx context.Context, cfg *scanConfig, log *slog.Logger) (oob.Server, error) {
+	if !cfg.oob {
+		return nil, nil
+	}
+	if cfg.oobHost == "" {
+		return nil, fmt.Errorf("--oob requires --oob-host (the callback host:port the target sees)")
+	}
+	srv := oob.NewBuiltin(cfg.oobListen, cfg.oobHost)
+	if err := srv.Start(ctx); err != nil {
+		return nil, err
+	}
+	log.Info("oob listener ready",
+		"listen", srv.LocalAddr(),
+		"callback_host", srv.CallbackHost(),
+		"wait", cfg.oobWait)
+	return srv, nil
 }
 
 // fingerprintFallbackProbes returns the host-relative paths the detector

