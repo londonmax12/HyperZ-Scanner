@@ -16,12 +16,14 @@ import (
 // a (best-effort cleaned-up) modification on a Node target's Object.prototype,
 // StoredXSS plants XSS payloads that PERSIST until the operator removes them
 // (the whole point of the check is the canary surviving the storage boundary,
-// so there is no cleanup pass), and RequestSmuggling sends deliberately
-// malformed CL/TE/H2 requests over a raw socket - timing-only so no smuggled
-// suffix lands on the next user's connection, but the traffic is loud and
-// some front-ends will log or block the source IP. All load only when the
-// operator has explicitly accepted that with --pollute. Other checks here
-// are read-only or only mutate the request itself.
+// so there is no cleanup pass), RequestSmuggling sends deliberately malformed
+// CL/TE/H2 requests over a raw socket - timing-only so no smuggled suffix
+// lands on the next user's connection, but the traffic is loud and some
+// front-ends will log or block the source IP - and JWTVulns brute-forces
+// HMAC secrets offline and sends forged alg=none / kid-injection tokens
+// against the application. All load only when the operator has explicitly
+// accepted that with --pollute. Other checks here are read-only or only
+// mutate the request itself.
 func registry(pollute bool) []checks.Check {
 	out := []checks.Check{
 		checks.SecurityHeaders{},
@@ -62,6 +64,7 @@ func registry(pollute bool) []checks.Check {
 		out = append(out, checks.ProtoPollution{})
 		out = append(out, &checks.StoredXSS{})
 		out = append(out, &checks.RequestSmuggling{})
+		out = append(out, &checks.JWTVulns{})
 	}
 	return out
 }
