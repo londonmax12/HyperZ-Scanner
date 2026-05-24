@@ -68,6 +68,7 @@ func registry(pollute bool) []checks.Check {
 		out = append(out, &checks.StoredXSS{})
 		out = append(out, &checks.RequestSmuggling{})
 		out = append(out, &checks.JWTVulns{})
+		out = append(out, &checks.RaceCondition{})
 	}
 	return out
 }
