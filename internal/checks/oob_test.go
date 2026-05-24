@@ -194,6 +194,79 @@ func TestSSTIOOBDetection(t *testing.T) {
 	}
 }
 
+func TestCmdInjectionBlindOOBDetection(t *testing.T) {
+	oobSrv := startOOB(t)
+	srv := newOOBHostWrapper(oobSrv)
+
+	// Synthetic vulnerable target: extracts a "curl <URL>" sequence
+	// from the host query parameter and http.Gets it. Mirrors a real
+	// backend that splices ?host=... into a shell command.
+	curlRe := regexp.MustCompile(`curl\s+(\S+)`)
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host := r.URL.Query().Get("host")
+		if m := curlRe.FindStringSubmatch(host); len(m) == 2 {
+			resp, err := http.Get(m[1])
+			if err == nil {
+				io.Copy(io.Discard, resp.Body)
+				resp.Body.Close()
+			}
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+
+	ctx := WithOOB(context.Background(), srv)
+	pg := page.FromURL(target.URL + "/ping?host=example.com")
+	_, err := CmdInjectionBlind{}.Run(ctx, newTestClient(t), nil, pg)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	findings := CmdInjectionBlind{}.Drain(ctx)
+	if len(findings) == 0 {
+		t.Fatalf("expected at least one OOB finding, registrations=%d",
+			len(srv.Registrations("cmd-injection-blind")))
+	}
+	var got Finding
+	for _, f := range findings {
+		if strings.Contains(f.Title, "OOB-confirmed") {
+			got = f
+			break
+		}
+	}
+	if got.Title == "" {
+		t.Fatalf("no OOB-confirmed finding in results: %+v", findings)
+	}
+	if got.Severity != SeverityCritical {
+		t.Errorf("severity = %q, want critical", got.Severity)
+	}
+	if got.CWE != "CWE-78" {
+		t.Errorf("CWE = %q, want CWE-78", got.CWE)
+	}
+	if !strings.Contains(got.Title, "host") {
+		t.Errorf("title should name the param: %q", got.Title)
+	}
+}
+
+func TestCmdInjectionBlindOOBDisabledWithoutServer(t *testing.T) {
+	// No WithOOB in ctx: CmdInjectionBlind must not mint canaries
+	// and Drain must be a no-op.
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+
+	pg := page.FromURL(target.URL + "/ping?host=example.com")
+	_, err := CmdInjectionBlind{}.Run(context.Background(), newTestClient(t), nil, pg)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	got := CmdInjectionBlind{}.Drain(context.Background())
+	if len(got) != 0 {
+		t.Errorf("Drain without OOB should return no findings, got %d", len(got))
+	}
+}
+
 func TestSSRFOOBDisabledWithoutServer(t *testing.T) {
 	// No WithOOB in ctx: SSRF must not mint canaries and Drain must be
 	// a no-op so a passive scan doesn't accidentally emit blind
