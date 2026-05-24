@@ -43,6 +43,7 @@ func registry(pollute bool) []checks.Check {
 		checks.MixedContent{},
 		checks.OpenRedirect{},
 		checks.HostHeaderInjection{},
+		checks.CRLFInjection{},
 		checks.SSRF{},
 		checks.ReflectedXSS{},
 		checks.SQLiError{},
