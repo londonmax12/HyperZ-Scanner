@@ -23,6 +23,7 @@ func registry() []checks.Check {
 		checks.CORSConfig{},
 		checks.CORSReflection{},
 		checks.ServerLeak{},
+		checks.SecretsInBody{},
 		checks.TLSAudit{},
 		checks.MixedContent{},
 		checks.OpenRedirect{},
