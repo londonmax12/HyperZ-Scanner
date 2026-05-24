@@ -33,6 +33,7 @@ func registry() []checks.Check {
 		checks.PathTraversal{},
 		checks.CmdInjection{},
 		checks.CmdInjectionBlind{},
+		checks.XXE{},
 		checks.JSLibsKnownVuln{},
 		checks.SRIMissing{},
 		&checks.ContentDiscovery{},
