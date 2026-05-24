@@ -427,15 +427,20 @@ func TestContentDiscoveryHostDerivedBackup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
+	// The server returns ZIP content for every .zip path, so the curated
+	// catalog's generic /backup.zip will also produce a finding. Probe
+	// dispatch is concurrent and findings arrive in completion order, so
+	// we have to pick the host-named entry by name rather than by position.
+	host, _, _ := strings.Cut(strings.TrimPrefix(srv.URL, "http://"), ":")
 	var hit *Finding
 	for i := range findings {
-		if strings.HasSuffix(findings[i].URL, ".zip") {
+		if strings.Contains(findings[i].URL, "/"+host+".zip") {
 			hit = &findings[i]
 			break
 		}
 	}
 	if hit == nil {
-		t.Fatalf("expected host-derived .zip finding, got %+v", findings)
+		t.Fatalf("expected host-derived .zip finding for host %q, got %+v", host, findings)
 	}
 	if hit.Severity != SeverityCritical {
 		t.Errorf("Severity = %q, want critical", hit.Severity)
