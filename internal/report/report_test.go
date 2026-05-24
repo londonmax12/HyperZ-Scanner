@@ -333,6 +333,102 @@ func TestReportersDrainOnCanceledContext(t *testing.T) {
 	}
 }
 
+func findingWithDetails() []checks.Finding {
+	return []checks.Finding{{
+		Check: "security-headers", Target: "http://t", URL: "http://t/p",
+		Severity: checks.SeverityMedium, Title: "missing 3 security headers",
+		Detail: "response from http://t/p did not include the following security headers",
+		Details: []string{
+			"Content-Security-Policy: Set CSP",
+			"Strict-Transport-Security: Set HSTS",
+			"X-Frame-Options: Set XFO",
+		},
+	}}
+}
+
+func TestTextReporterRendersDetailsAsBullets(t *testing.T) {
+	out := writeFormat(t, "text", findingWithDetails())
+	for _, want := range []string{
+		"      - Content-Security-Policy: Set CSP",
+		"      - Strict-Transport-Security: Set HSTS",
+		"      - X-Frame-Options: Set XFO",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("text missing bullet %q\nfull:\n%s", want, out)
+		}
+	}
+}
+
+func TestMarkdownReporterRendersDetailsAsBullets(t *testing.T) {
+	out := writeFormat(t, "markdown", findingWithDetails())
+	for _, want := range []string{
+		"- **Detail:** response from http://t/p",
+		"    - Content-Security-Policy: Set CSP",
+		"    - Strict-Transport-Security: Set HSTS",
+		"    - X-Frame-Options: Set XFO",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("markdown missing %q\nfull:\n%s", want, out)
+		}
+	}
+}
+
+func TestPDFReporterRendersDetailsAsBullets(t *testing.T) {
+	out := writeFormat(t, "pdf", findingWithDetails())
+	for _, want := range []string{
+		"- Content-Security-Policy: Set CSP",
+		"- Strict-Transport-Security: Set HSTS",
+		"- X-Frame-Options: Set XFO",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("PDF missing %q", want)
+		}
+	}
+}
+
+func TestJSONReporterRoundTripsDetails(t *testing.T) {
+	out := writeFormat(t, "json", findingWithDetails())
+	var got jsonEnvelope
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("decode: %v\n%s", err, out)
+	}
+	if len(got.Findings) != 1 {
+		t.Fatalf("findings = %d, want 1", len(got.Findings))
+	}
+	want := []string{
+		"Content-Security-Policy: Set CSP",
+		"Strict-Transport-Security: Set HSTS",
+		"X-Frame-Options: Set XFO",
+	}
+	if !reflect.DeepEqual(got.Findings[0].Details, want) {
+		t.Errorf("Details = %v, want %v", got.Findings[0].Details, want)
+	}
+}
+
+func TestCSVRendersDetailsColumn(t *testing.T) {
+	out := writeFormat(t, "csv", findingWithDetails())
+	r := csv.NewReader(strings.NewReader(out))
+	rows, err := r.ReadAll()
+	if err != nil {
+		t.Fatalf("csv: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(rows))
+	}
+	idx := map[string]int{}
+	for i, h := range rows[0] {
+		idx[h] = i
+	}
+	i, ok := idx["details"]
+	if !ok {
+		t.Fatalf("CSV missing 'details' column (header=%v)", rows[0])
+	}
+	want := "Content-Security-Policy: Set CSP; Strict-Transport-Security: Set HSTS; X-Frame-Options: Set XFO"
+	if rows[1][i] != want {
+		t.Errorf("details col = %q, want %q", rows[1][i], want)
+	}
+}
+
 func TestEscapePipe(t *testing.T) {
 	if got := escapePipe("a|b|c"); got != `a\|b\|c` {
 		t.Fatalf("escapePipe = %q", got)

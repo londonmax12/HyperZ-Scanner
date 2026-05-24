@@ -196,6 +196,12 @@ type Finding struct {
 	Severity    Severity  `json:"severity"`
 	Title       string    `json:"title"`
 	Detail      string    `json:"detail,omitempty"`
+	// Details, when set, expands Detail into a list of independent entries.
+	// Reporters render each item as a bullet so a finding with many facets
+	// (e.g. missing security headers, multiple vulnerable params) reads as a
+	// list rather than one run-on paragraph. Detail may still hold a short
+	// one-line lead-in; Details carries the per-item breakdown.
+	Details     []string  `json:"details,omitempty"`
 	CWE         string    `json:"cwe,omitempty"`
 	OWASP       string    `json:"owasp,omitempty"`
 	Remediation string    `json:"remediation,omitempty"`

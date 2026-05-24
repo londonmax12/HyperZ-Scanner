@@ -313,6 +313,17 @@ func (d *pdfDoc) renderFinding(f checks.Finding) {
 	if f.Detail != "" {
 		d.writeWrapped("detail: "+f.Detail, 0, fontReg, pdfSizeBase, 0.25, 0.25, 0.25)
 	}
+	if len(f.Details) > 0 {
+		if f.Detail == "" {
+			d.writeLine("details:", fontReg, pdfSizeBase, 0.25, 0.25, 0.25)
+		}
+		for _, item := range f.Details {
+			if item == "" {
+				continue
+			}
+			d.writeWrapped("- "+item, 12, fontReg, pdfSizeBase, 0.25, 0.25, 0.25)
+		}
+	}
 	if f.Remediation != "" {
 		d.writeWrapped("fix:    "+f.Remediation, 0, fontReg, pdfSizeBase, 0.20, 0.35, 0.20)
 	}

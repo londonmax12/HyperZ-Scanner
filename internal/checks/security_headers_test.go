@@ -72,6 +72,9 @@ func TestSecurityHeadersAllMissing(t *testing.T) {
 	if f.Severity != SeverityMedium {
 		t.Errorf("severity = %q, want medium", f.Severity)
 	}
+	if len(f.Details) != 5 {
+		t.Fatalf("Details = %d entries, want one per missing header: %q", len(f.Details), f.Details)
+	}
 	for _, h := range []string{
 		"Content-Security-Policy",
 		"Referrer-Policy",
@@ -79,11 +82,18 @@ func TestSecurityHeadersAllMissing(t *testing.T) {
 		"X-Content-Type-Options",
 		"X-Frame-Options",
 	} {
-		if !strings.Contains(f.Detail, h) {
-			t.Errorf("detail missing %q: %q", h, f.Detail)
+		// Each missing header should be its own bullet, not concatenated into
+		// Detail or Remediation. Detail keeps a one-line summary; the per-
+		// header text lives in Details.
+		var found bool
+		for _, entry := range f.Details {
+			if strings.HasPrefix(entry, h+": ") {
+				found = true
+				break
+			}
 		}
-		if !strings.Contains(f.Remediation, h+": ") {
-			t.Errorf("remediation missing per-header entry for %q: %q", h, f.Remediation)
+		if !found {
+			t.Errorf("Details missing per-header entry for %q: %q", h, f.Details)
 		}
 	}
 	for _, c := range []string{"CWE-693", "CWE-319", "CWE-1021", "CWE-200"} {
@@ -119,9 +129,19 @@ func TestSecurityHeadersSeverityMapping(t *testing.T) {
 	if f.Title != "missing 2 security headers" {
 		t.Errorf("title = %q, want %q", f.Title, "missing 2 security headers")
 	}
+	if len(f.Details) != 2 {
+		t.Fatalf("Details = %d entries, want one per missing header: %q", len(f.Details), f.Details)
+	}
 	for _, h := range []string{"Content-Security-Policy", "Strict-Transport-Security"} {
-		if !strings.Contains(f.Detail, h) {
-			t.Errorf("detail missing %q: %q", h, f.Detail)
+		var found bool
+		for _, entry := range f.Details {
+			if strings.HasPrefix(entry, h+": ") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("Details missing per-header entry for %q: %q", h, f.Details)
 		}
 	}
 }
@@ -264,8 +284,12 @@ func TestSecurityHeadersPopulatesEnrichedFields(t *testing.T) {
 	if f.OWASP == "" {
 		t.Errorf("OWASP empty")
 	}
-	if f.Remediation == "" {
-		t.Errorf("Remediation empty")
+	// Per-header remediation now lives in Details (one bullet per missing
+	// header) rather than a single concatenated Remediation string.
+	if len(f.Details) != 1 {
+		t.Errorf("Details = %d, want 1 (only CSP missing): %q", len(f.Details), f.Details)
+	} else if !strings.HasPrefix(f.Details[0], "Content-Security-Policy: ") {
+		t.Errorf("Details[0] = %q, want Content-Security-Policy entry", f.Details[0])
 	}
 	if f.URL == "" {
 		t.Errorf("URL empty - should be the observed request URL")

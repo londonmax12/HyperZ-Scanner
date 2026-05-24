@@ -113,13 +113,16 @@ func (c SecurityHeaders) Run(ctx context.Context, client *httpclient.Client, _ *
 		return nil, nil
 	}
 
-	// Consolidate every missing header into a single finding. Five missing
-	// headers on the same page is one configuration defect with five facets,
-	// not five independent issues; emitting five rows just inflates the
-	// report and forces the reader to mentally re-join them.
+	// Consolidate every missing header into a single finding with one entry
+	// per header. Five missing headers on the same page is one configuration
+	// defect with five facets, not five independent issues; emitting five
+	// rows just inflates the report and forces the reader to mentally
+	// re-join them. Per-header detail and fix text live in Details so
+	// reporters can render them as a bullet list instead of a run-on
+	// paragraph.
 	maxSev := SeverityInfo
 	seenCWE := map[string]bool{}
-	var cwes, remediations []string
+	var cwes, details []string
 	for _, h := range missing {
 		r := headerRules[h]
 		if SeverityRank(r.severity) > SeverityRank(maxSev) {
@@ -129,7 +132,7 @@ func (c SecurityHeaders) Run(ctx context.Context, client *httpclient.Client, _ *
 			seenCWE[r.cwe] = true
 			cwes = append(cwes, r.cwe)
 		}
-		remediations = append(remediations, h+": "+r.remediation)
+		details = append(details, h+": "+r.remediation)
 	}
 
 	var title string
@@ -145,13 +148,13 @@ func (c SecurityHeaders) Run(ctx context.Context, client *httpclient.Client, _ *
 		URL:      p.URL,
 		Severity: maxSev,
 		Title:    title,
-		Detail:   fmt.Sprintf("response from %s did not include: %s", p.URL, strings.Join(missing, ", ")),
+		Detail:   fmt.Sprintf("response from %s did not include the following security headers", p.URL),
+		Details:  details,
 		CWE:      strings.Join(cwes, ", "),
 		// All header rules map to OWASP A05:2021 Security Misconfiguration,
 		// so consolidating doesn't lose information here.
-		OWASP:       "A05:2021 Security Misconfiguration",
-		Remediation: strings.Join(remediations, " "),
-		Evidence:    BuildEvidence("GET", p.URL, snap.Status, snap.Headers, ""),
+		OWASP:    "A05:2021 Security Misconfiguration",
+		Evidence: BuildEvidence("GET", p.URL, snap.Status, snap.Headers, ""),
 		// Per-host: missing headers on example.com is one site-wide config
 		// issue, not one per crawled page. No per-header suffix now that
 		// every missing header is folded into a single finding.

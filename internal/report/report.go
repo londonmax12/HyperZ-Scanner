@@ -244,6 +244,14 @@ func writeTextFinding(w io.Writer, f checks.Finding) error {
 			return err
 		}
 	}
+	for _, item := range f.Details {
+		if item == "" {
+			continue
+		}
+		if _, err := fmt.Fprintf(w, "      - %s\n", item); err != nil {
+			return err
+		}
+	}
 	if tags := joinNonEmpty(" ", f.CWE, f.OWASP); tags != "" {
 		if _, err := fmt.Fprintf(w, "    refs: %s\n", tags); err != nil {
 			return err
@@ -318,7 +326,7 @@ func (jsonlReporter) Write(_ context.Context, w io.Writer, in <-chan checks.Find
 type csvReporter struct{}
 
 var csvHeader = []string{
-	"severity", "check", "target", "url", "title", "detail",
+	"severity", "check", "target", "url", "title", "detail", "details",
 	"cwe", "owasp", "remediation",
 	"evidence_method", "evidence_url", "evidence_status",
 	"dedupe_key",
@@ -354,6 +362,7 @@ func (csvReporter) Write(_ context.Context, w io.Writer, in <-chan checks.Findin
 		}
 		row := []string{
 			string(f.Severity), f.Check, f.Target, f.URL, f.Title, f.Detail,
+			strings.Join(f.Details, "; "),
 			f.CWE, f.OWASP, f.Remediation,
 			method, eURL, status,
 			f.DedupeKey,
@@ -484,7 +493,7 @@ func (sarifReporter) Write(ctx context.Context, w io.Writer, in <-chan checks.Fi
 		res := sarifResult{
 			RuleID:  f.Check,
 			Level:   sarifLevel(f.Severity),
-			Message: sarifMessage{Text: f.Title + ifDetail(f.Detail)},
+			Message: sarifMessage{Text: f.Title + ifDetail(f.Detail) + sarifDetailsSuffix(f.Details)},
 			Locations: []sarifLocation{{
 				PhysicalLocation: sarifPhysicalLoc{
 					ArtifactLocation: sarifArtifactLoc{URI: loc},
@@ -563,6 +572,24 @@ func ifDetail(d string) string {
 		return ""
 	}
 	return " - " + d
+}
+
+// sarifDetailsSuffix folds a per-item Details list onto the end of the SARIF
+// result message so consumers that only read message text still see the
+// per-item breakdown. Returns "" when the list is empty.
+func sarifDetailsSuffix(details []string) string {
+	if len(details) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for _, item := range details {
+		if item == "" {
+			continue
+		}
+		b.WriteString("\n  - ")
+		b.WriteString(item)
+	}
+	return b.String()
 }
 
 // cweURL maps a "CWE-123" id to its mitre.org page so SARIF viewers can link
@@ -659,6 +686,17 @@ func (markdownReporter) Write(ctx context.Context, w io.Writer, in <-chan checks
 		}
 		if f.Detail != "" {
 			fmt.Fprintf(w, "- **Detail:** %s\n", f.Detail)
+		}
+		if len(f.Details) > 0 {
+			if f.Detail == "" {
+				fmt.Fprintf(w, "- **Details:**\n")
+			}
+			for _, item := range f.Details {
+				if item == "" {
+					continue
+				}
+				fmt.Fprintf(w, "    - %s\n", item)
+			}
 		}
 		if f.Remediation != "" {
 			fmt.Fprintf(w, "- **Remediation:** %s\n", f.Remediation)
