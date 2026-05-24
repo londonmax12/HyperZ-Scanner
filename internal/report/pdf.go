@@ -160,25 +160,69 @@ func (d *pdfDoc) renderReport(findings []checks.Finding, meta Metadata) {
 		return
 	}
 
-	groups := map[checks.Severity][]checks.Finding{}
-	for _, f := range findings {
-		groups[f.Severity] = append(groups[f.Severity], f)
+	// Group by (severity, check) so a check that fires on N URLs renders as
+	// one block - shared title/refs/fix/detail printed once, a per-URL
+	// "affected" list, and a single sample evidence. The same idea as the
+	// security-headers check folding many missing-header facets into one
+	// finding, applied at report time across instances. Without this a
+	// 671-finding scan blows out to 831 PDF pages.
+	bySev := map[checks.Severity][]checkGroup{}
+	sevCounts := map[checks.Severity]int{}
+	for _, g := range groupFindings(findings) {
+		bySev[g.Severity] = append(bySev[g.Severity], g)
+		sevCounts[g.Severity] += len(g.All)
 	}
 
 	for _, sev := range severityOrder {
-		bucket := groups[sev]
+		bucket := bySev[sev]
 		if len(bucket) == 0 {
 			continue
 		}
 		d.newPage()
-		d.renderSeverityHeading(sev, len(bucket))
-		for i, f := range bucket {
-			d.renderFinding(f)
+		d.renderSeverityHeading(sev, sevCounts[sev])
+		for i, g := range bucket {
+			d.renderCheckGroup(g)
 			if i < len(bucket)-1 {
 				d.separator()
 			}
 		}
 	}
+}
+
+// checkGroup aggregates findings that share both severity and check name.
+// Rep holds the first observed finding and supplies the shared fields
+// (title, CWE, OWASP, remediation, detail, sample evidence). All preserves
+// every instance in arrival order so per-URL variation - and per-instance
+// diff status - can still be listed.
+type checkGroup struct {
+	Severity checks.Severity
+	Check    string
+	Rep      checks.Finding
+	All      []checks.Finding
+}
+
+func groupFindings(findings []checks.Finding) []checkGroup {
+	type key struct {
+		sev   checks.Severity
+		check string
+	}
+	idx := map[key]int{}
+	var out []checkGroup
+	for _, f := range findings {
+		k := key{f.Severity, f.Check}
+		if i, ok := idx[k]; ok {
+			out[i].All = append(out[i].All, f)
+			continue
+		}
+		idx[k] = len(out)
+		out = append(out, checkGroup{
+			Severity: f.Severity,
+			Check:    f.Check,
+			Rep:      f,
+			All:      []checks.Finding{f},
+		})
+	}
+	return out
 }
 
 // renderBudget adds a "Request budget" page when a scan-wide budget was in
@@ -294,50 +338,91 @@ func (d *pdfDoc) renderSeverityHeading(sev checks.Severity, n int) {
 	d.gap(8)
 }
 
-func (d *pdfDoc) renderFinding(f checks.Finding) {
-	r, g, b := severityRGB(f.Severity)
-	heading := fmt.Sprintf("[%s] %s", f.Severity, f.Check)
-	if badge := diffStatusBadge(f.DiffStatus); badge != "" {
+// renderCheckGroup emits one block per (severity, check). Shared fields are
+// pulled from the representative finding; per-URL variation is shown as an
+// indented "affected" list. Only one sample evidence is rendered - the
+// per-URL evidence overwhelmingly repeats the same response headers in a
+// long scan, and reading 12 identical blocks gives no extra information.
+func (d *pdfDoc) renderCheckGroup(g checkGroup) {
+	rep := g.Rep
+	n := len(g.All)
+	r, gC, b := severityRGB(g.Severity)
+
+	heading := fmt.Sprintf("[%s] %s", g.Severity, g.Check)
+	if n > 1 {
+		heading = fmt.Sprintf("%s (%d instances)", heading, n)
+	} else if badge := diffStatusBadge(rep.DiffStatus); badge != "" {
 		heading = fmt.Sprintf("(%s) %s", badge, heading)
 	}
-	d.writeLine(heading, fontBold, pdfSizeH3, r, g, b)
-	loc := f.URL
-	if loc == "" {
-		loc = f.Target
-	}
-	d.writeWrapped("url:    "+loc, 0, fontReg, pdfSizeBase, 0, 0, 0)
-	d.writeWrapped("title:  "+f.Title, 0, fontReg, pdfSizeBase, 0, 0, 0)
-	if refs := pdfJoinNonEmpty("  ", f.CWE, f.OWASP); refs != "" {
+	d.writeLine(heading, fontBold, pdfSizeH3, r, gC, b)
+
+	d.writeWrapped("title:  "+rep.Title, 0, fontReg, pdfSizeBase, 0, 0, 0)
+	if refs := pdfJoinNonEmpty("  ", rep.CWE, rep.OWASP); refs != "" {
 		d.writeWrapped("refs:   "+refs, 0, fontReg, pdfSizeBase, 0.25, 0.25, 0.25)
 	}
-	if f.Detail != "" {
-		d.writeWrapped("detail: "+f.Detail, 0, fontReg, pdfSizeBase, 0.25, 0.25, 0.25)
+	if rep.Detail != "" {
+		d.writeWrapped("detail: "+rep.Detail, 0, fontReg, pdfSizeBase, 0.25, 0.25, 0.25)
 	}
-	if len(f.Details) > 0 {
-		if f.Detail == "" {
+	if len(rep.Details) > 0 {
+		if rep.Detail == "" {
 			d.writeLine("details:", fontReg, pdfSizeBase, 0.25, 0.25, 0.25)
 		}
-		for _, item := range f.Details {
+		for _, item := range rep.Details {
 			if item == "" {
 				continue
 			}
 			d.writeWrapped("- "+item, 12, fontReg, pdfSizeBase, 0.25, 0.25, 0.25)
 		}
 	}
-	if f.Remediation != "" {
-		d.writeWrapped("fix:    "+f.Remediation, 0, fontReg, pdfSizeBase, 0.20, 0.35, 0.20)
+	if rep.Remediation != "" {
+		d.writeWrapped("fix:    "+rep.Remediation, 0, fontReg, pdfSizeBase, 0.20, 0.35, 0.20)
 	}
-	if e := f.Evidence; e != nil && (e.Method != "" || e.Status != 0 || e.Snippet != "" || e.Exchange != nil) {
+
+	if n == 1 {
+		loc := rep.URL
+		if loc == "" {
+			loc = rep.Target
+		}
+		d.writeWrapped("url:    "+loc, 0, fontReg, pdfSizeBase, 0, 0, 0)
+	} else {
+		d.writeLine(fmt.Sprintf("affected URLs (%d):", n), fontReg, pdfSizeBase, 0, 0, 0)
+		for _, f := range g.All {
+			loc := f.URL
+			if loc == "" {
+				loc = f.Target
+			}
+			line := "- " + loc
+			if badge := diffStatusBadge(f.DiffStatus); badge != "" {
+				line = "- (" + badge + ") " + loc
+			}
+			// Per-instance title overrides (e.g. checks that encode the
+			// vulnerable param into the title) are worth surfacing.
+			if f.Title != rep.Title && f.Title != "" {
+				line += " - " + f.Title
+			}
+			d.writeWrapped(line, 12, fontReg, pdfSizeBase, 0.20, 0.20, 0.20)
+		}
+	}
+
+	if e := rep.Evidence; e != nil && (e.Method != "" || e.Status != 0 || e.Snippet != "" || e.Exchange != nil) {
 		method := e.Method
 		if method == "" {
 			method = "GET"
 		}
 		reqURL := e.RequestURL
 		if reqURL == "" {
-			reqURL = loc
+			if rep.URL != "" {
+				reqURL = rep.URL
+			} else {
+				reqURL = rep.Target
+			}
+		}
+		label := "evidence:"
+		if n > 1 {
+			label = "sample evidence:"
 		}
 		d.writeWrapped(
-			fmt.Sprintf("evidence: %s %s -> %d", method, reqURL, e.Status),
+			fmt.Sprintf("%s %s %s -> %d", label, method, reqURL, e.Status),
 			0, fontReg, pdfSizeBase, 0.30, 0.30, 0.30)
 		for _, line := range strings.Split(e.Snippet, "\n") {
 			if line == "" {
@@ -350,8 +435,8 @@ func (d *pdfDoc) renderFinding(f checks.Finding) {
 			d.renderExchangeBody("response body", ex.ResponseBody, ex.ResponseBodyTruncated)
 		}
 	}
-	if f.DedupeKey != "" {
-		d.writeLine("id: "+f.DedupeKey, fontReg, pdfSizeChrome, 0.55, 0.55, 0.55)
+	if n == 1 && rep.DedupeKey != "" {
+		d.writeLine("id: "+rep.DedupeKey, fontReg, pdfSizeChrome, 0.55, 0.55, 0.55)
 	}
 	d.gap(4)
 }
