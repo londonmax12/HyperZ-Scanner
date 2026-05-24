@@ -41,6 +41,7 @@ func registry() []checks.Check {
 		checks.JSLibsKnownVuln{},
 		checks.SRIMissing{},
 		checks.SourceMapExposure{},
+		checks.TargetBlankNoopener{},
 		&checks.ContentDiscovery{},
 	}
 }
