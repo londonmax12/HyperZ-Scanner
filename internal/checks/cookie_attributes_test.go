@@ -232,7 +232,7 @@ func TestCookieAttributesDedupePerCookieAndAttribute(t *testing.T) {
 	}
 	a, b := run(), run()
 	if len(a) != 6 || len(b) != 6 {
-		t.Fatalf("expected 6 findings each (2 cookies Ã— 3 attrs), got %d / %d", len(a), len(b))
+		t.Fatalf("expected 6 findings each (2 cookies x 3 attrs), got %d / %d", len(a), len(b))
 	}
 	keyOf := func(fs []Finding) map[string]string {
 		m := make(map[string]string, len(fs))
