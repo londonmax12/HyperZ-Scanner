@@ -520,6 +520,62 @@ type Check interface {
 	Run(ctx context.Context, client *httpclient.Client, scope *scope.Scope, p page.Page) ([]Finding, error)
 }
 
+// TwoPhaseCheck is implemented by checks whose verdict requires observing
+// the application state AFTER every page has been planted. Stored XSS is
+// the canonical case: a canary submitted via /api/comments only surfaces
+// later when /post/123 renders the stored content, so a single per-page
+// Run() pass cannot see persistence.
+//
+// The scanner drives a two-phase check like this:
+//
+//  1. Phase 1 (during the main crawl): for each in-scope page, the scanner
+//     calls Plant in place of Run. Plant fans out probes (canary plants,
+//     state mutations, etc.) and accumulates its own cross-page state -
+//     the scanner does not see that state directly. Plant findings flow
+//     to the report immediately, same as Run findings.
+//
+//  2. Between phases: the scanner calls DetectURLs once. The returned
+//     URLs are unioned with the in-scope crawler URL set the scanner
+//     retained during phase 1. Use this to surface same-origin URLs the
+//     plant responses revealed (e.g. a redirect Location, a "view your
+//     post" link in the body) that weren't in the original crawl. The
+//     scanner's retained set only contains URLs the crawler fed into
+//     ScanAll - URLs a Plant call discovered at runtime (form-following,
+//     redirect chains the check followed itself) are NOT auto-added, so
+//     a check that needs phase 2 to revisit them must return them here.
+//
+//  3. Phase 2 (after phase 1 drains): the scanner re-fetches every URL
+//     in the unioned set, respecting scope and the rate limiter, and
+//     calls Detect once per (check, re-fetched page). Detect inspects
+//     the body for evidence of planted state (canary echo, breakout
+//     bytes round-tripping intact, etc.) and returns findings.
+//
+// A two-phase check still satisfies Check; the scanner uses Run only as
+// a fallback when phase-2 orchestration is disabled (older scanner code,
+// dry runs). Implementations should return nil findings from Run rather
+// than duplicating Plant - the report would otherwise carry two copies
+// of every phase-1 hit.
+//
+// Implementations must be safe to call concurrently from many goroutines:
+// scanOne runs Plant in parallel across pages, so any shared planted-
+// state map needs its own mutex.
+type TwoPhaseCheck interface {
+	Check
+	// Plant fires once per in-scope page during phase 1. Same call
+	// shape as Run; any findings returned flow out immediately.
+	Plant(ctx context.Context, client *httpclient.Client, scope *scope.Scope, p page.Page) ([]Finding, error)
+	// DetectURLs returns same-origin URLs the check discovered during
+	// plant responses that should be added to the phase-2 re-fetch set.
+	// Called once between phases, on the same goroutine as the scanner's
+	// main loop, so it does not need its own synchronization beyond the
+	// internal locking Plant already uses. Return nil for "no extras".
+	DetectURLs() []string
+	// Detect fires once per re-fetched page during phase 2. p carries
+	// the freshly-fetched body/headers; the check searches it for
+	// evidence of its planted state and emits findings for each hit.
+	Detect(ctx context.Context, client *httpclient.Client, scope *scope.Scope, p page.Page) ([]Finding, error)
+}
+
 // Filter returns the subset of checks that should run at the given level.
 // A scan at level N includes every check whose level is <= N; higher
 // levels are supersets, so an aggressive scan never silently drops the

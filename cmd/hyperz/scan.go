@@ -182,9 +182,10 @@ Modes:
 		"probe well-known OpenAPI/Swagger paths on each seed origin and enqueue every documented endpoint (requires --crawl)")
 	f.BoolVar(&cfg.pollute, "pollute", false,
 		"opt in to state-mutating discovery and checks: walks select-driven navigation forms "+
-			"(POSTs every <option> through and queues the redirect target) and enables the "+
-			"proto-pollution check, which leaves a (best-effort cleaned-up) modification on a "+
-			"Node target. Off by default; turn on only against systems you may safely mutate.")
+			"(POSTs every <option> through and queues the redirect target), enables the "+
+			"proto-pollution check (best-effort cleanup), and enables the stored-xss check "+
+			"(plants persist - no cleanup). Off by default; turn on only against systems you "+
+			"may safely mutate.")
 
 	f.BoolVar(&cfg.noFingerprint, "no-fingerprint", false,
 		"disable stack detection; runs every check against every target")

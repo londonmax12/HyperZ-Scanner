@@ -3,6 +3,9 @@ package scanner
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/url"
+	"sort"
 	"sync"
 	"time"
 
@@ -12,6 +15,12 @@ import (
 	"github.com/londonmax12/hyperz/internal/page"
 	"github.com/londonmax12/hyperz/internal/scope"
 )
+
+// phase2BodyCap bounds the re-fetched body the scanner reads during phase 2.
+// Sized between the per-check default (64 KiB) and the crawler's 5 MiB cap:
+// detect pages that list many stored comments / posts can be long, but we
+// only need enough body to find a canary needle, not the full document.
+const phase2BodyCap = 512 << 10
 
 type Scanner struct {
 	client           *httpclient.Client
@@ -102,8 +111,29 @@ func New(client *httpclient.Client, c []checks.Check, opts ...Option) *Scanner {
 // scheduling new checks, but any check whose Run has already returned will
 // have its findings flushed to `out`. The reader of `out` must keep
 // draining until close, or those senders will block.
+//
+// When the registered check set includes any TwoPhaseCheck, ScanAll runs a
+// second pass after the main `pages` channel drains: every in-scope URL the
+// scanner saw during phase 1 is unioned with each TwoPhaseCheck's
+// DetectURLs(), re-fetched, and handed to Detect. Phase-2 findings flow
+// through the same `out` channel before it is closed. The second pass is
+// skipped if ctx is already canceled, but is otherwise unconditional - a
+// caller that wants the legacy single-pass behavior should simply register
+// no TwoPhaseCheck implementations.
 func (s *Scanner) ScanAll(ctx context.Context, pages <-chan page.Page, out chan<- checks.Finding) error {
 	defer close(out)
+
+	twoPhase := s.twoPhaseChecks()
+
+	// visited retains the in-scope URLs phase 1 saw so phase 2 can re-fetch
+	// them. Only populated when at least one TwoPhaseCheck is registered so
+	// single-pass scans don't pay for the bookkeeping. The map is mutated
+	// from every scan worker so reads/writes are mutex-guarded.
+	var visitedMu sync.Mutex
+	var visited map[string]struct{}
+	if len(twoPhase) > 0 {
+		visited = map[string]struct{}{}
+	}
 
 	var wg sync.WaitGroup
 	for i := 0; i < s.concurrency; i++ {
@@ -118,13 +148,238 @@ func (s *Scanner) ScanAll(ctx context.Context, pages <-chan page.Page, out chan<
 					if !ok {
 						return
 					}
+					if visited != nil {
+						if key := visitedKey(p.URL); key != "" && s.scopeAllowsURL(key) {
+							visitedMu.Lock()
+							visited[key] = struct{}{}
+							visitedMu.Unlock()
+						}
+					}
 					s.scanOne(ctx, p, out)
 				}
 			}
 		}()
 	}
 	wg.Wait()
+
+	if len(twoPhase) > 0 && ctx.Err() == nil {
+		s.runPhase2(ctx, twoPhase, visited, out)
+	}
 	return ctx.Err()
+}
+
+// twoPhaseChecks returns the subset of registered checks that implement
+// TwoPhaseCheck. Computed once per ScanAll so the per-page hot path doesn't
+// re-interface-assert N times.
+func (s *Scanner) twoPhaseChecks() []checks.TwoPhaseCheck {
+	var out []checks.TwoPhaseCheck
+	for _, c := range s.checks {
+		if tp, ok := c.(checks.TwoPhaseCheck); ok {
+			out = append(out, tp)
+		}
+	}
+	return out
+}
+
+// runPhase2 fans out the detect pass after phase 1 has fully drained. It
+// computes the in-scope URL set (visited union DetectURLs from every
+// two-phase check), re-fetches each URL via the same client and rate
+// limiter phase 1 uses, then calls Detect on each (check, re-fetched
+// page) pair. Findings flow through the same `out` channel; the caller
+// (ScanAll) closes it after this returns.
+//
+// Robots is intentionally not re-checked here: a URL only enters the
+// visited set after the crawler already cleared it. Scope is mandatory
+// because DetectURLs can surface same-origin pages the operator never
+// authorized (an off-path link discovered in a plant response).
+func (s *Scanner) runPhase2(ctx context.Context, twoPhase []checks.TwoPhaseCheck, visited map[string]struct{}, out chan<- checks.Finding) {
+	detectSet := make(map[string]struct{}, len(visited))
+	for u := range visited {
+		detectSet[u] = struct{}{}
+	}
+	for _, c := range twoPhase {
+		for _, raw := range c.DetectURLs() {
+			key := visitedKey(raw)
+			if key == "" {
+				continue
+			}
+			if !s.scopeAllowsURL(key) {
+				continue
+			}
+			detectSet[key] = struct{}{}
+		}
+	}
+	if len(detectSet) == 0 {
+		return
+	}
+
+	urls := make([]string, 0, len(detectSet))
+	for u := range detectSet {
+		urls = append(urls, u)
+	}
+	// Stable order so re-runs against the same target produce a
+	// deterministic request stream - matters for evidence reproducibility
+	// and for tests that assert on phase-2 fetch order.
+	sort.Strings(urls)
+
+	// One semaphore caps phase-2 fetch parallelism. Reuses the same
+	// concurrency knob as phase 1 so an operator who set --concurrency=4
+	// isn't surprised by phase 2 fanning out wider.
+	sem := make(chan struct{}, s.concurrency)
+	var wg sync.WaitGroup
+	for _, u := range urls {
+		if ctx.Err() != nil {
+			break
+		}
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+		}
+		if ctx.Err() != nil {
+			break
+		}
+		wg.Add(1)
+		go func(u string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			p, err := s.fetchPhase2(ctx, u)
+			if err != nil {
+				// ctx cancel mid-fetch is the expected drain path; don't
+				// flood onError with one entry per pending URL on a
+				// canceled scan.
+				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					return
+				}
+				if s.onError != nil {
+					s.onError(u, "phase-2-fetch", err)
+				}
+				return
+			}
+			s.detectOne(ctx, twoPhase, p, out)
+		}(u)
+	}
+	wg.Wait()
+}
+
+// detectOne fingerprints the re-fetched p then dispatches Detect across
+// every applicable two-phase check. Mirrors scanOne's structure (per-check
+// budget, level/stack/reporter context, ErrFetchAlreadyFailed suppression,
+// flush-on-cancel send loop) so phase 2 inherits the same operator-visible
+// contract as phase 1.
+func (s *Scanner) detectOne(ctx context.Context, twoPhase []checks.TwoPhaseCheck, p page.Page, out chan<- checks.Finding) {
+	stack := s.fingerprint(ctx, p)
+	target := p.URL
+
+	var sem chan struct{}
+	if s.checkConcurrency > 0 {
+		sem = make(chan struct{}, s.checkConcurrency)
+	}
+
+	var wg sync.WaitGroup
+	for _, c := range twoPhase {
+		if ctx.Err() != nil {
+			break
+		}
+		if !s.applies(c, stack, target) {
+			continue
+		}
+		if sem != nil {
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+			}
+			if ctx.Err() != nil {
+				break
+			}
+		}
+		wg.Add(1)
+		go func(c checks.TwoPhaseCheck) {
+			defer wg.Done()
+			if sem != nil {
+				defer func() { <-sem }()
+			}
+			runCtx, cancel := context.WithTimeout(ctx, checkBudget(c))
+			defer cancel()
+			runCtx = checks.WithLevel(runCtx, s.level)
+			runCtx = checks.WithStack(runCtx, stack)
+			if s.onError != nil {
+				runCtx = checks.WithReporter(runCtx, func(err error) {
+					s.onError(target, c.Name(), err)
+				})
+			}
+			found, err := c.Detect(runCtx, s.client, s.scope, p)
+			if err != nil {
+				if errors.Is(err, checks.ErrFetchAlreadyFailed) {
+					return
+				}
+				if s.onError != nil {
+					s.onError(target, c.Name(), err)
+				}
+				return
+			}
+			for _, f := range found {
+				out <- f
+			}
+		}(c)
+	}
+	wg.Wait()
+}
+
+// fetchPhase2 issues a GET for rawurl and packages the response into a
+// page.Page. The body is read up to phase2BodyCap; truncation is silent
+// because Detect implementations search for short canary needles that
+// land near the start of any storage UI long before that cap. Fetched is
+// set so checks that gate on "did anyone try this URL" can read the
+// usual signal.
+func (s *Scanner) fetchPhase2(ctx context.Context, rawurl string) (page.Page, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawurl, nil)
+	if err != nil {
+		return page.Page{}, err
+	}
+	resp, err := s.client.Do(ctx, req)
+	if err != nil {
+		return page.Page{}, err
+	}
+	defer resp.Body.Close()
+	body, _, _ := httpclient.ReadBodyCapped(resp, phase2BodyCap)
+	return page.Page{
+		URL:     rawurl,
+		Status:  resp.StatusCode,
+		Headers: resp.Header.Clone(),
+		Body:    body,
+		Fetched: true,
+	}, nil
+}
+
+// visitedKey returns the canonical form of rawurl used to dedupe the
+// phase-2 detect set: the URL with its fragment stripped (anchors don't
+// alter what the server returns). An unparseable or schemeless URL
+// returns "" so callers can drop it without poisoning the set.
+func visitedKey(rawurl string) string {
+	if rawurl == "" {
+		return ""
+	}
+	u, err := url.Parse(rawurl)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	u.Fragment = ""
+	return u.String()
+}
+
+// scopeAllowsURL is a string-input wrapper around scope.Allows so the
+// phase-2 pipeline can filter without each callsite re-parsing rawurl.
+// A nil scope (the unconstrained default) permits everything, matching
+// the contract in checks.Check.Run.
+func (s *Scanner) scopeAllowsURL(rawurl string) bool {
+	if s.scope == nil {
+		return true
+	}
+	u, err := url.Parse(rawurl)
+	if err != nil {
+		return false
+	}
+	return s.scope.Allows(u)
 }
 
 // scanOne fingerprints p then runs every applicable check in parallel.
@@ -134,6 +389,11 @@ func (s *Scanner) ScanAll(ctx context.Context, pages <-chan page.Page, out chan<
 // ctx.Err()), so the post-cancel send burst is bounded by checks already
 // in flight. The caller (the report side) must drain `out` until it closes
 // or the senders will deadlock.
+//
+// A check that implements TwoPhaseCheck has its Plant method invoked here
+// in place of Run - the scanner reserves Run for the legacy single-phase
+// contract and uses Plant during phase 1 so the check can carry private
+// state into Detect.
 func (s *Scanner) scanOne(ctx context.Context, p page.Page, out chan<- checks.Finding) {
 	stack := s.fingerprint(ctx, p)
 	target := p.URL
@@ -183,7 +443,15 @@ func (s *Scanner) scanOne(ctx context.Context, p page.Page, out chan<- checks.Fi
 					s.onError(target, c.Name(), err)
 				})
 			}
-			found, err := c.Run(runCtx, s.client, s.scope, p)
+			// A two-phase check receives Plant during phase 1; its Run
+			// is reserved for callers that intentionally drive it
+			// single-phase (e.g. dry runs without phase-2 wiring) and
+			// would otherwise double-fire findings here.
+			runFn := c.Run
+			if tp, ok := c.(checks.TwoPhaseCheck); ok {
+				runFn = tp.Plant
+			}
+			found, err := runFn(runCtx, s.client, s.scope, p)
 			if err != nil {
 				// ErrFetchAlreadyFailed means the crawler tried this URL
 				// and got nothing - it already reported the failure once

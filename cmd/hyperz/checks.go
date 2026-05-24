@@ -13,9 +13,12 @@ import (
 // they appear in `hyperz checks list` and run during `hyperz scan`.
 //
 // pollute gates state-mutating checks: ProtoPollution leaves a (best-effort
-// cleaned-up) modification on a Node target's Object.prototype, so it only
-// loads when the operator has explicitly accepted that with --pollute.
-// Other checks here are read-only or only mutate the request itself.
+// cleaned-up) modification on a Node target's Object.prototype, and
+// StoredXSS plants XSS payloads that PERSIST until the operator removes
+// them (the whole point of the check is the canary surviving the storage
+// boundary, so there is no cleanup pass). Both load only when the operator
+// has explicitly accepted that with --pollute. Other checks here are
+// read-only or only mutate the request itself.
 func registry(pollute bool) []checks.Check {
 	out := []checks.Check{
 		checks.SecurityHeaders{},
@@ -54,6 +57,7 @@ func registry(pollute bool) []checks.Check {
 	}
 	if pollute {
 		out = append(out, checks.ProtoPollution{})
+		out = append(out, &checks.StoredXSS{})
 	}
 	return out
 }

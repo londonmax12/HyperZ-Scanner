@@ -465,6 +465,157 @@ func (o *observingCheck) Run(ctx context.Context, c *httpclient.Client, s *scope
 	return o.stubCheck.Run(ctx, c, s, p)
 }
 
+// stubTwoPhase is the test double for the TwoPhaseCheck contract. It
+// records every Plant and Detect call, returns a configurable detect-URL
+// extension, and emits a fixed finding from Detect so the scanner test
+// can assert the two-phase fan-out actually drives Detect after phase 1
+// drains.
+type stubTwoPhase struct {
+	stubCheck
+	planted    atomic.Int64
+	detected   atomic.Int64
+	extraURLs  []string
+	detectHits sync.Map // detect URL -> struct{}
+	mu         sync.Mutex
+	plantedAt  []string // URLs Plant was invoked against, in call order
+}
+
+func (s *stubTwoPhase) Plant(ctx context.Context, _ *httpclient.Client, _ *scope.Scope, p page.Page) ([]checks.Finding, error) {
+	s.planted.Add(1)
+	s.mu.Lock()
+	s.plantedAt = append(s.plantedAt, p.URL)
+	s.mu.Unlock()
+	return nil, nil
+}
+
+func (s *stubTwoPhase) DetectURLs() []string {
+	out := make([]string, len(s.extraURLs))
+	copy(out, s.extraURLs)
+	return out
+}
+
+func (s *stubTwoPhase) Detect(ctx context.Context, _ *httpclient.Client, _ *scope.Scope, p page.Page) ([]checks.Finding, error) {
+	s.detected.Add(1)
+	s.detectHits.Store(p.URL, struct{}{})
+	return []checks.Finding{{Check: s.name, Title: "stored", Target: p.URL, URL: p.URL}}, nil
+}
+
+// TestScanTwoPhaseRunsPlantThenDetect pins the cross-phase coordination:
+// during phase 1 the scanner must call Plant (not Run) for a
+// TwoPhaseCheck, then after the page channel drains call Detect once
+// per URL the scanner re-fetched. The fan-out is the entire point of
+// the TwoPhaseCheck contract; if Plant or Detect stops firing the
+// stored-XSS check becomes silent.
+func TestScanTwoPhaseRunsPlantThenDetect(t *testing.T) {
+	visits := atomic.Int64{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		visits.Add(1)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte("<html><body>ok</body></html>"))
+	}))
+	defer srv.Close()
+
+	tp := &stubTwoPhase{stubCheck: stubCheck{name: "stored-xss-stub"}}
+	s := New(newNilClient(), []checks.Check{tp}, WithConcurrency(2))
+
+	pages := make(chan page.Page, 2)
+	pages <- page.FromURL(srv.URL + "/a")
+	pages <- page.FromURL(srv.URL + "/b")
+	close(pages)
+	out := make(chan checks.Finding, 16)
+	if err := s.ScanAll(context.Background(), pages, out); err != nil {
+		t.Fatalf("ScanAll: %v", err)
+	}
+	var findings []checks.Finding
+	for f := range out {
+		findings = append(findings, f)
+	}
+
+	if got := tp.planted.Load(); got != 2 {
+		t.Fatalf("Plant called %d times, want 2 (once per crawled page)", got)
+	}
+	if got := tp.detected.Load(); got != 2 {
+		t.Fatalf("Detect called %d times, want 2 (once per visited URL re-fetched in phase 2)", got)
+	}
+	if _, ok := tp.detectHits.Load(srv.URL + "/a"); !ok {
+		t.Errorf("Detect missing visit to /a; phase 2 must re-fetch every visited URL")
+	}
+	if _, ok := tp.detectHits.Load(srv.URL + "/b"); !ok {
+		t.Errorf("Detect missing visit to /b; phase 2 must re-fetch every visited URL")
+	}
+	if len(findings) != 2 {
+		t.Fatalf("expected 2 findings (one per Detect call), got %d", len(findings))
+	}
+	// Each /a and /b should have been fetched twice total: once
+	// nominally during phase 1 (the test feeds page.FromURL so no
+	// actual GET happens) and once during phase 2's re-fetch. Only
+	// the phase-2 GETs hit the test server.
+	if got := visits.Load(); got != 2 {
+		t.Fatalf("server saw %d GETs; want 2 (one per phase-2 re-fetch)", got)
+	}
+}
+
+// TestScanTwoPhaseUnionsDetectURLs verifies the scanner unions the
+// visited URL set with DetectURLs from each TwoPhaseCheck before phase
+// 2. Without this, a check that discovers a new same-origin URL in a
+// plant response (the "view your post" pattern) would never get a
+// detect-pass GET against it.
+func TestScanTwoPhaseUnionsDetectURLs(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+
+	tp := &stubTwoPhase{
+		stubCheck: stubCheck{name: "stored-xss-stub"},
+		extraURLs: []string{srv.URL + "/discovered"},
+	}
+	s := New(newNilClient(), []checks.Check{tp})
+
+	pages := make(chan page.Page, 1)
+	pages <- page.FromURL(srv.URL + "/seed")
+	close(pages)
+	out := make(chan checks.Finding, 16)
+	if err := s.ScanAll(context.Background(), pages, out); err != nil {
+		t.Fatalf("ScanAll: %v", err)
+	}
+	for range out {
+	}
+
+	if _, ok := tp.detectHits.Load(srv.URL + "/seed"); !ok {
+		t.Errorf("phase 2 skipped visited URL /seed")
+	}
+	if _, ok := tp.detectHits.Load(srv.URL + "/discovered"); !ok {
+		t.Errorf("phase 2 skipped DetectURLs entry /discovered; union is broken")
+	}
+}
+
+// TestScanTwoPhaseSkipsWhenCancelled pins that ctx cancellation during
+// phase 1 short-circuits the detect pass entirely. Phase 2 only runs
+// when phase 1 completes cleanly - a cancelled scan should stop, not
+// suddenly issue a fresh wave of re-fetches.
+func TestScanTwoPhaseSkipsWhenCancelled(t *testing.T) {
+	tp := &stubTwoPhase{stubCheck: stubCheck{name: "stored-xss-stub"}}
+	s := New(newNilClient(), []checks.Check{tp})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // pre-cancelled so the scan workers exit immediately
+
+	pages := make(chan page.Page, 1)
+	pages <- page.FromURL("http://example.invalid/seed")
+	close(pages)
+	out := make(chan checks.Finding, 16)
+	if err := s.ScanAll(ctx, pages, out); !errors.Is(err, context.Canceled) {
+		t.Fatalf("ScanAll err = %v, want context.Canceled", err)
+	}
+	for range out {
+	}
+	if got := tp.detected.Load(); got != 0 {
+		t.Fatalf("Detect fired %d times on a cancelled scan; want 0", got)
+	}
+}
+
 func TestScanMultipleChecksParallel(t *testing.T) {
 	a := &stubCheck{name: "a", findings: []checks.Finding{{Title: "fa"}}}
 	b := &stubCheck{name: "b", findings: []checks.Finding{{Title: "fb"}}}
