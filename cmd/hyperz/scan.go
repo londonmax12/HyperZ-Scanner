@@ -181,11 +181,13 @@ Modes:
 	f.BoolVar(&cfg.apiDiscovery, "api-discovery", true,
 		"probe well-known OpenAPI/Swagger paths on each seed origin and enqueue every documented endpoint (requires --crawl)")
 	f.BoolVar(&cfg.pollute, "pollute", false,
-		"opt in to state-mutating discovery and checks: walks select-driven navigation forms "+
+		"opt in to state-mutating and disruptive checks: walks select-driven navigation forms "+
 			"(POSTs every <option> through and queues the redirect target), enables the "+
-			"proto-pollution check (best-effort cleanup), and enables the stored-xss check "+
-			"(plants persist - no cleanup). Off by default; turn on only against systems you "+
-			"may safely mutate.")
+			"proto-pollution check (best-effort cleanup), enables the stored-xss check "+
+			"(plants persist - no cleanup), and enables the request-smuggling check "+
+			"(sends malformed CL/TE/H2 requests over a raw socket - timing-only, no smuggled "+
+			"suffix reaches another user's connection, but the traffic is loud). "+
+			"Off by default; turn on only against systems you may safely mutate or disrupt.")
 
 	f.BoolVar(&cfg.noFingerprint, "no-fingerprint", false,
 		"disable stack detection; runs every check against every target")
