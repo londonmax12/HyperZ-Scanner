@@ -21,12 +21,14 @@ func registry() []checks.Check {
 		checks.TLSAudit{},
 		checks.MixedContent{},
 		checks.OpenRedirect{},
+		checks.SSRF{},
 		checks.ReflectedXSS{},
 		checks.SQLiError{},
 		checks.SQLiBoolean{},
 		checks.SQLiTime{},
 		checks.PathTraversal{},
 		checks.CmdInjection{},
+		checks.CmdInjectionBlind{},
 		&checks.ContentDiscovery{},
 	}
 }

@@ -34,6 +34,11 @@ const (
 	// onto an inferred backend command. {{SLEEP}} expands to the chosen
 	// duration in seconds; detect via TimingCompare.
 	PayloadCmdInject PayloadClass = "cmd-injection"
+	// PayloadCmdInjectBlind - shell metacharacter prefixes that trigger
+	// command execution errors. {{TOKEN}} expands to a canary; detect via
+	// error pattern matching. Complements timing-based CmdInjection by
+	// catching blind RCE in contexts where timing is unreliable.
+	PayloadCmdInjectBlind PayloadClass = "cmd-injection-blind"
 )
 
 // Placeholder tokens inside Payload.Template. Render substitutes them at call
@@ -235,6 +240,24 @@ var payloadCatalog = map[PayloadClass][]Payload{
 		// Windows analog: ping -n N implements a ~N-second delay
 		// without needing a sleep binary.
 		{Class: PayloadCmdInject, Name: "windows-ping-delay", Template: `& ping -n {{SLEEP}} 127.0.0.1`},
+	},
+	PayloadCmdInjectBlind: {
+		// POSIX unquoted-arg context: execute a nonexistent command to
+		// trigger "command not found" error. The {{TOKEN}} canary is
+		// embedded to anchor the injection proof: both canary presence
+		// AND error signature must fire to confirm RCE.
+		{Class: PayloadCmdInjectBlind, Name: "semicolon-badcmd", Template: `; {{TOKEN}} nonexistent_cmd_xyzabc`},
+		// Subshell variant: backtick substitution with invalid command.
+		{Class: PayloadCmdInjectBlind, Name: "backtick-badcmd", Template: "`{{TOKEN}} nonexistent_cmd_xyzabc`"},
+		// Dollar-paren substitution variant.
+		{Class: PayloadCmdInjectBlind, Name: "dollar-paren-badcmd", Template: `$({{TOKEN}} nonexistent_cmd_xyzabc)`},
+		// Windows cmd.exe analog: reference undefined variable to trigger
+		// syntax/execution error.
+		{Class: PayloadCmdInjectBlind, Name: "windows-badcmd", Template: `& {{TOKEN}} & nonexistent_cmd_xyzabc`},
+		// Alternative POSIX: pipe to invalid command.
+		{Class: PayloadCmdInjectBlind, Name: "pipe-badcmd", Template: `| {{TOKEN}} nonexistent_cmd_xyzabc`},
+		// AND chain variant - another unquoted context.
+		{Class: PayloadCmdInjectBlind, Name: "and-badcmd", Template: `&& {{TOKEN}} nonexistent_cmd_xyzabc`},
 	},
 }
 
