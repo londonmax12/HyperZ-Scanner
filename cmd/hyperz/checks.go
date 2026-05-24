@@ -17,6 +17,7 @@ func registry() []checks.Check {
 		checks.CookieAttributes{},
 		checks.CacheControlSensitive{},
 		checks.FormAutocomplete{},
+		checks.FormActionInsecure{},
 		checks.CORSConfig{},
 		checks.CORSReflection{},
 		checks.ServerLeak{},
