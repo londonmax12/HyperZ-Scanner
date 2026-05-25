@@ -34,6 +34,7 @@ func bindHyperzAPI(L *lua.LState) {
 		json:     buildJSONTable(L),
 		oauth:    buildOAuthTable(L),
 		openapi:  buildOpenAPITable(L),
+		deserial: buildDeserialTable(L),
 	}
 	storeStaticHelpers(L, h)
 }

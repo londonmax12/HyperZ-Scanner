@@ -1109,6 +1109,75 @@ func SSRFLooksProxyish(path string) bool { return looksProxyish(path) }
 
 func SSRFMatchesError(body []byte) string { return ssrfMatchesError(body) }
 
+// DeserialFormatLua names one server-side deserialization format the
+// insecure-deserialization Lua port surfaces. Same shape across the
+// passive (fingerprint) and active (probe) arms so the .lua file can
+// iterate one catalogue and route by Name when it builds findings.
+type DeserialFormatLua struct {
+	Name         string
+	Label        string
+	ProbePayload string
+	ErrorPats    []string
+}
+
+// DeserialFormatListLua returns the format catalogue (Java, .NET,
+// Python pickle, Ruby Marshal, PHP, node-serialize, YAML) the Go
+// check iterates. The .lua port reads it once per Run and uses Name
+// to route between the per-format probe / match helpers.
+func DeserialFormatListLua() []DeserialFormatLua {
+	out := make([]DeserialFormatLua, 0, len(deserialFormatList))
+	for _, f := range deserialFormatList {
+		pats := make([]string, len(f.errorPats))
+		copy(pats, f.errorPats)
+		out = append(out, DeserialFormatLua{
+			Name:         f.name,
+			Label:        f.label,
+			ProbePayload: f.probePayload,
+			ErrorPats:    pats,
+		})
+	}
+	return out
+}
+
+// DeserialClassifyValueLua returns the (name, label) of the first
+// format whose fingerprint matches s, or ("", "") when no format
+// matched. Wraps the Go check's classifyDeserial so the passive arm
+// of the .lua port runs the same detection over cookie / query /
+// form-input values.
+func DeserialClassifyValueLua(s string) (string, string) {
+	fp := classifyDeserial(s)
+	if fp == nil {
+		return "", ""
+	}
+	return fp.name, fp.label
+}
+
+// DeserialMatchAllLua returns the union of error patterns across
+// every known format that appear in body. The .lua port uses this to
+// build the baseline pattern set so per-format probes can subtract
+// what was already present.
+func DeserialMatchAllLua(body []byte) []string {
+	return matchDeserialAll(body)
+}
+
+// DeserialMatchFormatLua returns the subset of formatName's error
+// patterns present in body. formatName is the name slug exposed by
+// DeserialFormatListLua (e.g. "java", "dotnet").
+func DeserialMatchFormatLua(body []byte, formatName string) []string {
+	for _, f := range deserialFormatList {
+		if f.name == formatName {
+			return matchDeserialFormat(body, f)
+		}
+	}
+	return nil
+}
+
+// DeserialBodyMarkerLua returns the human-readable label of the first
+// deserialization fingerprint visible in body, or "" when none.
+func DeserialBodyMarkerLua(body []byte) string {
+	return bodyDeserialMarker(body)
+}
+
 // IsEventStreamContentType reports whether ct names a Server-Sent
 // Events stream. Parameters (charset, boundary) are stripped before
 // comparison so a perfectly labeled response is not skipped on a

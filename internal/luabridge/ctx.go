@@ -62,6 +62,7 @@ func buildCtxUserdata(L *lua.LState, env *runEnv) *lua.LTable {
 		t.RawSetString("json", helpers.json)
 		t.RawSetString("oauth", helpers.oauth)
 		t.RawSetString("openapi", helpers.openapi)
+		t.RawSetString("deserial", helpers.deserial)
 	}
 	t.RawSetString("oob", pushOOBServer(L, env))
 
