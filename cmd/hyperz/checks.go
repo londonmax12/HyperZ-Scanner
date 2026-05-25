@@ -30,6 +30,7 @@ func registry(pollute bool) []checks.Check {
 		checks.CookieAttributes{},
 		checks.CacheControlSensitive{},
 		checks.CSPWeak{},
+		checks.CSPBypass{},
 		checks.HSTSWeak{},
 		checks.CrossOriginIsolation{},
 		checks.FormAutocomplete{},
