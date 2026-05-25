@@ -85,6 +85,7 @@ type staticHelpers struct {
 	oracle   *lua.LTable
 	json     *lua.LTable
 	oauth    *lua.LTable
+	openapi  *lua.LTable
 }
 
 func storeStaticHelpers(L *lua.LState, h *staticHelpers) {

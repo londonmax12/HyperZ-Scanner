@@ -59,12 +59,23 @@ func (c *OpenAPIAudit) Name() string { return "openapi-audit" }
 func (c *OpenAPIAudit) Level() Level { return LevelPassive }
 
 // openAPIAuditCacheEntry memoizes the per-host probe result. A nil
-// findings slice represents a confirmed negative (well-known paths
-// 404, the body wasn't a recognizable spec, or the spec was clean);
-// a non-empty slice is re-emitted with the new page URL stamped on
-// Target / URL.
+// facts pointer represents a confirmed negative (well-known paths 404
+// or the body wasn't a recognizable spec); a populated facts is re-used
+// across every page on the host so the well-known endpoints are probed
+// at most once per scan.
 type openAPIAuditCacheEntry struct {
-	findings []Finding
+	facts *OpenAPIAuditFacts
+}
+
+// OpenAPIAuditFacts is the raw scan-facts shape the bridge returns to
+// the Lua port. The fields are the probe metadata (URL the spec was
+// served from, response status, raw body) the audit policy reads to
+// run the secret / example-auth / authless-op passes. The audit lives
+// in the .lua file; this struct is the algorithm input, not a finding.
+type OpenAPIAuditFacts struct {
+	ProbeURL string
+	Status   int
+	Body     []byte
 }
 
 // openAPISpecBodyCap bounds the spec body the check buffers. A real-
@@ -95,11 +106,29 @@ var openAPIWellKnownPaths = []string{
 }
 
 func (c *OpenAPIAudit) Run(ctx context.Context, client *httpclient.Client, sc *scope.Scope, p page.Page) ([]Finding, error) {
+	facts, err := c.DiscoverFacts(ctx, client, sc, p.URL)
+	if err != nil || facts == nil {
+		return nil, err
+	}
+	return restampFindings(c.auditDoc(facts), p.URL), nil
+}
+
+// DiscoverFacts returns the cached or freshly fetched OpenAPI spec
+// facts for the host implied by pageURL, or nil when no well-known
+// path served a recognisable spec. Per-host cache lifetime matches
+// this receiver's lifetime (one *OpenAPIAudit per scan registration).
+//
+// The Lua port reads these facts and composes the finding catalog
+// itself (title / severity / detail / CWE / OWASP / remediation /
+// dedupe key / evidence); the algorithm input (HTTP fetch + version
+// gate) stays in Go so per-host work happens at most once per scan
+// regardless of which implementation runs at scan time.
+func (c *OpenAPIAudit) DiscoverFacts(ctx context.Context, client *httpclient.Client, sc *scope.Scope, pageURL string) (*OpenAPIAuditFacts, error) {
 	c.once.Do(func() {
 		c.cache = map[string]openAPIAuditCacheEntry{}
 	})
 
-	u, err := url.Parse(p.URL)
+	u, err := url.Parse(pageURL)
 	if err != nil || u.Scheme == "" || u.Host == "" {
 		return nil, nil
 	}
@@ -112,22 +141,22 @@ func (c *OpenAPIAudit) Run(ctx context.Context, client *httpclient.Client, sc *s
 	entry, cached := c.cache[hostKey]
 	c.mu.Unlock()
 	if cached {
-		return restampFindings(entry.findings, p.URL), nil
+		return entry.facts, nil
 	}
 
-	findings := c.probeHost(ctx, client, sc, u)
+	facts := c.probeHost(ctx, client, sc, u)
 	c.mu.Lock()
-	c.cache[hostKey] = openAPIAuditCacheEntry{findings: findings}
+	c.cache[hostKey] = openAPIAuditCacheEntry{facts: facts}
 	c.mu.Unlock()
-	return restampFindings(findings, p.URL), nil
+	return facts, nil
 }
 
 // probeHost walks the well-known spec paths on u's host and returns
-// the findings produced by the first path whose body parsed as a
-// spec. Subsequent paths are not probed once a spec is found - mirror
-// copies of the same document at multiple conventional URLs are
-// expected and shouldn't produce duplicate findings.
-func (c *OpenAPIAudit) probeHost(ctx context.Context, client *httpclient.Client, sc *scope.Scope, u *url.URL) []Finding {
+// the facts for the first path whose body looks like a spec. Subsequent
+// paths are not probed once a spec is found - mirror copies of the
+// same document at multiple conventional URLs are expected and
+// shouldn't produce duplicate findings.
+func (c *OpenAPIAudit) probeHost(ctx context.Context, client *httpclient.Client, sc *scope.Scope, u *url.URL) *OpenAPIAuditFacts {
 	base := u.Scheme + "://" + u.Host
 	for _, path := range openAPIWellKnownPaths {
 		probeURL := base + path
@@ -145,7 +174,11 @@ func (c *OpenAPIAudit) probeHost(ctx context.Context, client *httpclient.Client,
 		if !looksLikeOpenAPIDoc(body) {
 			continue
 		}
-		return c.auditDoc(probeURL, status, body)
+		return &OpenAPIAuditFacts{
+			ProbeURL: probeURL,
+			Status:   status,
+			Body:     body,
+		}
 	}
 	return nil
 }
@@ -197,20 +230,20 @@ func looksLikeOpenAPIDoc(body []byte) bool {
 // boolean values do not match.
 var openAPIVersionRE = regexp.MustCompile(`(?:"?openapi"?|"?swagger"?)\s*:\s*["']?\d`)
 
-// auditDoc runs every audit pass over body and returns the union of
-// their findings. Each pass is independent so a body that fails JSON
-// parsing (e.g. served as YAML) still gets the regex-based secret
-// and example-token passes.
-func (c *OpenAPIAudit) auditDoc(probeURL string, status int, body []byte) []Finding {
+// auditDoc runs every audit pass over the facts and returns the union
+// of their findings. Each pass is independent so a body that fails
+// JSON parsing (e.g. served as YAML) still gets the regex-based
+// secret and example-token passes.
+func (c *OpenAPIAudit) auditDoc(f *OpenAPIAuditFacts) []Finding {
 	var out []Finding
-	if f := c.findingEmbeddedCredentials(probeURL, status, body); f != nil {
-		out = append(out, *f)
+	if fnd := c.findingEmbeddedCredentials(f); fnd != nil {
+		out = append(out, *fnd)
 	}
-	if f := c.findingExampleAuthTokens(probeURL, status, body); f != nil {
-		out = append(out, *f)
+	if fnd := c.findingExampleAuthTokens(f); fnd != nil {
+		out = append(out, *fnd)
 	}
-	if f := c.findingAuthlessOperations(probeURL, status, body); f != nil {
-		out = append(out, *f)
+	if fnd := c.findingAuthlessOperations(f); fnd != nil {
+		out = append(out, *fnd)
 	}
 	return out
 }
@@ -221,7 +254,10 @@ func (c *OpenAPIAudit) auditDoc(probeURL string, status int, body []byte) []Find
 // in the shared catalogue therefore applies here too. Hits are
 // deduplicated by (pattern.id, redacted) so the same key referenced
 // from several example blocks collapses to one detail entry.
-func (c *OpenAPIAudit) findingEmbeddedCredentials(probeURL string, status int, body []byte) *Finding {
+func (c *OpenAPIAudit) findingEmbeddedCredentials(f *OpenAPIAuditFacts) *Finding {
+	probeURL := f.ProbeURL
+	status := f.Status
+	body := f.Body
 	type key struct{ id, raw string }
 	seen := map[key]*secretHit{}
 
@@ -346,7 +382,10 @@ var openAPIExampleContextRe = regexp.MustCompile(`(?i)\b(examples?|default|value
 // still useful: a reader sees both the credential-leak verdict and
 // the documentation-exposure verdict side by side. Basic-auth blobs
 // not matched by any vendor pattern surface here exclusively.
-func (c *OpenAPIAudit) findingExampleAuthTokens(probeURL string, status int, body []byte) *Finding {
+func (c *OpenAPIAudit) findingExampleAuthTokens(f *OpenAPIAuditFacts) *Finding {
+	probeURL := f.ProbeURL
+	status := f.Status
+	body := f.Body
 	type exampleHit struct {
 		scheme  string
 		value   string
@@ -428,7 +467,10 @@ func (c *OpenAPIAudit) findingExampleAuthTokens(probeURL string, status int, bod
 // and is left to the operator. JSON-only because the YAML path in
 // the crawler is deliberately URL-only; parsing YAML auth structure
 // would require pulling in a real YAML library for one finding.
-func (c *OpenAPIAudit) findingAuthlessOperations(probeURL string, status int, body []byte) *Finding {
+func (c *OpenAPIAudit) findingAuthlessOperations(f *OpenAPIAuditFacts) *Finding {
+	probeURL := f.ProbeURL
+	status := f.Status
+	body := f.Body
 	trimmed := bytes.TrimSpace(body)
 	if len(trimmed) == 0 || trimmed[0] != '{' {
 		return nil

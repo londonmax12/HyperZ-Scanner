@@ -1108,3 +1108,41 @@ func SSRFGenericParamNamesLua() []string {
 func SSRFLooksProxyish(path string) bool { return looksProxyish(path) }
 
 func SSRFMatchesError(body []byte) string { return ssrfMatchesError(body) }
+
+// OpenAPIExampleAuthMatchLua is one Bearer/Basic value found in an
+// example / default / value block of an OpenAPI spec body. The scheme
+// is normalized to title-case ("Bearer" / "Basic"); raw is the value
+// portion as it appears in the source; redacted is the safe-to-render
+// version composed with the shared RedactSecret helper.
+type OpenAPIExampleAuthMatchLua struct {
+	Scheme   string
+	Raw      string
+	Redacted string
+}
+
+// OpenAPIScanExampleAuthMatches walks body for `Bearer <token>` and
+// `Basic <base64>` shapes that sit next to an OpenAPI example /
+// default / value key, returning the matches in document order. The
+// regex + nearby-context filter live in Go because gopher-lua's
+// pattern library cannot express the lookbehind window; the Lua port
+// owns deduplication / sorting / severity composition.
+func OpenAPIScanExampleAuthMatches(body []byte) []OpenAPIExampleAuthMatchLua {
+	matches := openAPIExampleHeaderRe.FindAllSubmatchIndex(body, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	out := make([]OpenAPIExampleAuthMatchLua, 0, len(matches))
+	for _, m := range matches {
+		if !hasNearbyContext(body, m[0], m[1], openAPIExampleContextRe) {
+			continue
+		}
+		scheme := titleAuthScheme(string(body[m[2]:m[3]]))
+		raw := string(body[m[4]:m[5]])
+		out = append(out, OpenAPIExampleAuthMatchLua{
+			Scheme:   scheme,
+			Raw:      raw,
+			Redacted: redactSecret(raw),
+		})
+	}
+	return out
+}
