@@ -2,6 +2,7 @@ package checks
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -608,6 +609,7 @@ func TestLooksRedirectish(t *testing.T) {
 }
 
 func TestOpenRedirectMatchesHelper(t *testing.T) {
+	bs := "\x5c" // single backslash; raw-string handling differs across editors.
 	cases := []struct {
 		name string
 		loc  string
@@ -621,11 +623,293 @@ func TestOpenRedirectMatchesHelper(t *testing.T) {
 		{"empty", "", false},
 		{"whitespace", "   ", false},
 		{"uppercase host echo", "HTTPS://EVIL.EXAMPLE/x", true},
+
+		// Browser-quirk bypass forms: each form is one strict-parser thinks
+		// "no host" but a browser navigates cross-origin to the canary.
+		{"backslash double prefix", bs + bs + "evil.example/x", true},
+		{"backslash quad prefix", bs + bs + bs + bs + "evil.example/x", true},
+		{"mixed slash backslash prefix", bs + "/" + bs + "/evil.example/x", true},
+		{"triple slash prefix", "///evil.example/x", true},
+		{"quad slash prefix", "////evil.example/x", true},
+		{"backslash absolute scheme", "https:" + bs + bs + "evil.example/x", true},
+		{"slash backslash mix authority", "/" + bs + "/evil.example/x", true},
+		{"userinfo canary actual host target", "//evil.example@target.com/x", false},
+		{"userinfo target actual host canary", "//target.com@evil.example/x", true},
+		{"userinfo target actual host canary absolute", "https://target.com@evil.example/x", true},
+
+		// A leading single forward slash with the canary name in the path is
+		// same-origin and must NOT match - guards against a sloppy normalizer
+		// that lifts host out of a path segment.
+		{"path containing canary literal", "/evil.example/x", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := openRedirectMatches(tc.loc, openRedirectCanary); got != tc.want {
 				t.Errorf("openRedirectMatches(%q) = %v, want %v", tc.loc, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestOpenRedirectDetectsBackslashBypass exercises the full probe path with a
+// server that reflects "\\evil.example/..." in its Location header. Strict URL
+// parsers (including Go's stdlib) park the value in path, but Chrome and Edge
+// treat backslashes as forward slashes and navigate cross-origin. The
+// normalize-and-reparse fallback in locationTargetsHost is what catches it.
+func TestOpenRedirectDetectsBackslashBypass(t *testing.T) {
+	bs := "\x5c"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next := r.URL.Query().Get("next")
+		if next == "" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		// Take everything after "https://" and prepend "\\" to produce
+		// the backslash bypass form.
+		host := strings.TrimPrefix(next, "https://")
+		w.Header().Set("Location", bs+bs+host)
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer srv.Close()
+
+	findings, err := OpenRedirect{}.Run(context.Background(), newTestClient(t), nil, page.FromURL(srv.URL+"/login"))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding for backslash bypass, got %d: %+v", len(findings), findings)
+	}
+}
+
+// TestOpenRedirectDetectsTripleSlashBypass exercises the "///evil.example"
+// reflection - browsers collapse leading slashes to two when parsing Location.
+func TestOpenRedirectDetectsTripleSlashBypass(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next := r.URL.Query().Get("next")
+		if next == "" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		host := strings.TrimPrefix(next, "https://")
+		w.Header().Set("Location", "///"+host)
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer srv.Close()
+
+	findings, err := OpenRedirect{}.Run(context.Background(), newTestClient(t), nil, page.FromURL(srv.URL+"/login"))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding for triple-slash bypass, got %d: %+v", len(findings), findings)
+	}
+}
+
+// TestOpenRedirectDetectsUserinfoBypass: an app that allowlists "target.com"
+// can be tricked when an attacker supplies "//target.com@evil.example" - the
+// app's host check sees "target.com" first, but a browser parses the
+// authority as userinfo=target.com, host=evil.example. The probe needs to
+// flag this as a bug because browsers navigate to evil.example.
+func TestOpenRedirectDetectsUserinfoBypass(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next := r.URL.Query().Get("next")
+		if next == "" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		// Hardcoded "target.com" as the allegedly-allowed host. The
+		// canary's actual host becomes the post-@ authority.
+		host := strings.TrimPrefix(next, "https://")
+		w.Header().Set("Location", "//target.com@"+host)
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer srv.Close()
+
+	findings, err := OpenRedirect{}.Run(context.Background(), newTestClient(t), nil, page.FromURL(srv.URL+"/login"))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding for userinfo-trick bypass, got %d: %+v", len(findings), findings)
+	}
+}
+
+// TestOpenRedirectIgnoresUserinfoOnlyTrick: the symmetric "//evil.example@target"
+// shape looks like the canary host at a glance, but browsers (correctly) put
+// evil.example into userinfo and navigate to target. We must NOT false-positive
+// here - the victim stays on the trusted host. The server emits this Location
+// regardless of the input so the bare authority (no path before @) is what
+// the parser sees.
+func TestOpenRedirectIgnoresUserinfoOnlyTrick(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("next") == "" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		// Canary host as userinfo, target.invalid as actual host. Browsers
+		// (and our matcher) must navigate to target.invalid.
+		w.Header().Set("Location", "//evil.example@target.invalid/x")
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer srv.Close()
+
+	findings, err := OpenRedirect{}.Run(context.Background(), newTestClient(t), nil, page.FromURL(srv.URL+"/login"))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("expected 0 findings - userinfo-only trick is not exploitable, got %d: %+v", len(findings), findings)
+	}
+}
+
+// TestOpenRedirectDetectsJSLocationAssign exercises the body-driven sink path:
+// 200 OK with inline JS calling location.assign(canary). Many SPA login pages
+// bounce this way without ever issuing a 3xx.
+func TestOpenRedirectDetectsJSLocationAssign(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next := r.URL.Query().Get("next")
+		if next == "" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, `<!doctype html><html><head><script>location.assign("%s");</script></head><body>bouncing</body></html>`, next)
+	}))
+	defer srv.Close()
+
+	findings, err := OpenRedirect{}.Run(context.Background(), newTestClient(t), nil, page.FromURL(srv.URL+"/login"))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding from location.assign sink, got %d: %+v", len(findings), findings)
+	}
+	if !strings.Contains(findings[0].Detail, "JavaScript navigation sink") {
+		t.Errorf("Detail should name the JS sink kind: %q", findings[0].Detail)
+	}
+}
+
+// TestOpenRedirectDetectsJSLocationHref covers the assignment form of the JS
+// sink (location.href = "...") which is the most common SPA bounce idiom.
+func TestOpenRedirectDetectsJSLocationHref(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next := r.URL.Query().Get("next")
+		if next == "" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, `<script>window.location.href = '%s';</script>`, next)
+	}))
+	defer srv.Close()
+
+	findings, err := OpenRedirect{}.Run(context.Background(), newTestClient(t), nil, page.FromURL(srv.URL+"/login"))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding from location.href sink, got %d: %+v", len(findings), findings)
+	}
+}
+
+// TestOpenRedirectDetectsJSLocationReplace covers location.replace() which is
+// often used to avoid pushing a history entry on the bounce.
+func TestOpenRedirectDetectsJSLocationReplace(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next := r.URL.Query().Get("next")
+		if next == "" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, `<script>top.location.replace("%s")</script>`, next)
+	}))
+	defer srv.Close()
+
+	findings, err := OpenRedirect{}.Run(context.Background(), newTestClient(t), nil, page.FromURL(srv.URL+"/login"))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding from location.replace sink, got %d: %+v", len(findings), findings)
+	}
+}
+
+// TestOpenRedirectDetectsMetaRefresh covers the fallback bounce channel for
+// JS-disabled clients: <meta http-equiv="refresh" content="0;url=...">.
+func TestOpenRedirectDetectsMetaRefresh(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next := r.URL.Query().Get("next")
+		if next == "" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, `<meta http-equiv="refresh" content="0;url=%s">`, next)
+	}))
+	defer srv.Close()
+
+	findings, err := OpenRedirect{}.Run(context.Background(), newTestClient(t), nil, page.FromURL(srv.URL+"/login"))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding from meta refresh sink, got %d: %+v", len(findings), findings)
+	}
+	if !strings.Contains(findings[0].Detail, "meta refresh") {
+		t.Errorf("Detail should name the meta refresh sink: %q", findings[0].Detail)
+	}
+}
+
+// TestOpenRedirectIgnoresCanaryHostMentionOutsideJSSink: the canary host
+// appears in the body but NOT as a navigation target (just as text inside a
+// <p> tag). Must not false-positive - reflection alone without a sink is not
+// an open redirect.
+func TestOpenRedirectIgnoresCanaryHostMentionOutsideJSSink(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next := r.URL.Query().Get("next")
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusOK)
+		// Echo into prose with HTML-encoding so it's clearly not a sink.
+		fmt.Fprintf(w, "<p>You asked to go to: %s</p>", next)
+	}))
+	defer srv.Close()
+
+	findings, err := OpenRedirect{}.Run(context.Background(), newTestClient(t), nil, page.FromURL(srv.URL+"/login"))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("expected 0 findings - canary echoed only as prose, got %d: %+v", len(findings), findings)
+	}
+}
+
+// TestNormalizeBypassyRedirect pins the normalizer rules directly so the
+// matcher table tests stay focused on the host-comparison behavior.
+func TestNormalizeBypassyRedirect(t *testing.T) {
+	bs := "\x5c"
+	cases := []struct {
+		in, want string
+	}{
+		{bs + bs + "evil.example/x", "//evil.example/x"},
+		{bs + "/" + bs + "/evil.example/x", "//evil.example/x"},
+		{"///evil.example/x", "//evil.example/x"},
+		{"////evil.example/x", "//evil.example/x"},
+		{"https:" + bs + bs + "evil.example/x", "https://evil.example/x"},
+		{"https:////evil.example/x", "https://evil.example/x"},
+		{"//evil.example/x", "//evil.example/x"},                       // no-op
+		{"https://evil.example/x", "https://evil.example/x"},           // no-op
+		{"/login?next=foo", "/login?next=foo"},                         // no-op
+		{"//target.com@evil.example/x", "//target.com@evil.example/x"}, // no-op (already parseable)
+	}
+	for _, tc := range cases {
+		t.Run(tc.in, func(t *testing.T) {
+			if got := normalizeBypassyRedirect(tc.in); got != tc.want {
+				t.Errorf("normalizeBypassyRedirect(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
 	}
