@@ -69,24 +69,25 @@ const staticHelpersKey = "__hyperz_static"
 // every Run since gopher-lua tables are not subject to GC pressure
 // during a single VM's lifetime.
 type staticHelpers struct {
-	severity *lua.LTable
-	scopes   *lua.LTable
-	levels   *lua.LTable
-	locs     *lua.LTable
-	evidence *lua.LTable
-	dedupe   *lua.LTable
-	url      *lua.LTable
-	body     *lua.LTable
-	sinks    *lua.LTable
-	html     *lua.LTable
-	cookies  *lua.LTable
-	takeover *lua.LTable
-	payloads *lua.LTable
-	oracle   *lua.LTable
-	json     *lua.LTable
-	oauth    *lua.LTable
-	openapi  *lua.LTable
-	deserial *lua.LTable
+	severity  *lua.LTable
+	scopes    *lua.LTable
+	levels    *lua.LTable
+	locs      *lua.LTable
+	evidence  *lua.LTable
+	dedupe    *lua.LTable
+	url       *lua.LTable
+	body      *lua.LTable
+	sinks     *lua.LTable
+	html      *lua.LTable
+	cookies   *lua.LTable
+	takeover  *lua.LTable
+	payloads  *lua.LTable
+	oracle    *lua.LTable
+	json      *lua.LTable
+	oauth     *lua.LTable
+	openapi   *lua.LTable
+	deserial  *lua.LTable
+	discovery *lua.LTable
 }
 
 func storeStaticHelpers(L *lua.LState, h *staticHelpers) {
