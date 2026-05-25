@@ -77,6 +77,8 @@ type staticHelpers struct {
 	url      *lua.LTable
 	body     *lua.LTable
 	sinks    *lua.LTable
+	html     *lua.LTable
+	cookies  *lua.LTable
 }
 
 func storeStaticHelpers(L *lua.LState, h *staticHelpers) {

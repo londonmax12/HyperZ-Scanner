@@ -53,6 +53,12 @@ local CANONICAL_PARAMS = {
   "return_url", "target", "url",
 }
 
+-- Forward declaration: probe is defined below check.run so the run
+-- function reads top-down, but Lua needs the local in scope at the
+-- call site - this captures the upvalue the `function probe(...)`
+-- assignment below fills in.
+local probe
+
 function check.run(ctx)
   local u, err = ctx.url.parse(ctx.page.url)
   if err or not u or u.scheme == "" or u.host == "" then

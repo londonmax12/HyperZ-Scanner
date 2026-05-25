@@ -54,6 +54,8 @@ func buildCtxUserdata(L *lua.LState, env *runEnv) *lua.LTable {
 		t.RawSetString("url", helpers.url)
 		t.RawSetString("body", helpers.body)
 		t.RawSetString("sinks", helpers.sinks)
+		t.RawSetString("html", helpers.html)
+		t.RawSetString("cookies", helpers.cookies)
 	}
 
 	t.RawSetString("ensure_response", L.NewFunction(ctxEnsureResponse))

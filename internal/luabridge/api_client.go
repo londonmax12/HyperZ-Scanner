@@ -114,6 +114,7 @@ func ensureResponseMT(L *lua.LState) *lua.LTable {
 	methods.RawSetString("truncated", L.NewFunction(responseTruncated))
 	methods.RawSetString("read_body_capped", L.NewFunction(responseReadBodyCapped))
 	methods.RawSetString("close", L.NewFunction(responseClose))
+	methods.RawSetString("request_url", L.NewFunction(responseRequestURL))
 	mt.RawSetString("__index", methods)
 	L.G.Registry.RawSetString(mtResp, mt)
 	return mt
@@ -190,6 +191,22 @@ func responseReadBodyCapped(L *lua.LState) int {
 // call resources; exposing it to Lua is for the rare check that
 // wants to short-circuit closure after extracting only the status
 // (e.g. a probe that ignores body on success).
+// responseRequestURL returns the URL of the request that produced
+// the response, AFTER redirects. For a chain that hopped from
+// https://a/script.js to a CDN at https://b/script.js, the value is
+// the latter. Source-map-style probes use this to re-check scope
+// after a follow-redirect probe so a chain that lands off-scope is
+// treated as a non-finding rather than a confirmed leak.
+func responseRequestURL(L *lua.LState) int {
+	r := responseFromArg(L, 1)
+	if r.resp == nil || r.resp.Request == nil || r.resp.Request.URL == nil {
+		L.Push(lua.LString(""))
+		return 1
+	}
+	L.Push(lua.LString(r.resp.Request.URL.String()))
+	return 1
+}
+
 func responseClose(L *lua.LState) int {
 	r := responseFromArg(L, 1)
 	if !r.closed && r.resp != nil && r.resp.Body != nil {

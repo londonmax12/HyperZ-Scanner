@@ -1,6 +1,8 @@
 package luabridge
 
 import (
+	"net/http"
+
 	lua "github.com/yuin/gopher-lua"
 
 	"github.com/londonmax12/hyperz/internal/checks"
@@ -16,8 +18,38 @@ import (
 //
 //	ctx.body.find_redirect_sink(body, canary_host)
 //	  -> (match_string, kind_string) or ("", "") when nothing found.
-//	     kind is the human-readable label for the report
-//	     ("a JavaScript navigation sink", "a meta refresh tag").
+//
+//	ctx.body.is_html_ct(content_type) / ctx.body.is_scannable_ct(ct)
+//	  -> bool. Mirror the Go-side content-type filters every passive
+//	     check gates on, so a Lua port and the Go original agree on
+//	     "this response is HTML" / "this response is worth scanning".
+//
+//	ctx.body.find_secrets(body)
+//	  -> array of { id, label, severity, raw, redacted, count }.
+//	     Runs the full secret-pattern catalogue on the bytes and
+//	     returns the already-sorted (severity desc, id, redacted)
+//	     hit list. Lua callers consume it directly and only own the
+//	     surrounding finding-shape orchestration.
+//
+//	ctx.body.redact_secret(raw)
+//	  -> string. Identical output to the Go check's redactSecret;
+//	     exposed separately for ports that need to redact a value
+//	     that did not come from find_secrets (rare).
+//
+//	ctx.body.parse_hsts(value)
+//	  -> { directives = { name = value, ... },
+//	       errors    = [{ id = ..., detail = ... }, ...] }
+//	     Wraps the HSTS-weak directive parser so the port iterates
+//	     over the same parser output the Go check does.
+//
+//	ctx.body.source_map_kind(content_type)
+//	  -> (kind_string, ok_bool) -> ("js"|"css"|"", false|true).
+//
+//	ctx.body.find_source_map_ref(headers, body, kind)
+//	  -> string (the sourceMappingURL value the response advertises).
+//
+//	ctx.body.looks_like_source_map(body)
+//	  -> bool. Anchors on the "version" + "sources"/"mappings" triple.
 //
 // Additional body scanners (XSS reflection, SQLi error fingerprints,
 // SSTI markers) are added here as their owning checks are ported to
@@ -26,6 +58,14 @@ import (
 func buildBodyTable(L *lua.LState) *lua.LTable {
 	t := L.NewTable()
 	t.RawSetString("find_redirect_sink", L.NewFunction(bodyFindRedirectSink))
+	t.RawSetString("is_html_ct", L.NewFunction(bodyIsHTMLCT))
+	t.RawSetString("is_scannable_ct", L.NewFunction(bodyIsScannableCT))
+	t.RawSetString("find_secrets", L.NewFunction(bodyFindSecrets))
+	t.RawSetString("redact_secret", L.NewFunction(bodyRedactSecret))
+	t.RawSetString("parse_hsts", L.NewFunction(bodyParseHSTS))
+	t.RawSetString("source_map_kind", L.NewFunction(bodySourceMapKind))
+	t.RawSetString("find_source_map_ref", L.NewFunction(bodyFindSourceMapRef))
+	t.RawSetString("looks_like_source_map", L.NewFunction(bodyLooksLikeSourceMap))
 	return t
 }
 
@@ -41,4 +81,92 @@ func bodyFindRedirectSink(L *lua.LState) int {
 	L.Push(lua.LString(target))
 	L.Push(lua.LString(kind))
 	return 2
+}
+
+func bodyIsHTMLCT(L *lua.LState) int {
+	L.Push(lua.LBool(checks.IsHTMLContentType(requireString(L, 1))))
+	return 1
+}
+
+func bodyIsScannableCT(L *lua.LState) int {
+	L.Push(lua.LBool(checks.IsScannableContentType(requireString(L, 1))))
+	return 1
+}
+
+// bodyFindSecrets runs the secrets-in-body scanner and returns the
+// already-sorted hit list. The pre-redacted value is stamped on each
+// entry so the Lua port does not have to call redact_secret again.
+func bodyFindSecrets(L *lua.LState) int {
+	body := requireString(L, 1)
+	hits := checks.ScanSecretsInBody([]byte(body))
+	out := L.NewTable()
+	for i, h := range hits {
+		entry := L.NewTable()
+		entry.RawSetString("id", lua.LString(h.ID))
+		entry.RawSetString("label", lua.LString(h.Label))
+		entry.RawSetString("severity", lua.LString(string(h.Severity)))
+		entry.RawSetString("raw", lua.LString(h.Raw))
+		entry.RawSetString("redacted", lua.LString(checks.RedactSecret(h.Raw)))
+		entry.RawSetString("count", lua.LNumber(h.Count))
+		out.RawSetInt(i+1, entry)
+	}
+	L.Push(out)
+	return 1
+}
+
+func bodyRedactSecret(L *lua.LState) int {
+	L.Push(lua.LString(checks.RedactSecret(requireString(L, 1))))
+	return 1
+}
+
+// bodyParseHSTS returns { directives = { name = value }, errors = [...] }.
+// directives uses raw values (empty string for flag-only directives);
+// the structural-error array carries the spec-fatal duplicates the Go
+// parser surfaces separately.
+func bodyParseHSTS(L *lua.LState) int {
+	parsed := checks.ParseHSTSHeader(requireString(L, 1))
+	out := L.NewTable()
+	dirs := L.NewTable()
+	for k, v := range parsed.Directives {
+		dirs.RawSetString(k, lua.LString(v))
+	}
+	out.RawSetString("directives", dirs)
+	errs := L.NewTable()
+	for i, e := range parsed.Errors {
+		entry := L.NewTable()
+		entry.RawSetString("id", lua.LString(e.ID))
+		entry.RawSetString("detail", lua.LString(e.Detail))
+		errs.RawSetInt(i+1, entry)
+	}
+	out.RawSetString("errors", errs)
+	L.Push(out)
+	return 1
+}
+
+func bodySourceMapKind(L *lua.LState) int {
+	kind, ok := checks.SourceMapKind(requireString(L, 1))
+	L.Push(lua.LString(kind))
+	L.Push(lua.LBool(ok))
+	return 2
+}
+
+// bodyFindSourceMapRef accepts a headers userdata + body + kind and
+// returns the source-map reference the response advertises. The
+// header / body precedence rule lives in Go - this is a thin
+// forwarder, not a re-implementation.
+func bodyFindSourceMapRef(L *lua.LState) int {
+	hud, ok := L.CheckUserData(1).Value.(*headersUserData)
+	var h http.Header
+	if ok {
+		h = hud.h
+	}
+	body := requireString(L, 2)
+	kind := requireString(L, 3)
+	L.Push(lua.LString(checks.FindSourceMapReference(h, []byte(body), kind)))
+	return 1
+}
+
+func bodyLooksLikeSourceMap(L *lua.LState) int {
+	L.Push(lua.LBool(checks.LooksLikeSourceMap([]byte(requireString(L, 1)))))
+	return 1
 }
