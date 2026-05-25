@@ -7,6 +7,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/londonmax12/hyperz/internal/checks"
+	"github.com/londonmax12/hyperz/internal/checks_lua"
 )
 
 // registry lists every check that ships with hyperz. Add new checks here so
@@ -77,6 +78,47 @@ func registry(pollute bool) []checks.Check {
 		out = append(out, &checks.RequestSmuggling{})
 		out = append(out, &checks.JWTVulns{})
 		out = append(out, &checks.RaceCondition{})
+	}
+	return mergeLuaOverrides(out, checks_lua.All())
+}
+
+// mergeLuaOverrides folds the Lua-authored catalog into the Go
+// catalog, with Lua checks taking precedence on a name collision.
+// This is the incremental-migration policy: while a check exists in
+// both languages, the Lua port is the authoritative one at scan
+// time, but the Go original stays in the binary so its tests keep
+// the Lua port honest (the parity tests in internal/checks_lua run
+// both implementations side-by-side and assert identical findings).
+//
+// A name collision is detected by Name() equality. Order is
+// preserved across the rest of the list so `hyperz checks list`
+// stays predictable.
+func mergeLuaOverrides(base, overrides []checks.Check) []checks.Check {
+	if len(overrides) == 0 {
+		return base
+	}
+	byName := make(map[string]checks.Check, len(overrides))
+	for _, c := range overrides {
+		byName[c.Name()] = c
+	}
+	out := make([]checks.Check, 0, len(base)+len(overrides))
+	used := make(map[string]struct{}, len(overrides))
+	for _, c := range base {
+		if luaC, ok := byName[c.Name()]; ok {
+			out = append(out, luaC)
+			used[c.Name()] = struct{}{}
+			continue
+		}
+		out = append(out, c)
+	}
+	// Lua-only checks (no Go counterpart) append at the end so the
+	// existing Go-check order is undisturbed for operators reading
+	// the list.
+	for _, c := range overrides {
+		if _, replaced := used[c.Name()]; replaced {
+			continue
+		}
+		out = append(out, c)
 	}
 	return out
 }
