@@ -27,7 +27,30 @@ func buildURLTable(L *lua.LState) *lua.LTable {
 	t.RawSetString("location_targets_host", L.NewFunction(urlLocationTargetsHost))
 	t.RawSetString("looks_redirectish", L.NewFunction(urlLooksRedirectish))
 	t.RawSetString("is_redirect_status", L.NewFunction(urlIsRedirectStatus))
+	t.RawSetString("resolve", L.NewFunction(urlResolve))
 	return t
+}
+
+// urlResolve resolves ref against base via net/url.URL.ResolveReference
+// and returns the absolute URL string. Returns "" when either arg is
+// unparseable. Lua-authored body scanners need this to lift relative
+// URLs (e.g. EventSource('/stream')) up to absolute form before they
+// route through ctx.client.
+func urlResolve(L *lua.LState) int {
+	baseRaw := requireString(L, 1)
+	refRaw := requireString(L, 2)
+	base, err := url.Parse(baseRaw)
+	if err != nil {
+		L.Push(lua.LString(""))
+		return 1
+	}
+	ref, err := url.Parse(refRaw)
+	if err != nil {
+		L.Push(lua.LString(""))
+		return 1
+	}
+	L.Push(lua.LString(base.ResolveReference(ref).String()))
+	return 1
 }
 
 // urlParse implements url.parse(raw). Returns a table mirroring the
