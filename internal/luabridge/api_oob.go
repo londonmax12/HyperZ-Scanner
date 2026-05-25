@@ -44,6 +44,7 @@ func ensureOOBMT(L *lua.LState) *lua.LTable {
 	methods.RawSetString("register_asset", L.NewFunction(oobRegisterAsset))
 	methods.RawSetString("hits", L.NewFunction(oobHits))
 	methods.RawSetString("registrations", L.NewFunction(oobRegistrations))
+	methods.RawSetString("callback_host", L.NewFunction(oobCallbackHost))
 	mt.RawSetString("__index", methods)
 	L.G.Registry.RawSetString(mtOOB, mt)
 	return mt
@@ -55,6 +56,26 @@ func oobFromArg(L *lua.LState) *oobUserData {
 		L.ArgError(1, "expected oob userdata")
 	}
 	return ud
+}
+
+// oobCallbackHost returns the host:port targets see in canary URLs.
+// Used by the .lua xxe drain path to render the exfil-receiver URL
+// in finding evidence (the parameter-entity callback the parser
+// issued lands at http://callback-host/<receiver-token>). Returns ""
+// when no listener is attached.
+func oobCallbackHost(L *lua.LState) int {
+	o := oobFromArg(L)
+	if o.env == nil {
+		L.Push(lua.LString(""))
+		return 1
+	}
+	srv := checks.OOBFrom(o.env.ctx)
+	if srv == nil {
+		L.Push(lua.LString(""))
+		return 1
+	}
+	L.Push(lua.LString(srv.CallbackHost()))
+	return 1
 }
 
 // oobAttached reports whether the running scan has an OOB listener

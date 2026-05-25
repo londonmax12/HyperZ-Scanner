@@ -64,6 +64,7 @@ func buildCtxUserdata(L *lua.LState, env *runEnv) *lua.LTable {
 		t.RawSetString("openapi", helpers.openapi)
 		t.RawSetString("deserial", helpers.deserial)
 		t.RawSetString("discovery", helpers.discovery)
+		t.RawSetString("xxe", helpers.xxe)
 	}
 	t.RawSetString("oob", pushOOBServer(L, env))
 
