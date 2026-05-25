@@ -1080,3 +1080,31 @@ func SubdomainTakeoverLookupHostForTest() func(ctx context.Context, host string)
 func SetSubdomainTakeoverLookupHostForTest(fn func(ctx context.Context, host string) ([]string, error)) {
 	subdomainTakeoverLookupHost = fn
 }
+
+// SSRFCanaryLua / SSRFBodyCapLua / SSRFSpecificParamNamesLua /
+// SSRFGenericParamNamesLua / SSRFLooksProxyish / SSRFMatchesError are
+// the algorithm inputs and pattern matcher the Lua port of the SSRF
+// check reads. The canary URL, body cap, parameter-name catalogues
+// (specific vs generic), proxy-ish path keywords, and error-signature
+// table all stay in Go so a future tightening lands once; the rule's
+// finding catalog (title / severity / detail / dedupe key) is composed
+// in ssrf.lua.
+func SSRFCanaryLua() string { return ssrfCanary }
+
+func SSRFBodyCapLua() int { return ssrfBodyCap }
+
+func SSRFSpecificParamNamesLua() []string {
+	out := make([]string, len(ssrfSpecificParamNames))
+	copy(out, ssrfSpecificParamNames)
+	return out
+}
+
+func SSRFGenericParamNamesLua() []string {
+	out := make([]string, len(ssrfGenericParamNames))
+	copy(out, ssrfGenericParamNames)
+	return out
+}
+
+func SSRFLooksProxyish(path string) bool { return looksProxyish(path) }
+
+func SSRFMatchesError(body []byte) string { return ssrfMatchesError(body) }

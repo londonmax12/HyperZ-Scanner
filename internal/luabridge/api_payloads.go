@@ -80,8 +80,47 @@ func buildPayloadsTable(L *lua.LState) *lua.LTable {
 	t.RawSetString("ssti_header_sinks", L.NewFunction(payloadsSSTIHeaderSinks))
 	t.RawSetString("loc_descriptor", L.NewFunction(payloadsLocDescriptor))
 
+	t.RawSetString("ssrf_canary", L.NewFunction(payloadsSSRFCanary))
+	t.RawSetString("ssrf_body_cap", L.NewFunction(payloadsSSRFBodyCap))
+	t.RawSetString("ssrf_specific_params", L.NewFunction(payloadsSSRFSpecificParams))
+	t.RawSetString("ssrf_generic_params", L.NewFunction(payloadsSSRFGenericParams))
+	t.RawSetString("ssrf_looks_proxyish", L.NewFunction(payloadsSSRFLooksProxyish))
+
 	t.RawSetString("render", L.NewFunction(payloadsRender))
 	return t
+}
+
+func payloadsSSRFCanary(L *lua.LState) int {
+	L.Push(lua.LString(checks.SSRFCanaryLua()))
+	return 1
+}
+
+func payloadsSSRFBodyCap(L *lua.LState) int {
+	L.Push(lua.LNumber(checks.SSRFBodyCapLua()))
+	return 1
+}
+
+func payloadsSSRFSpecificParams(L *lua.LState) int {
+	out := L.NewTable()
+	for i, name := range checks.SSRFSpecificParamNamesLua() {
+		out.RawSetInt(i+1, lua.LString(name))
+	}
+	L.Push(out)
+	return 1
+}
+
+func payloadsSSRFGenericParams(L *lua.LState) int {
+	out := L.NewTable()
+	for i, name := range checks.SSRFGenericParamNamesLua() {
+		out.RawSetInt(i+1, lua.LString(name))
+	}
+	L.Push(out)
+	return 1
+}
+
+func payloadsSSRFLooksProxyish(L *lua.LState) int {
+	L.Push(lua.LBool(checks.SSRFLooksProxyish(requireString(L, 1))))
+	return 1
 }
 
 func payloadsCmdInjectionFiller(L *lua.LState) int {

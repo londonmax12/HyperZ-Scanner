@@ -95,7 +95,17 @@ func buildBodyTable(L *lua.LState) *lua.LTable {
 	t.RawSetString("sqli_time_margin", L.NewFunction(bodySQLiTimeMargin))
 	t.RawSetString("cmd_injection_sleep_seconds", L.NewFunction(bodyCmdInjectionSleepSeconds))
 	t.RawSetString("cmd_injection_margin", L.NewFunction(bodyCmdInjectionMargin))
+	t.RawSetString("ssrf_matches_error", L.NewFunction(bodySSRFMatchesError))
 	return t
+}
+
+// bodySSRFMatchesError returns the first SSRF error-signature pattern
+// that appears in body, or "" when none match. Case-insensitive. Used
+// by the ssrf Lua port to discriminate "the server fetched the canary
+// and the library leaked the error" from a clean response.
+func bodySSRFMatchesError(L *lua.LState) int {
+	L.Push(lua.LString(checks.SSRFMatchesError([]byte(requireString(L, 1)))))
+	return 1
 }
 
 // bodySQLiTimeSleepSeconds / bodySQLiTimeMargin /
