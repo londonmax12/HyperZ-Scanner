@@ -52,6 +52,7 @@ func registry(pollute bool) []checks.Check {
 		checks.SQLiBoolean{},
 		checks.SQLiTime{},
 		checks.NoSQLi{},
+		checks.LDAPi{},
 		checks.PathTraversal{},
 		checks.CmdInjection{},
 		checks.CmdInjectionBlind{},
