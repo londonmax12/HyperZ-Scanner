@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"time"
 
 	"golang.org/x/net/html"
 )
@@ -502,10 +503,557 @@ type SQLiErrorPayload struct {
 }
 
 func SQLiErrorPayloads() []SQLiErrorPayload {
-	src := PayloadsFor(PayloadSQLiError)
+	return payloadsAsLuaShape(PayloadSQLiError)
+}
+
+// payloadsAsLuaShape returns PayloadsFor(class) re-shaped into the
+// {Name, Template} pair the bridge marshals into Lua tables. Every
+// caller wants the same projection (name + template, drop the class
+// tag the Go side already conditioned on), so centralising it keeps
+// the per-class helpers below one-liners and avoids per-call slice
+// shape drift between the seven payload classes.
+func payloadsAsLuaShape(class PayloadClass) []SQLiErrorPayload {
+	src := PayloadsFor(class)
 	out := make([]SQLiErrorPayload, 0, len(src))
 	for _, p := range src {
 		out = append(out, SQLiErrorPayload{Name: p.Name, Template: p.Template})
+	}
+	return out
+}
+
+// TraversalPayloadsLua / SQLiTimePayloadsLua / CmdInjectPayloadsLua /
+// CmdInjectBlindPayloadsLua / XSSPayloadsLua mirror SQLiErrorPayloads
+// for the other PayloadClass values the Lua bridge surfaces. Each is
+// a one-liner so the Lua port iterates a stable list in the same order
+// the Go side already produces.
+func TraversalPayloadsLua() []SQLiErrorPayload      { return payloadsAsLuaShape(PayloadTraversal) }
+func SQLiTimePayloadsLua() []SQLiErrorPayload       { return payloadsAsLuaShape(PayloadSQLiTime) }
+func CmdInjectPayloadsLua() []SQLiErrorPayload      { return payloadsAsLuaShape(PayloadCmdInject) }
+func CmdInjectBlindPayloadsLua() []SQLiErrorPayload { return payloadsAsLuaShape(PayloadCmdInjectBlind) }
+func XSSPayloadsLua() []SQLiErrorPayload            { return payloadsAsLuaShape(PayloadXSS) }
+
+// SQLiBooleanPairsLua exposes the curated boolean-pair set the Lua
+// port iterates. Same projection as the underlying SQLiBooleanPairs;
+// re-exported with the Lua suffix so the bridge can read every payload
+// catalogue under a uniform name.
+type LuaBooleanPair struct {
+	Name  string
+	True  string
+	False string
+}
+
+func SQLiBooleanPairsLua() []LuaBooleanPair {
+	src := SQLiBooleanPairs()
+	out := make([]LuaBooleanPair, 0, len(src))
+	for _, p := range src {
+		out = append(out, LuaBooleanPair{Name: p.Name, True: p.True, False: p.False})
+	}
+	return out
+}
+
+// TraversalNewMarkers wraps the path-traversal check's marker-scan +
+// baseline-subtraction step. body and baseline are both raw response
+// bytes; the result is the TraversalMarkers entries present in body
+// that did not already appear in baseline. Mirrors the SQLiErrorNewMatches
+// shape used by the existing sqli-error Lua port.
+func TraversalNewMarkers(body, baseline []byte) []string {
+	return subtractPatterns(matchTraversalMarkers(body), matchTraversalMarkers(baseline))
+}
+
+// TraversalMarkerHits returns the un-subtracted marker hits in body.
+// Exposed as a separate accessor (in addition to TraversalNewMarkers)
+// so a Lua-side debug surface can show "this many markers were already
+// present in baseline" without re-running the scan twice.
+func TraversalMarkerHits(body []byte) []string { return matchTraversalMarkers(body) }
+
+// PathSinkCandidate forwards pathSinkCandidate. The Lua port gates the
+// sweep on the same heuristic the Go check uses so the request count
+// stays identical between the two implementations.
+func PathSinkCandidate(s Sink) bool { return pathSinkCandidate(s) }
+
+// LDAPErrorNewMatches / LDAPiBooleanPairsLua / LDAPiErrorPayloadsLua
+// expose the LDAPi check's private pattern + payload sets. The pattern
+// catalogue and the matcher live in Go; the Lua port owns the per-sink
+// orchestration only.
+func LDAPErrorNewMatches(body, baseline []byte) []string {
+	return subtractPatterns(matchLDAPErrors(body), matchLDAPErrors(baseline))
+}
+
+// LDAPiBooleanProbePair carries one LDAPi truthy/falsy probe pair.
+// FalsyTemplate carries the {{CANARY}} placeholder the Lua port
+// substitutes per probe (one fresh canary per pair) before the
+// suffix gets concatenated onto sink.Value.
+type LDAPiBooleanProbePair struct {
+	Name          string
+	Truthy        string
+	FalsyTemplate string
+}
+
+func LDAPiBooleanPairsLua() []LDAPiBooleanProbePair {
+	out := make([]LDAPiBooleanProbePair, 0, len(ldapiBooleanPairs))
+	for _, p := range ldapiBooleanPairs {
+		out = append(out, LDAPiBooleanProbePair{Name: p.Name, Truthy: p.Truthy, FalsyTemplate: p.FalsyTpl})
+	}
+	return out
+}
+
+// LDAPiCanaryPlaceholder exposes the placeholder string the Lua port
+// substitutes per probe. Lua-side authors call this rather than
+// hard-coding "{{CANARY}}" so a future change to the placeholder lands
+// once, in Go.
+func LDAPiCanaryPlaceholder() string { return ldapiCanaryPlaceholder }
+
+func LDAPiErrorPayloadsLua() []string {
+	out := make([]string, len(ldapiErrorPayloads))
+	copy(out, ldapiErrorPayloads)
+	return out
+}
+
+// LDAPiSinkProbable forwards (LDAPi).sinkProbable so the Lua port
+// drops the same Loc set the Go check skips (header / cookie).
+func LDAPiSinkProbable(loc string) bool { return (LDAPi{}).sinkProbable(Sink{Loc: Loc(loc)}) }
+
+// MongoErrorNewMatches / NoSQLiBooleanOpsLua / NoSQLiErrorPayloadsLua
+// expose the NoSQLi check's private pattern + operator + payload sets.
+func MongoErrorNewMatches(body, baseline []byte) []string {
+	return subtractPatterns(matchMongoErrors(body), matchMongoErrors(baseline))
+}
+
+// NoSQLiBooleanOperator carries one MongoDB operator the Lua port
+// iterates. KeySuffix is the wire form for query / form sinks
+// ("[$eq]", "[$in][0]"); the JSON-body variant is built by the Lua
+// bridge's nosqli_build_operator_request helper (which dispatches on
+// op_name to apply the right nested-object shape).
+type NoSQLiBooleanOperator struct {
+	Name      string
+	KeySuffix string
+}
+
+func NoSQLiBooleanOpsLua() []NoSQLiBooleanOperator {
+	out := make([]NoSQLiBooleanOperator, 0, len(nosqliBooleanOps))
+	for _, op := range nosqliBooleanOps {
+		out = append(out, NoSQLiBooleanOperator{Name: op.Name, KeySuffix: op.KeySuffix})
+	}
+	return out
+}
+
+func NoSQLiErrorPayloadsLua() []string {
+	out := make([]string, len(nosqliErrorPayloads))
+	copy(out, nosqliErrorPayloads)
+	return out
+}
+
+// NoSQLiSinkProbable forwards (NoSQLi).sinkProbable so the Lua port
+// gates on the same Loc set the Go check accepts (query / form / json).
+func NoSQLiSinkProbable(loc string) bool { return (NoSQLi{}).sinkProbable(Sink{Loc: Loc(loc)}) }
+
+// NoSQLiBuildOperatorRequest builds an *http.Request that applies the
+// named operator (op_name = "eq" / "in-array") to sink with opValue.
+// Wraps the package-private buildOperatorRequest so the Lua port can
+// produce the wire-shape rewrites (bracket key for query / form,
+// nested JSON for body) without re-implementing the per-loc shape rules.
+func NoSQLiBuildOperatorRequest(ctx context.Context, sink Sink, opName, opValue string) (*http.Request, error) {
+	var op *nosqliOp
+	for i := range nosqliBooleanOps {
+		if nosqliBooleanOps[i].Name == opName {
+			op = &nosqliBooleanOps[i]
+			break
+		}
+	}
+	if op == nil {
+		return nil, fmt.Errorf("nosqli: unknown operator %q", opName)
+	}
+	return (NoSQLi{}).buildOperatorRequest(ctx, sink, *op, opValue)
+}
+
+// CmdErrorFirstMatch returns the first cmd-error pattern that appears
+// in body, or "" when none does. Wraps the same case-insensitive scan
+// the Go check uses inline so the Lua port consumes the result without
+// re-shaping the catalogue.
+func CmdErrorFirstMatch(body []byte) string {
+	lower := strings.ToLower(string(body))
+	for _, sig := range CmdErrorPatterns() {
+		if strings.Contains(lower, sig) {
+			return sig
+		}
+	}
+	return ""
+}
+
+// SSTIErrorNewMatches / SSTIErrorPayloadsLua / SSTIConfirmProbeLua
+// expose the SSTI check's pattern catalogue, error-payload list, and
+// confirm-probe deriver.
+func SSTIErrorNewMatches(body, baseline []byte) []string {
+	return subtractPatterns(matchSSTIErrors(body), matchSSTIErrors(baseline))
+}
+
+func SSTIErrorPayloadsLua() []string {
+	out := make([]string, len(sstiErrorPayloads))
+	copy(out, sstiErrorPayloads)
+	return out
+}
+
+// SSTIConfirmProbeLua returns the (template, expected) pair derived
+// from the original probe by swapping the "7*7"/"49" operands for
+// "8*9"/"72". A genuine SSTI evaluates the second probe in the same
+// engine syntax; a passively-reflecting page cannot replay a fresh
+// expression. Mirrors SSTI.confirmProbe verbatim.
+func SSTIConfirmProbeLua(template string) (string, string) {
+	return strings.Replace(template, "7*7", "8*9", 1), "72"
+}
+
+// XSSPayloadsForContextsLua exposes payloadsForContexts so the Lua
+// reflected-xss port picks the same context-matched payload subset
+// (deduped, source-ordered) the Go check uses. Reflections arrive as
+// the context-string slice the bridge already exposes via FindReflections.
+func XSSPayloadsForContextsLua(contexts []string, level string) []SQLiErrorPayload {
+	parsedLevel, err := ParseLevel(level)
+	if err != nil {
+		parsedLevel = LevelDefault
+	}
+	refs := make([]Reflection, 0, len(contexts))
+	for _, name := range contexts {
+		refs = append(refs, Reflection{Context: contextFromString(name)})
+	}
+	picked := payloadsForContexts(refs, parsedLevel)
+	out := make([]SQLiErrorPayload, 0, len(picked))
+	for _, p := range picked {
+		out = append(out, SQLiErrorPayload{Name: p.Name, Template: p.Template})
+	}
+	return out
+}
+
+// XSSContextSummaryLua returns the comma-separated, dedup-ordered list
+// of context names from contexts. Mirrors contextSummary.
+func XSSContextSummaryLua(contexts []string) string {
+	refs := make([]Reflection, 0, len(contexts))
+	for _, name := range contexts {
+		refs = append(refs, Reflection{Context: contextFromString(name)})
+	}
+	return contextSummary(refs)
+}
+
+// contextFromString is the inverse of Context.String. Used by the Lua
+// bridge to round-trip context strings back into the typed enum so the
+// payload selector + summary functions get the same values FindReflections
+// produced.
+func contextFromString(name string) Context {
+	switch name {
+	case "header-value":
+		return CtxHeaderValue
+	case "html-text":
+		return CtxHTMLText
+	case "html-comment":
+		return CtxHTMLComment
+	case "attr-double-quoted":
+		return CtxAttrDoubleQuoted
+	case "attr-single-quoted":
+		return CtxAttrSingleQuoted
+	case "attr-unquoted":
+		return CtxAttrUnquoted
+	case "script-text":
+		return CtxScriptText
+	case "script-string-double":
+		return CtxScriptStringDouble
+	case "script-string-single":
+		return CtxScriptStringSingle
+	}
+	return CtxNone
+}
+
+// FindReflectionsLua wraps FindReflections so the Lua bridge returns
+// a flat array of {context, offset, header} tables. The typed Go API
+// returns []Reflection; the Lua shape uses the context's string name
+// so the comparator on the Lua side matches the constants the user
+// already sees.
+type LuaReflection struct {
+	Context string
+	Offset  int
+	Header  string
+}
+
+func FindReflectionsLua(body []byte, headers http.Header, token string) []LuaReflection {
+	src := FindReflections(body, headers, token)
+	out := make([]LuaReflection, 0, len(src))
+	for _, r := range src {
+		out = append(out, LuaReflection{Context: r.Context.String(), Offset: r.Offset, Header: r.Header})
+	}
+	return out
+}
+
+// CachePoisonHeaderProbeLua is one unkeyed-header probe the cache-
+// poisoning Lua port sends. Header / Value are the wire pair; Canary
+// is what the reflection check searches for in the response; Kind
+// flags whether the probe should also consult responseDiverged
+// (path-rewrite primitives) on top of the reflection check.
+// DeceptionMessage is the human-facing detail lead-in.
+type CachePoisonHeaderProbeLua struct {
+	Header           string
+	Value            string
+	Canary           string
+	Kind             string
+	DeceptionMessage string
+}
+
+// CachePoisonHeaderProbesLua exposes the curated probe list. Mirrors
+// the Go check's cachePoisonHeaderProbes() one-for-one so the Lua port
+// runs the same probes in the same order.
+func CachePoisonHeaderProbesLua() []CachePoisonHeaderProbeLua {
+	return []CachePoisonHeaderProbeLua{
+		{
+			Header:           "X-Forwarded-Host",
+			Value:            cachePoisonCanaryHost,
+			Canary:           cachePoisonCanaryHost,
+			Kind:             "reflection",
+			DeceptionMessage: "Back-end echoes X-Forwarded-Host into the response body or absolute URLs without keying the cache on it.",
+		},
+		{
+			Header:           "X-Forwarded-Scheme",
+			Value:            "nothttps",
+			Canary:           "nothttps://",
+			Kind:             "reflection",
+			DeceptionMessage: "Back-end rewrites generated absolute URLs to use the attacker-supplied scheme (X-Forwarded-Scheme).",
+		},
+		{
+			Header:           "X-Forwarded-Proto",
+			Value:            "nothttps",
+			Canary:           "nothttps://",
+			Kind:             "reflection",
+			DeceptionMessage: "Back-end rewrites generated absolute URLs to use the attacker-supplied scheme (X-Forwarded-Proto).",
+		},
+		{
+			Header:           "X-Original-URL",
+			Value:            cachePoisonCanaryPath,
+			Canary:           cachePoisonCanaryPath,
+			Kind:             "reflection-or-diverged",
+			DeceptionMessage: "Back-end honours X-Original-URL to override the routed path without rechecking authorization.",
+		},
+		{
+			Header:           "X-Rewrite-URL",
+			Value:            cachePoisonCanaryPath,
+			Canary:           cachePoisonCanaryPath,
+			Kind:             "reflection-or-diverged",
+			DeceptionMessage: "Back-end honours X-Rewrite-URL to override the routed path without rechecking authorization.",
+		},
+	}
+}
+
+// CachePoisonHasCacheHint forwards hasCacheHint so the Lua port short-
+// circuits the unkeyed-header arm on pages whose baseline response
+// carries no cache hint (Cache-Control, Age, X-Cache, CF-Cache-Status,
+// Via). Without a shared cache in the path the worst case is local
+// reflection; gating prevents the noisy probe from firing on a target
+// the bug class does not apply to.
+func CachePoisonHasCacheHint(h http.Header) bool { return cacheHintsPresent(h) }
+
+// CachePoisonFindReflection wraps findReflection so the Lua port can
+// run the same body + header lookup the Go check uses. needle is the
+// canary string; resp + body are the probe response; baseBody is the
+// baseline body bytes (used to drop pre-existing echoes). Returns the
+// location string ("response body", "Location header", "") and a bool.
+func CachePoisonFindReflection(needle string, headers http.Header, body, baseBody []byte) (string, bool) {
+	lowerNeedle := strings.ToLower(needle)
+	if needle == "" {
+		return "", false
+	}
+	if len(baseBody) > 0 && strings.Contains(strings.ToLower(string(baseBody)), lowerNeedle) {
+		return "", false
+	}
+	if len(body) > 0 && strings.Contains(strings.ToLower(string(body)), lowerNeedle) {
+		return "response body", true
+	}
+	for _, h := range []string{"Location", "Link", "Set-Cookie", "Content-Location", "Refresh"} {
+		for _, v := range headers.Values(h) {
+			if strings.Contains(strings.ToLower(v), lowerNeedle) {
+				return h + " header", true
+			}
+		}
+	}
+	return "", false
+}
+
+// CachePoisonResponseDiverged wraps responseDiverged. status / body are
+// the probe response shape; baseStatus / baseBody are the baseline. Used
+// by the path-rewrite probes (X-Original-URL / X-Rewrite-URL) where the
+// canary path itself rarely echoes back; instead the signal is "the
+// response looks like a different page".
+func CachePoisonResponseDiverged(status int, body []byte, baseStatus int, baseBody []byte) bool {
+	if status != baseStatus {
+		return true
+	}
+	if len(body) == 0 || len(baseBody) == 0 {
+		return false
+	}
+	a, b := len(body), len(baseBody)
+	if a < b {
+		a, b = b, a
+	}
+	if a-b > a/4 {
+		return true
+	}
+	return false
+}
+
+// CachePoisonBodiesMatch wraps bodiesMatch for the cache-deception arm.
+// The two snapshots are the deception-probe body vs. the baseline body;
+// returns true when they look like the same authenticated page modulo
+// rotating tokens.
+func CachePoisonBodiesMatch(deceived, baseline []byte) bool {
+	return bodiesMatch(deceived, baseline)
+}
+
+// CachePoisonCacheControlForbidsStorage forwards the Cache-Control
+// "no-store" / "private" detector. The deception arm uses this to
+// downgrade severity from High to Medium when the upstream explicitly
+// forbids storage.
+func CachePoisonCacheControlForbidsStorage(cc string) bool { return cacheControlForbidsStorage(cc) }
+
+// CachePoisonIsAuthLikelyPath forwards the per-path heuristic the cache-
+// deception arm uses to gate the probe at LevelDefault.
+func CachePoisonIsAuthLikelyPath(path string) bool { return isAuthLikelyPath(path) }
+
+// CachePoisonDeceptionURL forwards deceptionURL. raw is the absolute
+// target URL; the result is target with cacheDeceptionSuffix appended
+// to its path (or "" when the target already ends with the suffix).
+func CachePoisonDeceptionURL(raw string) (string, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", err
+	}
+	return deceptionURL(u)
+}
+
+// CachePoisonParseVary returns the lowercased Vary header set. The
+// Lua port uses this to check whether a header is keyed before
+// emitting an unkeyed-header finding.
+func CachePoisonParseVary(v string) []string {
+	out := []string{}
+	for _, part := range strings.Split(v, ",") {
+		name := strings.ToLower(strings.TrimSpace(part))
+		if name == "" {
+			continue
+		}
+		out = append(out, name)
+	}
+	return out
+}
+
+// CachePoisonDeceptionSuffix exposes the static-asset suffix the cache-
+// deception arm appends to a probe URL. Centralised so the Go and Lua
+// checks agree on the wire shape; a change to "what does a cache-
+// rule trigger on" lands once.
+func CachePoisonDeceptionSuffix() string { return cacheDeceptionSuffix }
+
+// CachePoisonCanaryHost / CachePoisonCanaryPath expose the canary
+// values the Lua port stamps onto evidence + dedupe keys. Mirrors
+// the Go check constants 1:1.
+func CachePoisonCanaryHost() string { return cachePoisonCanaryHost }
+func CachePoisonCanaryPath() string { return cachePoisonCanaryPath }
+
+// SQLiTimeSleepSeconds / SQLiTimeMargin expose the Go side's test-
+// tunable timing knobs to the Lua port. Lua checks read these every
+// Run so a test that calls SetSQLiTimeSleepForTest (in the Go test
+// helper file) flips both implementations to the same fast value
+// without each side hand-rolling its own override path.
+func SQLiTimeSleepSeconds() int { return int(sqliTimeSleep / 1e9) }
+func SQLiTimeMargin() float64   { return sqliTimeMargin }
+
+// CmdInjectionSleepSeconds / CmdInjectionMargin do the same for the
+// cmd-injection timing oracle. Same rationale: tests flip the Go side
+// and the Lua port follows in lockstep.
+func CmdInjectionSleepSeconds() int { return int(cmdInjectionSleep / 1e9) }
+func CmdInjectionMargin() float64   { return cmdInjectionMargin }
+
+// SetSQLiTimeTuningForTest / SetCmdInjectionTuningForTest let the
+// checks_lua parity tests dial the production timing knobs down to
+// test-friendly values without each test reaching into private vars.
+// Mirrors the SubdomainTakeoverLookup setters below.
+func SetSQLiTimeTuningForTest(sleepSecs int, margin float64) (restore func()) {
+	prevSleep, prevMargin := sqliTimeSleep, sqliTimeMargin
+	sqliTimeSleep = time.Duration(sleepSecs) * time.Second
+	sqliTimeMargin = margin
+	return func() {
+		sqliTimeSleep = prevSleep
+		sqliTimeMargin = prevMargin
+	}
+}
+func SetCmdInjectionTuningForTest(sleepSecs int, margin float64) (restore func()) {
+	prevSleep, prevMargin := cmdInjectionSleep, cmdInjectionMargin
+	cmdInjectionSleep = time.Duration(sleepSecs) * time.Second
+	cmdInjectionMargin = margin
+	return func() {
+		cmdInjectionSleep = prevSleep
+		cmdInjectionMargin = prevMargin
+	}
+}
+
+// CmdInjectionFillerValue exposes the filler the cmd-injection checks
+// substitute for an empty sink.Value before payload append. Empty
+// originals leave the payload without a leading character; anchoring
+// with "1" turns `param=` into `param=1; sleep 5`, which executes.
+func CmdInjectionFillerValue() string { return cmdInjectionFillerValue }
+
+// CmdInjectionBlindOOBPayloadLua / CmdInjectionBlindOOBPayloadsLua
+// expose the OOB-only payload list for the cmd-injection-blind check.
+// Each entry is one canary-fetching shell-context template; the Lua
+// port substitutes {{URL}} per probe with the canary URL the OOB
+// listener minted.
+type CmdInjectionBlindOOBPayloadLua struct {
+	Name     string
+	Template string
+}
+
+func CmdInjectionBlindOOBPayloadsLua() []CmdInjectionBlindOOBPayloadLua {
+	out := make([]CmdInjectionBlindOOBPayloadLua, 0, len(cmdInjectionBlindOOBPayloads))
+	for _, p := range cmdInjectionBlindOOBPayloads {
+		out = append(out, CmdInjectionBlindOOBPayloadLua{Name: p.Name, Template: p.Tmpl})
+	}
+	return out
+}
+
+// SSTIOOBPayloadLua / SSTIOOBPayloadsLua mirror the cmd-injection-blind
+// pair for SSTI. Each entry is one engine-specific blind probe; the
+// Lua port substitutes {{URL}} with the canary URL on send. Engine
+// rides as a field so the Drain pass can attribute the right engine
+// name on a confirmed callback.
+type SSTIOOBPayloadLua struct {
+	Engine   string
+	Template string
+}
+
+func SSTIOOBPayloadsLua() []SSTIOOBPayloadLua {
+	out := make([]SSTIOOBPayloadLua, 0, len(sstiOOBPayloads))
+	for _, p := range sstiOOBPayloads {
+		out = append(out, SSTIOOBPayloadLua{Engine: p.Engine, Template: p.Tmpl})
+	}
+	return out
+}
+
+// LocDescriptorLua forwards the locDescriptor helper so the Lua port
+// renders titles like "header" / "cookie" / "parameter" the same way
+// the Go check does. Drops the need for a per-port lookup table.
+func LocDescriptorLua(loc string) string { return locDescriptor(Loc(loc)) }
+
+// CmdInjectionHeaderSinksLua returns the synthetic header sinks the
+// SSTI / cmd-injection checks fold in at LevelAggressive. The Lua
+// port consumes the same set so its aggressive-level fan-out matches.
+type SSTIHeaderSinkLua struct {
+	Method string
+	URL    string
+	Loc    string
+	Name   string
+}
+
+func SSTIHeaderSinksLua(pageURL string) []SSTIHeaderSinkLua {
+	src := (SSTI{}).headerSinks(pageURL)
+	out := make([]SSTIHeaderSinkLua, 0, len(src))
+	for _, s := range src {
+		out = append(out, SSTIHeaderSinkLua{
+			Method: s.Method,
+			URL:    s.URL,
+			Loc:    string(s.Loc),
+			Name:   s.Name,
+		})
 	}
 	return out
 }

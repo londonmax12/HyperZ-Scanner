@@ -57,7 +57,11 @@ func buildCtxUserdata(L *lua.LState, env *runEnv) *lua.LTable {
 		t.RawSetString("html", helpers.html)
 		t.RawSetString("cookies", helpers.cookies)
 		t.RawSetString("takeover", helpers.takeover)
+		t.RawSetString("payloads", helpers.payloads)
+		t.RawSetString("oracle", helpers.oracle)
+		t.RawSetString("json", helpers.json)
 	}
+	t.RawSetString("oob", pushOOBServer(L, env))
 
 	t.RawSetString("ensure_response", L.NewFunction(ctxEnsureResponse))
 	t.RawSetString("report", L.NewFunction(ctxReport))

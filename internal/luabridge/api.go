@@ -29,6 +29,9 @@ func bindHyperzAPI(L *lua.LState) {
 		html:     buildHTMLTable(L),
 		cookies:  buildCookiesTable(L),
 		takeover: buildTakeoverTable(L),
+		payloads: buildPayloadsTable(L),
+		oracle:   buildOracleTable(L),
+		json:     buildJSONTable(L),
 	}
 	storeStaticHelpers(L, h)
 }

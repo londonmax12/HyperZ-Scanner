@@ -21,6 +21,7 @@ const (
 	mtRequest = "__hyperz_mt_request"
 	mtResp    = "__hyperz_mt_response"
 	mtSink    = "__hyperz_mt_sink"
+	mtOOB     = "__hyperz_mt_oob"
 )
 
 // setEnv installs env in the Lua registry so per-call bindings can
@@ -80,6 +81,9 @@ type staticHelpers struct {
 	html     *lua.LTable
 	cookies  *lua.LTable
 	takeover *lua.LTable
+	payloads *lua.LTable
+	oracle   *lua.LTable
+	json     *lua.LTable
 }
 
 func storeStaticHelpers(L *lua.LState, h *staticHelpers) {

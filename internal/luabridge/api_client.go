@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	lua "github.com/yuin/gopher-lua"
 
@@ -241,6 +242,7 @@ func ensureClientMT(L *lua.LState) *lua.LTable {
 	methods.RawSetString("get", L.NewFunction(clientGet))
 	methods.RawSetString("do", L.NewFunction(clientDo))
 	methods.RawSetString("do_no_follow", L.NewFunction(clientDoNoFollow))
+	methods.RawSetString("do_timed", L.NewFunction(clientDoTimed))
 	methods.RawSetString("new_request", L.NewFunction(clientNewRequest))
 	mt.RawSetString("__index", methods)
 	L.G.Registry.RawSetString(mtClient, mt)
@@ -279,6 +281,35 @@ func clientGet(L *lua.LState) int {
 
 func clientDo(L *lua.LState) int       { return clientDispatch(L, false) }
 func clientDoNoFollow(L *lua.LState) int { return clientDispatch(L, true) }
+
+// clientDoTimed dispatches the request and returns (response_userdata,
+// latency_seconds) on success, or (nil, nil, err) on transport failure.
+// Latency is measured around c.Do so it includes connection setup, TLS,
+// and any internal retries - i.e. what an attacker would observe. The
+// per-check timing oracles (cmd-injection, sqli-time) need this to
+// compare against baseline + sleep margins; gopher-lua has no native
+// monotonic clock that would let a Lua-authored check measure latency
+// itself with the same fidelity.
+func clientDoTimed(L *lua.LState) int {
+	c := clientFromArg(L, 1)
+	r := requestFromArg(L, 2)
+	env := currentEnv(L)
+	if env == nil {
+		L.RaiseError("client:do_timed called outside a check run")
+	}
+	start := time.Now()
+	resp, err := c.c.Do(env.ctx, r.req)
+	latency := time.Since(start)
+	if err != nil {
+		L.Push(lua.LNil)
+		L.Push(lua.LNil)
+		L.Push(lua.LString(err.Error()))
+		return 3
+	}
+	L.Push(pushResponse(L, resp, nil, false))
+	L.Push(lua.LNumber(latency.Seconds()))
+	return 2
+}
 
 // clientDispatch is the shared implementation behind client:do and
 // client:do_no_follow. The redirect-following choice is the only

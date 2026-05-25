@@ -179,6 +179,76 @@ func readCheckMeta(t *lua.LTable) (checkMeta, error) {
 	return m, nil
 }
 
+// Drain executes the optional check.drain(ctx) Lua entry point and
+// returns its findings. Drain exists for OOB-using checks (ssti,
+// cmd-injection-blind, ssrf, ...) whose detection signal arrives
+// asynchronously after Run returned: the scanner calls Drain once the
+// per-target Run sweep completes so each registered canary that
+// observed a callback gets folded into a finding.
+//
+// The Lua module declares this branch as `function check.drain(ctx)`
+// and returns a table-of-findings the same way Run does. Modules that
+// do not declare drain return no findings; Drain still runs (the
+// LuaCheck unconditionally satisfies OOBCheck so the scanner does
+// not need to know which modules use it) but the cost is one
+// table lookup against the loaded module.
+//
+// Errors from the Lua drain path are not propagated through the
+// (single-return) OOBCheck.Drain signature; they surface via the
+// shared per-call Report channel just like a Run-time sub-error.
+func (c *LuaCheck) Drain(ctx context.Context) []checks.Finding {
+	L, mod, err := c.borrow()
+	if err != nil {
+		checks.Report(ctx, fmt.Errorf("%s: drain borrow: %w", c.name, err))
+		return nil
+	}
+	keepVM := true
+	defer func() {
+		if r := recover(); r != nil {
+			keepVM = false
+			checks.Report(ctx, fmt.Errorf("%s: drain panic: %v", c.name, r))
+		}
+		c.release(L, mod, keepVM)
+	}()
+
+	drainFn := mod.RawGetString("drain")
+	if drainFn == lua.LNil {
+		return nil
+	}
+	if _, ok := drainFn.(*lua.LFunction); !ok {
+		checks.Report(ctx, fmt.Errorf("%s: drain field is %s, not a function", c.name, drainFn.Type()))
+		return nil
+	}
+
+	envCtx := &runEnv{ctx: ctx, check: c}
+	ctxUD := buildCtxUserdata(L, envCtx)
+	L.SetContext(ctx)
+	L.Push(drainFn)
+	L.Push(ctxUD)
+	if err := L.PCall(1, 1, nil); err != nil {
+		keepVM = false
+		checks.Report(ctx, fmt.Errorf("%s: drain: %w", c.name, err))
+		return nil
+	}
+	defer L.SetTop(0)
+
+	v := L.Get(-1)
+	if v == lua.LNil {
+		return nil
+	}
+	tbl, ok := v.(*lua.LTable)
+	if !ok {
+		checks.Report(ctx, fmt.Errorf("%s: drain returned %s, not a findings table", c.name, v.Type()))
+		return nil
+	}
+	out, err := c.marshalFindings(tbl, envCtx)
+	if err != nil {
+		checks.Report(ctx, fmt.Errorf("%s: drain marshal: %w", c.name, err))
+		return nil
+	}
+	return out
+}
+
 // Name satisfies checks.Check.
 func (c *LuaCheck) Name() string { return c.name }
 

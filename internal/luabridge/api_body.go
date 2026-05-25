@@ -70,7 +70,54 @@ func buildBodyTable(L *lua.LState) *lua.LTable {
 	t.RawSetString("analyze_csp", L.NewFunction(bodyAnalyzeCSP))
 	t.RawSetString("sqli_error_new_matches", L.NewFunction(bodySQLiErrorNewMatches))
 	t.RawSetString("sqli_error_payloads", L.NewFunction(bodySQLiErrorPayloads))
+	t.RawSetString("traversal_new_markers", L.NewFunction(bodyTraversalNewMarkers))
+	t.RawSetString("traversal_markers", L.NewFunction(bodyTraversalMarkers))
+	t.RawSetString("ldap_error_new_matches", L.NewFunction(bodyLDAPErrorNewMatches))
+	t.RawSetString("mongo_error_new_matches", L.NewFunction(bodyMongoErrorNewMatches))
+	t.RawSetString("ssti_error_new_matches", L.NewFunction(bodySSTIErrorNewMatches))
+	t.RawSetString("cmd_error_first_match", L.NewFunction(bodyCmdErrorFirstMatch))
+	t.RawSetString("find_reflections", L.NewFunction(bodyFindReflections))
+	t.RawSetString("xss_payloads_for_contexts", L.NewFunction(bodyXSSPayloadsForContexts))
+	t.RawSetString("xss_context_summary", L.NewFunction(bodyXSSContextSummary))
+	t.RawSetString("path_sink_candidate", L.NewFunction(bodyPathSinkCandidate))
+	t.RawSetString("ldapi_sink_probable", L.NewFunction(bodyLDAPiSinkProbable))
+	t.RawSetString("nosqli_sink_probable", L.NewFunction(bodyNoSQLiSinkProbable))
+	t.RawSetString("nosqli_build_operator_request", L.NewFunction(bodyNoSQLiBuildOperatorRequest))
+	t.RawSetString("cache_poison_has_cache_hint", L.NewFunction(bodyCachePoisonHasCacheHint))
+	t.RawSetString("cache_poison_find_reflection", L.NewFunction(bodyCachePoisonFindReflection))
+	t.RawSetString("cache_poison_response_diverged", L.NewFunction(bodyCachePoisonResponseDiverged))
+	t.RawSetString("cache_poison_bodies_match", L.NewFunction(bodyCachePoisonBodiesMatch))
+	t.RawSetString("cache_poison_cc_forbids_storage", L.NewFunction(bodyCachePoisonCCForbidsStorage))
+	t.RawSetString("cache_poison_is_auth_likely_path", L.NewFunction(bodyCachePoisonIsAuthLikelyPath))
+	t.RawSetString("cache_poison_deception_url", L.NewFunction(bodyCachePoisonDeceptionURL))
+	t.RawSetString("cache_poison_parse_vary", L.NewFunction(bodyCachePoisonParseVary))
+	t.RawSetString("sqli_time_sleep_seconds", L.NewFunction(bodySQLiTimeSleepSeconds))
+	t.RawSetString("sqli_time_margin", L.NewFunction(bodySQLiTimeMargin))
+	t.RawSetString("cmd_injection_sleep_seconds", L.NewFunction(bodyCmdInjectionSleepSeconds))
+	t.RawSetString("cmd_injection_margin", L.NewFunction(bodyCmdInjectionMargin))
 	return t
+}
+
+// bodySQLiTimeSleepSeconds / bodySQLiTimeMargin /
+// bodyCmdInjectionSleepSeconds / bodyCmdInjectionMargin expose the
+// Go side's test-tunable timing knobs. The Lua port reads them every
+// Run so a parity test that flips the Go vars sees both implementations
+// dial down to the same value in lockstep.
+func bodySQLiTimeSleepSeconds(L *lua.LState) int {
+	L.Push(lua.LNumber(checks.SQLiTimeSleepSeconds()))
+	return 1
+}
+func bodySQLiTimeMargin(L *lua.LState) int {
+	L.Push(lua.LNumber(checks.SQLiTimeMargin()))
+	return 1
+}
+func bodyCmdInjectionSleepSeconds(L *lua.LState) int {
+	L.Push(lua.LNumber(checks.CmdInjectionSleepSeconds()))
+	return 1
+}
+func bodyCmdInjectionMargin(L *lua.LState) int {
+	L.Push(lua.LNumber(checks.CmdInjectionMargin()))
+	return 1
 }
 
 // bodyFindRedirectSink delegates to checks.FindBodyRedirectSink so a
@@ -253,6 +300,272 @@ func bodySQLiErrorPayloads(L *lua.LState) int {
 		entry.RawSetString("name", lua.LString(p.Name))
 		entry.RawSetString("template", lua.LString(p.Template))
 		out.RawSetInt(i+1, entry)
+	}
+	L.Push(out)
+	return 1
+}
+
+// bodyTraversalNewMarkers / bodyTraversalMarkers wrap the path-traversal
+// marker scanner + baseline subtraction. Mirrors the SQLiError pair so
+// the Lua port can baseline-then-probe in the same shape it uses for
+// the sister check.
+func bodyTraversalNewMarkers(L *lua.LState) int {
+	body := requireString(L, 1)
+	baseline := ""
+	if L.GetTop() >= 2 {
+		baseline = lvalString(L.Get(2))
+	}
+	out := L.NewTable()
+	for i, h := range checks.TraversalNewMarkers([]byte(body), []byte(baseline)) {
+		out.RawSetInt(i+1, lua.LString(h))
+	}
+	L.Push(out)
+	return 1
+}
+
+func bodyTraversalMarkers(L *lua.LState) int {
+	body := requireString(L, 1)
+	out := L.NewTable()
+	for i, h := range checks.TraversalMarkerHits([]byte(body)) {
+		out.RawSetInt(i+1, lua.LString(h))
+	}
+	L.Push(out)
+	return 1
+}
+
+// bodyLDAPErrorNewMatches / bodyMongoErrorNewMatches / bodySSTIErrorNewMatches
+// share a shape: scan body for the check's pattern catalogue and
+// subtract any patterns already present in baseline. Each one is one
+// line because the per-check helpers in checks/lua_helpers.go own the
+// catalogue + matcher; the bridge surface stays a pure forwarder.
+func bodyLDAPErrorNewMatches(L *lua.LState) int {
+	body := requireString(L, 1)
+	baseline := ""
+	if L.GetTop() >= 2 {
+		baseline = lvalString(L.Get(2))
+	}
+	out := L.NewTable()
+	for i, h := range checks.LDAPErrorNewMatches([]byte(body), []byte(baseline)) {
+		out.RawSetInt(i+1, lua.LString(h))
+	}
+	L.Push(out)
+	return 1
+}
+
+func bodyMongoErrorNewMatches(L *lua.LState) int {
+	body := requireString(L, 1)
+	baseline := ""
+	if L.GetTop() >= 2 {
+		baseline = lvalString(L.Get(2))
+	}
+	out := L.NewTable()
+	for i, h := range checks.MongoErrorNewMatches([]byte(body), []byte(baseline)) {
+		out.RawSetInt(i+1, lua.LString(h))
+	}
+	L.Push(out)
+	return 1
+}
+
+func bodySSTIErrorNewMatches(L *lua.LState) int {
+	body := requireString(L, 1)
+	baseline := ""
+	if L.GetTop() >= 2 {
+		baseline = lvalString(L.Get(2))
+	}
+	out := L.NewTable()
+	for i, h := range checks.SSTIErrorNewMatches([]byte(body), []byte(baseline)) {
+		out.RawSetInt(i+1, lua.LString(h))
+	}
+	L.Push(out)
+	return 1
+}
+
+// bodyCmdErrorFirstMatch returns "" when no shell-error signature
+// appears in body. Returning just the first hit (rather than the full
+// list) matches the cmd-injection-blind check's verdict shape, which
+// only records one error string per finding.
+func bodyCmdErrorFirstMatch(L *lua.LState) int {
+	body := requireString(L, 1)
+	L.Push(lua.LString(checks.CmdErrorFirstMatch([]byte(body))))
+	return 1
+}
+
+// bodyFindReflections runs the HTML / JS state machine reflection
+// scanner against body / headers and returns an array of
+// {context, offset, header} tables. context is the string name of the
+// matched Context (so a Lua-side comparator does not need to know the
+// numeric enum). Header is "" for body matches.
+func bodyFindReflections(L *lua.LState) int {
+	body := requireString(L, 1)
+	var headers http.Header
+	if ud, ok := L.Get(2).(*lua.LUserData); ok && ud != nil {
+		if h, ok := ud.Value.(*headersUserData); ok {
+			headers = h.h
+		}
+	}
+	token := requireString(L, 3)
+	hits := checks.FindReflectionsLua([]byte(body), headers, token)
+	out := L.NewTable()
+	for i, r := range hits {
+		entry := L.NewTable()
+		entry.RawSetString("context", lua.LString(r.Context))
+		entry.RawSetString("offset", lua.LNumber(r.Offset))
+		entry.RawSetString("header", lua.LString(r.Header))
+		out.RawSetInt(i+1, entry)
+	}
+	L.Push(out)
+	return 1
+}
+
+// bodyXSSPayloadsForContexts picks the context-matched XSS payload
+// subset for the supplied reflection contexts (an array of context
+// strings) at the active scan level. Returns an ordered array of
+// {name, template} tables; mirrors the Go check's payloadsForContexts
+// shape so the Lua port iterates payloads in the same order.
+func bodyXSSPayloadsForContexts(L *lua.LState) int {
+	contexts := readStringList(L.Get(1))
+	level := optString(L, 2, "default")
+	src := checks.XSSPayloadsForContextsLua(contexts, level)
+	return pushPayloadList(L, src)
+}
+
+func bodyXSSContextSummary(L *lua.LState) int {
+	contexts := readStringList(L.Get(1))
+	L.Push(lua.LString(checks.XSSContextSummaryLua(contexts)))
+	return 1
+}
+
+// bodyPathSinkCandidate forwards the path-traversal sink-candidate
+// heuristic so the Lua port short-circuits the sweep on non-path-ish
+// sinks at LevelDefault. Argument is a sink userdata; the wrapper
+// pulls the needed fields off it.
+func bodyPathSinkCandidate(L *lua.LState) int {
+	wrapper, ok := L.CheckUserData(1).Value.(*sinkUserData)
+	if !ok {
+		L.Push(lua.LBool(false))
+		return 1
+	}
+	L.Push(lua.LBool(checks.PathSinkCandidate(*wrapper.s)))
+	return 1
+}
+
+func bodyLDAPiSinkProbable(L *lua.LState) int {
+	loc := requireString(L, 1)
+	L.Push(lua.LBool(checks.LDAPiSinkProbable(loc)))
+	return 1
+}
+
+func bodyNoSQLiSinkProbable(L *lua.LState) int {
+	loc := requireString(L, 1)
+	L.Push(lua.LBool(checks.NoSQLiSinkProbable(loc)))
+	return 1
+}
+
+// bodyNoSQLiBuildOperatorRequest builds the request that overlays the
+// named MongoDB operator onto sink with opValue. Wrap-the-Go-builder
+// keeps the per-loc shape rules (bracket key vs nested JSON) in one
+// place; the Lua port hands back the resulting request userdata and
+// dispatches it through client:do like any other request.
+func bodyNoSQLiBuildOperatorRequest(L *lua.LState) int {
+	wrapper, ok := L.CheckUserData(1).Value.(*sinkUserData)
+	if !ok {
+		L.ArgError(1, "expected sink userdata")
+	}
+	opName := requireString(L, 2)
+	opValue := requireString(L, 3)
+	env := currentEnv(L)
+	if env == nil {
+		L.RaiseError("ctx.body.nosqli_build_operator_request called outside a check run")
+	}
+	req, err := checks.NoSQLiBuildOperatorRequest(env.ctx, *wrapper.s, opName, opValue)
+	if err != nil {
+		L.Push(lua.LNil)
+		L.Push(lua.LString(err.Error()))
+		return 2
+	}
+	L.Push(pushRequest(L, req, nil, false))
+	return 1
+}
+
+// bodyCachePoisonHasCacheHint forwards the cache-poisoning gate so
+// the Lua port skips the unkeyed-header arm on pages whose baseline
+// response carries no cache hint. Argument is a headers userdata.
+func bodyCachePoisonHasCacheHint(L *lua.LState) int {
+	var h http.Header
+	if ud, ok := L.Get(1).(*lua.LUserData); ok && ud != nil {
+		if hu, ok := ud.Value.(*headersUserData); ok {
+			h = hu.h
+		}
+	}
+	L.Push(lua.LBool(checks.CachePoisonHasCacheHint(h)))
+	return 1
+}
+
+// bodyCachePoisonFindReflection runs the canary lookup against the
+// probe response (headers + body) with baseline-body subtraction. Args
+// are needle, headers userdata, body string, baseline body string;
+// returns (location_string, ok_bool).
+func bodyCachePoisonFindReflection(L *lua.LState) int {
+	needle := requireString(L, 1)
+	var headers http.Header
+	if ud, ok := L.Get(2).(*lua.LUserData); ok && ud != nil {
+		if hu, ok := ud.Value.(*headersUserData); ok {
+			headers = hu.h
+		}
+	}
+	body := requireString(L, 3)
+	baseline := optString(L, 4, "")
+	where, ok := checks.CachePoisonFindReflection(needle, headers, []byte(body), []byte(baseline))
+	L.Push(lua.LString(where))
+	L.Push(lua.LBool(ok))
+	return 2
+}
+
+// bodyCachePoisonResponseDiverged returns true when the probe shape
+// differs meaningfully from baseline (different status, or > 25%
+// length divergence).
+func bodyCachePoisonResponseDiverged(L *lua.LState) int {
+	status := L.CheckInt(1)
+	body := requireString(L, 2)
+	baseStatus := L.CheckInt(3)
+	baseBody := optString(L, 4, "")
+	L.Push(lua.LBool(checks.CachePoisonResponseDiverged(status, []byte(body), baseStatus, []byte(baseBody))))
+	return 1
+}
+
+func bodyCachePoisonBodiesMatch(L *lua.LState) int {
+	deceived := requireString(L, 1)
+	baseline := requireString(L, 2)
+	L.Push(lua.LBool(checks.CachePoisonBodiesMatch([]byte(deceived), []byte(baseline))))
+	return 1
+}
+
+func bodyCachePoisonCCForbidsStorage(L *lua.LState) int {
+	L.Push(lua.LBool(checks.CachePoisonCacheControlForbidsStorage(requireString(L, 1))))
+	return 1
+}
+
+func bodyCachePoisonIsAuthLikelyPath(L *lua.LState) int {
+	L.Push(lua.LBool(checks.CachePoisonIsAuthLikelyPath(requireString(L, 1))))
+	return 1
+}
+
+func bodyCachePoisonDeceptionURL(L *lua.LState) int {
+	deceived, err := checks.CachePoisonDeceptionURL(requireString(L, 1))
+	if err != nil {
+		L.Push(lua.LString(""))
+		L.Push(lua.LString(err.Error()))
+		return 2
+	}
+	L.Push(lua.LString(deceived))
+	return 1
+}
+
+func bodyCachePoisonParseVary(L *lua.LState) int {
+	v := requireString(L, 1)
+	out := L.NewTable()
+	for i, name := range checks.CachePoisonParseVary(v) {
+		out.RawSetInt(i+1, lua.LString(name))
 	}
 	L.Push(out)
 	return 1
