@@ -303,6 +303,12 @@ func (w *oobHostWrapper) Register(check string, extra map[string]string) oob.Can
 	return c
 }
 
+func (w *oobHostWrapper) RegisterAsset(check, body, contentType string, extra map[string]string) oob.Canary {
+	c := w.b.RegisterAsset(check, body, contentType, extra)
+	c.HTTPURL = "http://" + w.b.LocalAddr() + "/" + c.Token
+	return c
+}
+
 func (w *oobHostWrapper) Registrations(check string) []oob.Registration {
 	regs := w.b.Registrations(check)
 	for i := range regs {
@@ -311,7 +317,7 @@ func (w *oobHostWrapper) Registrations(check string) []oob.Registration {
 	return regs
 }
 
-func (w *oobHostWrapper) Hits(token string) []oob.Hit { return w.b.Hits(token) }
+func (w *oobHostWrapper) Hits(token string) []oob.Hit     { return w.b.Hits(token) }
 func (w *oobHostWrapper) Start(ctx context.Context) error { return nil }
 func (w *oobHostWrapper) Stop(ctx context.Context) error  { return nil }
 func (w *oobHostWrapper) CallbackHost() string            { return w.b.LocalAddr() }

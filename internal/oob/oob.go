@@ -77,6 +77,17 @@ type Server interface {
 	// is stored verbatim for the matching Registration to retrieve at
 	// Drain time. Safe for concurrent callers.
 	Register(check string, extra map[string]string) Canary
+	// RegisterAsset mints a fresh canary like Register, but additionally
+	// arranges for the listener to respond with body (typed as
+	// contentType) whenever the canary URL is hit, instead of the default
+	// "ok" reply. Used by blind checks that need the listener to serve a
+	// real artifact - e.g. an external DTD for XXE OOB exfiltration with
+	// parameter entities - so the target's parser will actually drive the
+	// follow-up callbacks the check is set up to observe.
+	// Hits are recorded under the returned canary's token the same way
+	// Register-minted canaries record them, so Drain can treat both
+	// uniformly.
+	RegisterAsset(check, body, contentType string, extra map[string]string) Canary
 	// Registrations returns every registration the named check made,
 	// in mint order. Empty slice when the check never registered.
 	Registrations(check string) []Registration

@@ -35,14 +35,24 @@ type Builtin struct {
 	host   string // callback host:port targets see, e.g. "scanner.example.com:7777"
 
 	mu      sync.RWMutex
-	regs    map[string]Registration   // token -> registration
-	byCheck map[string][]string       // check -> tokens (mint order)
-	hits    map[string][]Hit          // token -> hits
+	regs    map[string]Registration // token -> registration
+	byCheck map[string][]string     // check -> tokens (mint order)
+	hits    map[string][]Hit        // token -> hits
+	assets  map[string]asset        // token -> asset body to serve
 
 	srv     *http.Server
 	ln      net.Listener
 	started bool
 	stopped bool
+}
+
+// asset is the body the listener serves for a RegisterAsset-minted
+// canary instead of the default "ok\n" reply. Stored per-token so the
+// handler can look it up by the same path segment it already uses for
+// hit attribution.
+type asset struct {
+	body        []byte
+	contentType string
 }
 
 // LocalAddr returns the listener's resolved TCP address after Start.
@@ -71,6 +81,7 @@ func NewBuiltin(listen, host string) *Builtin {
 		regs:    map[string]Registration{},
 		byCheck: map[string][]string{},
 		hits:    map[string][]Hit{},
+		assets:  map[string]asset{},
 	}
 }
 
@@ -86,6 +97,28 @@ func (b *Builtin) CallbackHost() string { return b.host }
 // Safe for concurrent callers. Extra is copied so subsequent mutation
 // by the caller cannot reach back into the server's index.
 func (b *Builtin) Register(check string, extra map[string]string) Canary {
+	return b.register(check, extra, nil)
+}
+
+// RegisterAsset mints a canary like Register but also wires the
+// listener to respond with body (typed as contentType) for any request
+// whose token matches this canary. When contentType is empty the
+// listener defaults to "application/octet-stream" so the target sees a
+// non-text content-type and at least one byte of body even for parsers
+// that sniff Content-Type before deciding whether to consume the
+// response. Hits are recorded the same way Register-minted canaries
+// record them - the response body change is the only difference.
+func (b *Builtin) RegisterAsset(check, body, contentType string, extra map[string]string) Canary {
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	return b.register(check, extra, &asset{
+		body:        []byte(body),
+		contentType: contentType,
+	})
+}
+
+func (b *Builtin) register(check string, extra map[string]string, a *asset) Canary {
 	token := MintToken()
 	canary := Canary{
 		Token:   token,
@@ -99,6 +132,9 @@ func (b *Builtin) Register(check string, extra map[string]string) Canary {
 	b.mu.Lock()
 	b.regs[token] = reg
 	b.byCheck[check] = append(b.byCheck[check], token)
+	if a != nil {
+		b.assets[token] = *a
+	}
 	b.mu.Unlock()
 	return canary
 }
@@ -225,7 +261,19 @@ func (b *Builtin) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	b.mu.Lock()
 	b.hits[token] = append(b.hits[token], hit)
+	a, hasAsset := b.assets[token]
 	b.mu.Unlock()
+	if hasAsset {
+		// Asset response: the check planted real content (e.g. an
+		// external DTD) so the target's parser actually drives the
+		// follow-up callbacks the check is set up to observe. Skip the
+		// token-echo guard from the default branch: the asset body the
+		// check supplied is what the parser needs, not the token.
+		w.Header().Set("Content-Type", a.contentType)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(a.body)
+		return
+	}
 	// Reply with a tiny 200 so the calling library doesn't retry. We
 	// don't echo the token: a target that gets back its own canary
 	// might log it in a way that leaks the scanner's address.
