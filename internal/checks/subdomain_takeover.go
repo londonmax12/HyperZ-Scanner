@@ -73,14 +73,38 @@ type subdomainTakeoverCacheEntry struct {
 // body returned by the provider's edge; statuses, when non-empty,
 // restricts matching to the listed HTTP status codes (most providers
 // answer 404, S3 answers 404 with NoSuchBucket, Fastly answers 500
-// when the host is unknown, etc.). guidance describes the takeover
-// path the provider exposes so the remediation can be specific.
+// when the host is unknown, etc.).
+//
+// headerFingerprints are provider-identifying response headers (Server,
+// Via, X-Served-By, etc.) that pin the response to a specific SaaS
+// edge regardless of how DNS got there. They power the fingerprint-only
+// detection path: when DNS does not surface a known CNAME (CDN proxy
+// in front, A record straight to a provider IP, third-party DNS that
+// hides the chain), a body fingerprint alone is too weak to fire on,
+// but body+header together is high-confidence proof the request reached
+// the provider's edge and the edge is serving its claim-this page.
+//
+// guidance describes the takeover path the provider exposes so the
+// remediation can be specific.
 type takeoverProvider struct {
-	name          string
-	cnameSuffixes []string
-	fingerprints  []string
-	statuses      []int
-	guidance      string
+	name               string
+	cnameSuffixes      []string
+	fingerprints       []string
+	headerFingerprints []headerFingerprint
+	statuses           []int
+	guidance           string
+}
+
+// headerFingerprint matches one response header that identifies the
+// provider's edge. name is the header to read (case-insensitive). value
+// is a substring matched case-insensitively against the header value;
+// an empty value means "header must be present with any non-empty
+// value", which is the right shape for headers whose mere presence is
+// the signal (x-amz-request-id, x-shopid) regardless of the opaque
+// value the edge fills in.
+type headerFingerprint struct {
+	name  string
+	value string
 }
 
 // Curated provider list. Each entry pairs a CNAME suffix (or family of
@@ -97,6 +121,14 @@ var subdomainTakeoverProviders = []takeoverProvider{
 		fingerprints: []string{
 			"There isn't a GitHub Pages site here.",
 			"For root URLs (like http://example.com/) you must provide an A record",
+		},
+		// GitHub Pages serves through its own fronting layer that
+		// stamps "GitHub.com" in Server on the claim-this 404. A
+		// healthy Pages site also carries this header, so it only
+		// becomes a takeover signal when combined with the body
+		// fingerprint above.
+		headerFingerprints: []headerFingerprint{
+			{name: "Server", value: "GitHub.com"},
 		},
 		statuses: []int{http.StatusNotFound},
 		guidance: "Register the GitHub Pages site under the GitHub account you control (or remove the CNAME if Pages is no longer in use).",
@@ -122,6 +154,15 @@ var subdomainTakeoverProviders = []takeoverProvider{
 			"<Code>NoSuchBucket</Code>",
 			"The specified bucket does not exist",
 		},
+		// S3's edge always stamps these on every response, claimed or
+		// not - the body fingerprint is what flags "unclaimed". The
+		// pair is essentially "the request reached S3" + "S3 has no
+		// bucket of this name".
+		headerFingerprints: []headerFingerprint{
+			{name: "Server", value: "AmazonS3"},
+			{name: "x-amz-request-id"},
+			{name: "x-amz-id-2"},
+		},
 		statuses: []int{http.StatusNotFound},
 		guidance: "Create an S3 bucket with the exact name the hostname expects in the AWS account you control, or remove the CNAME if the bucket is no longer in use.",
 	},
@@ -132,6 +173,14 @@ var subdomainTakeoverProviders = []takeoverProvider{
 			"No such app",
 			"There's nothing here, yet.",
 			"no-such-app.html",
+		},
+		// Heroku's router stamps "1.1 vegur" in Via on every response
+		// it proxies (vegur is the router's name); the Cowboy server
+		// header is what the dyno layer historically emits. Either is
+		// a strong signal the response came through Heroku's edge.
+		headerFingerprints: []headerFingerprint{
+			{name: "Via", value: "vegur"},
+			{name: "Server", value: "Cowboy"},
 		},
 		statuses: []int{http.StatusNotFound},
 		guidance: "Re-create the Heroku app with the same name under the account you control, or remove the CNAME if the app has been retired.",
@@ -151,6 +200,16 @@ var subdomainTakeoverProviders = []takeoverProvider{
 			"404 Web Site not found.",
 			"Our services aren't available right now",
 		},
+		// Azure App Service / IIS edge identifiers. The 404 page comes
+		// straight from the IIS layer, so "Microsoft-IIS" in Server
+		// pairs cleanly with the body fingerprint. Azure-specific
+		// custom headers (x-ms-*) are also unmistakable.
+		headerFingerprints: []headerFingerprint{
+			{name: "Server", value: "Microsoft-IIS"},
+			{name: "Server", value: "Microsoft-Azure"},
+			{name: "x-ms-request-id"},
+			{name: "x-powered-by", value: "ASP.NET"},
+		},
 		statuses: []int{http.StatusNotFound},
 		guidance: "Re-deploy the Azure resource with the exact name the hostname expects, or remove the CNAME if the service has been decommissioned.",
 	},
@@ -159,6 +218,16 @@ var subdomainTakeoverProviders = []takeoverProvider{
 		cnameSuffixes: []string{".fastly.net"},
 		fingerprints: []string{
 			"Fastly error: unknown domain",
+		},
+		// X-Served-By: cache-<pop> and the Fastly Via signature are the
+		// canonical edge markers. A bare "Varnish" Server header on its
+		// own is too generic - Varnish runs in many places - so we key
+		// on the headers Fastly's edge actually stamps.
+		headerFingerprints: []headerFingerprint{
+			{name: "X-Served-By", value: "cache-"},
+			{name: "Via", value: "varnish"},
+			{name: "X-Cache", value: "HIT"},
+			{name: "X-Timer"},
 		},
 		// Fastly's "unknown domain" message ships on 500 status when the
 		// edge has no service mapped to the hostname; some configurations
@@ -171,6 +240,14 @@ var subdomainTakeoverProviders = []takeoverProvider{
 		cnameSuffixes: []string{".myshopify.com"},
 		fingerprints: []string{
 			"Sorry, this shop is currently unavailable.",
+		},
+		// Shopify stamps its custom headers on every storefront response,
+		// claimed or not. Pairing one of these with the body fingerprint
+		// is "the request reached Shopify" + "Shopify has no shop here".
+		headerFingerprints: []headerFingerprint{
+			{name: "x-shopid"},
+			{name: "x-shopify-stage"},
+			{name: "Server", value: "ShopifyCloud"},
 		},
 		guidance: "Attach the hostname to the Shopify store under the account you control, or remove the CNAME if the store has been closed.",
 	},
@@ -332,16 +409,34 @@ func (c *SubdomainTakeover) Run(ctx context.Context, client *httpclient.Client, 
 	return []Finding{f}, nil
 }
 
-// evaluateHost runs the two-stage check (CNAME match, provider edge
-// fingerprint) for one hostname. A nil finding return means "not
-// vulnerable" and is cached as such; a non-nil finding return means
-// the CNAME + edge response both confirmed the takeover.
+// evaluateHost runs the two-stage check for one hostname. The CNAME-
+// gated path runs first - it carries the strongest evidence (a dangling
+// DNS chain we can name end-to-end). When DNS does not surface a known
+// provider (CDN proxy in front, A record straight to a provider IP,
+// third-party DNS that hides the chain), the fingerprint-only path
+// fires off one probe and looks for a provider's body+header pair in
+// the response. A nil finding return means "not vulnerable" and is
+// cached as such.
 func (c *SubdomainTakeover) evaluateHost(ctx context.Context, client *httpclient.Client, sc *scope.Scope, u *url.URL, host string) (*Finding, error) {
+	finding, err := c.evaluateViaDNS(ctx, client, sc, u, host)
+	if err != nil {
+		return nil, err
+	}
+	if finding != nil {
+		return finding, nil
+	}
+	return c.evaluateViaFingerprint(ctx, client, sc, u)
+}
+
+// evaluateViaDNS is the original two-signal check: CNAME match + body
+// fingerprint. Returns nil/nil when DNS does not point at a known
+// provider so the caller can fall back to the fingerprint-only path.
+func (c *SubdomainTakeover) evaluateViaDNS(ctx context.Context, client *httpclient.Client, sc *scope.Scope, u *url.URL, host string) (*Finding, error) {
 	cname, err := subdomainTakeoverLookupCNAME(ctx, host)
 	if err != nil {
 		// A LookupCNAME failure is not by itself a takeover signal: many
-		// hostnames legitimately have no CNAME and just an A record. Bail
-		// without crying wolf.
+		// hostnames legitimately have no CNAME and just an A record. Let
+		// the fingerprint-only path decide.
 		return nil, nil
 	}
 	cnameNormalized := strings.TrimSuffix(strings.ToLower(cname), ".")
@@ -354,16 +449,9 @@ func (c *SubdomainTakeover) evaluateHost(ctx context.Context, client *httpclient
 		return nil, nil
 	}
 
-	// Build the probe URL: the host's own root. Using the root rather
-	// than p.URL means a deep-link in the crawl still surfaces the
-	// edge's claim-this fingerprint, which providers serve uniformly
-	// regardless of path.
-	probeURL := (&url.URL{Scheme: u.Scheme, Host: u.Host, Path: "/"}).String()
-	if sc != nil {
-		pu, perr := url.Parse(probeURL)
-		if perr != nil || !sc.Allows(pu) {
-			return nil, nil
-		}
+	probeURL, ok := c.buildProbeURL(sc, u)
+	if !ok {
+		return nil, nil
 	}
 
 	// NXDOMAIN on the CNAME target is itself proof: the upstream
@@ -372,20 +460,67 @@ func (c *SubdomainTakeover) evaluateHost(ctx context.Context, client *httpclient
 	// connection / resolution error in that case.
 	if _, hostErr := subdomainTakeoverLookupHost(ctx, cnameNormalized); hostErr != nil {
 		if isDNSNotFound(hostErr) {
-			return c.buildFinding(probeURL, provider, cnameNormalized, 0, "", "CNAME target resolves to NXDOMAIN; the upstream resource has been released."), nil
+			return c.buildDNSFinding(probeURL, provider, cnameNormalized, 0, "", "CNAME target resolves to NXDOMAIN; the upstream resource has been released."), nil
 		}
 		// Other lookup errors (transient) leave the question open; the
 		// edge probe below decides.
 	}
 
-	confirmed, status, body, probeErr := c.probe(ctx, client, sc, probeURL, provider)
+	status, _, body, probeErr := c.fetchProbe(ctx, client, sc, probeURL)
 	if probeErr != nil {
 		return nil, probeErr
 	}
-	if !confirmed {
+	if status == 0 || !matchesFingerprint(status, body, provider) {
 		return nil, nil
 	}
-	return c.buildFinding(probeURL, provider, cnameNormalized, status, body, ""), nil
+	return c.buildDNSFinding(probeURL, provider, cnameNormalized, status, string(body), ""), nil
+}
+
+// evaluateViaFingerprint is the DNS-blind path: probe the host root
+// once and walk every provider, requiring both the body fingerprint
+// (the "claim-this" message) AND a provider-identifying header
+// (Server, Via, x-amz-*, etc.). Body alone is too weak without DNS
+// confirmation - a benign mirror could echo the same string - but
+// body+header together pins the response to the actual SaaS edge.
+//
+// Severity is Medium for these findings: without the CNAME chain we
+// can name, the resource may be fronted by a proxy / CDN that limits
+// trivial claimability, so the operator should verify the DNS
+// configuration before treating this as a guaranteed takeover.
+func (c *SubdomainTakeover) evaluateViaFingerprint(ctx context.Context, client *httpclient.Client, sc *scope.Scope, u *url.URL) (*Finding, error) {
+	probeURL, ok := c.buildProbeURL(sc, u)
+	if !ok {
+		return nil, nil
+	}
+	status, headers, body, err := c.fetchProbe(ctx, client, sc, probeURL)
+	if err != nil {
+		return nil, err
+	}
+	if status == 0 {
+		return nil, nil
+	}
+	for i := range subdomainTakeoverProviders {
+		p := &subdomainTakeoverProviders[i]
+		if matchesProviderEdge(status, headers, body, p) {
+			return c.buildFingerprintFinding(probeURL, p, status, headers, string(body)), nil
+		}
+	}
+	return nil, nil
+}
+
+// buildProbeURL returns the host root URL and a "in scope" flag.
+// Probing the root rather than p.URL means a deep-link in the crawl
+// still surfaces the edge's claim-this fingerprint, which providers
+// serve uniformly regardless of path. A nil scope is permissive.
+func (c *SubdomainTakeover) buildProbeURL(sc *scope.Scope, u *url.URL) (string, bool) {
+	probeURL := (&url.URL{Scheme: u.Scheme, Host: u.Host, Path: "/"}).String()
+	if sc != nil {
+		pu, perr := url.Parse(probeURL)
+		if perr != nil || !sc.Allows(pu) {
+			return "", false
+		}
+	}
+	return probeURL, true
 }
 
 // matchProvider returns the provider whose CNAME suffix list contains
@@ -425,36 +560,33 @@ func matchProviderByHost(host string) *takeoverProvider {
 	return matchProvider(host)
 }
 
-// probe issues one GET against the provider edge and reports whether
-// the response matches the provider's claim-this fingerprint. Bodies
-// over subdomainTakeoverBodyCap are truncated; every fingerprint we
-// look for lands far inside that cap.
-func (c *SubdomainTakeover) probe(ctx context.Context, client *httpclient.Client, sc *scope.Scope, probeURL string, provider *takeoverProvider) (bool, int, string, error) {
+// fetchProbe issues one GET against the provider edge and returns the
+// raw observation: status, headers, body. Both detection paths share
+// this so the host root is probed at most once per hostname per scan.
+// status == 0 means "skipped" (transport error or out-of-scope) and is
+// the signal callers use to bail without firing.
+//
+// A connection error is consistent with the upstream resource being
+// released, but firing on it alone would noise-flag flaky networks, so
+// we report it as a silent skip rather than as confirmation.
+func (c *SubdomainTakeover) fetchProbe(ctx context.Context, client *httpclient.Client, sc *scope.Scope, probeURL string) (int, http.Header, []byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
 	if err != nil {
-		return false, 0, "", err
+		return 0, nil, nil, err
 	}
 	resp, err := client.Do(ctx, req)
 	if err != nil {
-		// A connection error on the probe is consistent with the
-		// upstream resource being released: the edge refused or timed
-		// out where a live deployment would have answered. We do not
-		// fire on this alone (too noisy across flaky networks), but
-		// surface it as a non-error so the caller can decide.
-		return false, 0, "", nil
+		return 0, nil, nil, nil
 	}
 	defer resp.Body.Close()
 	if sc != nil && resp.Request != nil && resp.Request.URL != nil && !sc.Allows(resp.Request.URL) {
-		return false, resp.StatusCode, "", nil
+		return 0, nil, nil, nil
 	}
 	body, err := httpclient.ReadBody(resp, subdomainTakeoverBodyCap)
 	if err != nil {
-		return false, resp.StatusCode, "", err
+		return resp.StatusCode, resp.Header.Clone(), nil, err
 	}
-	if !matchesFingerprint(resp.StatusCode, body, provider) {
-		return false, resp.StatusCode, string(body), nil
-	}
-	return true, resp.StatusCode, string(body), nil
+	return resp.StatusCode, resp.Header.Clone(), body, nil
 }
 
 // matchesFingerprint reports whether status + body together satisfy
@@ -463,6 +595,13 @@ func (c *SubdomainTakeover) probe(ctx context.Context, client *httpclient.Client
 // empty, any status passes the gate. The body match is mandatory and
 // uses case-sensitive substring search to keep each fingerprint
 // unambiguous.
+//
+// This is the matcher the CNAME-gated path uses; the CNAME match
+// already supplies the "this is the provider's edge" half of the
+// evidence, so body alone is enough to confirm. The DNS-blind
+// fingerprint path uses matchesProviderEdge instead, which requires
+// an additional response-header match to compensate for the missing
+// CNAME signal.
 func matchesFingerprint(status int, body []byte, provider *takeoverProvider) bool {
 	if len(provider.statuses) > 0 {
 		ok := false
@@ -478,6 +617,59 @@ func matchesFingerprint(status int, body []byte, provider *takeoverProvider) boo
 	}
 	for _, fp := range provider.fingerprints {
 		if bytesContainsString(body, fp) {
+			return true
+		}
+	}
+	return false
+}
+
+// matchesProviderEdge is the stricter, DNS-blind matcher. It requires
+// every gate to pass: status (when restricted), a body fingerprint,
+// AND at least one provider-identifying header. A provider with no
+// headerFingerprints declared cannot match through this path - body
+// alone is too weak without DNS confirmation, so we deliberately do
+// not fall through to body-only.
+func matchesProviderEdge(status int, headers http.Header, body []byte, provider *takeoverProvider) bool {
+	if len(provider.headerFingerprints) == 0 {
+		return false
+	}
+	if !matchesFingerprint(status, body, provider) {
+		return false
+	}
+	for _, hf := range provider.headerFingerprints {
+		if matchesHeaderFingerprint(headers, hf) {
+			return true
+		}
+	}
+	return false
+}
+
+// matchesHeaderFingerprint reports whether headers contains a value
+// for hf.name that satisfies hf.value. The header lookup is case-
+// insensitive (http.Header handles this) and the value match is a
+// case-insensitive substring search. An empty hf.value means "header
+// must be present with any non-empty value", which is the right shape
+// for opaque identifiers like x-amz-request-id whose mere presence is
+// the signal.
+func matchesHeaderFingerprint(headers http.Header, hf headerFingerprint) bool {
+	if headers == nil || hf.name == "" {
+		return false
+	}
+	values := headers.Values(hf.name)
+	if len(values) == 0 {
+		return false
+	}
+	if hf.value == "" {
+		for _, v := range values {
+			if strings.TrimSpace(v) != "" {
+				return true
+			}
+		}
+		return false
+	}
+	needle := strings.ToLower(hf.value)
+	for _, v := range values {
+		if strings.Contains(strings.ToLower(v), needle) {
 			return true
 		}
 	}
@@ -502,7 +694,10 @@ func isDNSNotFound(err error) bool {
 	return false
 }
 
-func (c *SubdomainTakeover) buildFinding(probeURL string, provider *takeoverProvider, cname string, status int, bodyPreview, dnsNote string) *Finding {
+// buildDNSFinding emits a finding for the CNAME-confirmed path. The
+// CNAME chain we can name end-to-end gives unambiguous proof the
+// hostname is delegated to the provider, so severity is High.
+func (c *SubdomainTakeover) buildDNSFinding(probeURL string, provider *takeoverProvider, cname string, status int, bodyPreview, dnsNote string) *Finding {
 	var detailLines []string
 	detailLines = append(detailLines, fmt.Sprintf("Hostname resolves via CNAME to %q, which matches %s's edge.", cname, provider.name))
 	if dnsNote != "" {
@@ -541,4 +736,89 @@ func (c *SubdomainTakeover) buildFinding(probeURL string, provider *takeoverProv
 		Evidence:  BuildEvidence("GET", probeURL, status, headers, preview),
 		DedupeKey: MakeKey("subdomain-takeover", ScopeHost, probeURL, "cname:"+cname, "provider:"+provider.name),
 	}
+}
+
+// buildFingerprintFinding emits a finding for the DNS-blind path: body
+// fingerprint AND a provider-identifying header both matched but the
+// CNAME chain we resolved did not pin the hostname to the provider.
+// Severity is Medium: the provider's edge is clearly serving the
+// unclaimed page (otherwise we would not have matched), but without
+// the DNS chain we cannot tell whether the resource is fronted by a
+// proxy/CDN that limits trivial claimability, so the operator should
+// verify the DNS configuration before treating it as a guaranteed
+// takeover.
+func (c *SubdomainTakeover) buildFingerprintFinding(probeURL string, provider *takeoverProvider, status int, headers http.Header, bodyPreview string) *Finding {
+	matchedHeaders := matchedHeaderSummary(headers, provider)
+	detailLines := []string{
+		fmt.Sprintf("The edge at this hostname responded with status %d, the canonical %s \"unclaimed resource\" body, and the provider-identifying response header(s) %s.", status, provider.name, matchedHeaders),
+		"DNS does not surface a CNAME to this provider, so the chain is either A-recorded straight at the provider, fronted by a CDN/proxy that hides the upstream, or served through a third-party DNS that flattens it. Either way, the public-facing edge is the provider's and the upstream resource is unclaimed.",
+		"Verify who controls the DNS record and whether the upstream resource can be claimed under the provider's account model; if so, an attacker can host arbitrary content at this hostname with valid TLS and inherit cookies the parent domain scopes to it.",
+	}
+
+	preview := bodyPreview
+	const previewCap = 512
+	if len(preview) > previewCap {
+		preview = preview[:previewCap] + "..."
+	}
+
+	evidenceHeaders := http.Header{}
+	evidenceHeaders.Set("X-Subdomain-Takeover-Provider", provider.name)
+	evidenceHeaders.Set("X-Subdomain-Takeover-Detection", "response-fingerprint")
+	for _, hf := range provider.headerFingerprints {
+		for _, v := range headers.Values(hf.name) {
+			evidenceHeaders.Add(hf.name, v)
+		}
+	}
+
+	return &Finding{
+		Check:    "subdomain-takeover",
+		Target:   probeURL,
+		URL:      probeURL,
+		Severity: SeverityMedium,
+		Title:    fmt.Sprintf("possible subdomain takeover: %s edge serves unclaimed-resource page", provider.name),
+		Detail:   fmt.Sprintf("The hostname's edge response identifies it as %s and matches the provider's canonical \"unclaimed resource\" page, but DNS does not surface a CNAME to this provider. Each entry below explains the evidence.", provider.name),
+		Details:  detailLines,
+		CWE:      "CWE-1104",
+		OWASP:    "A05:2021 Security Misconfiguration",
+		Remediation: provider.guidance + " " +
+			"Confirm the hostname's DNS chain (CNAME, A, fronting proxies) before treating this as exploitable - the edge response alone proves the upstream is unclaimed, but a fronting proxy may limit claimability. " +
+			"As a longer-term control, gate DNS record creation on proof of upstream ownership and add periodic checks that probe known SaaS edges for unclaimed-resource fingerprints regardless of DNS shape.",
+		Evidence:  BuildEvidence("GET", probeURL, status, evidenceHeaders, preview),
+		DedupeKey: MakeKey("subdomain-takeover", ScopeHost, probeURL, "fingerprint", "provider:"+provider.name),
+	}
+}
+
+// matchedHeaderSummary renders the provider-identifying headers that
+// were present on the response into a human-readable list, for the
+// finding's Details. Keeps the rendering deterministic by iterating
+// over the provider's declared headerFingerprints in order.
+func matchedHeaderSummary(headers http.Header, provider *takeoverProvider) string {
+	var summaries []string
+	renderedHeader := map[string]bool{}
+	for _, fingerprint := range provider.headerFingerprints {
+		if !matchesHeaderFingerprint(headers, fingerprint) {
+			continue
+		}
+		// Render once per header name even if the provider declared
+		// multiple value variants on the same header.
+		canonicalName := http.CanonicalHeaderKey(fingerprint.name)
+		if renderedHeader[canonicalName] {
+			continue
+		}
+		renderedHeader[canonicalName] = true
+		values := headers.Values(fingerprint.name)
+		if len(values) == 0 {
+			continue
+		}
+		const headerValueCap = 80
+		headerValue := values[0]
+		if len(headerValue) > headerValueCap {
+			headerValue = headerValue[:headerValueCap] + "..."
+		}
+		summaries = append(summaries, fmt.Sprintf("%s: %s", canonicalName, headerValue))
+	}
+	if len(summaries) == 0 {
+		return "(none captured)"
+	}
+	return strings.Join(summaries, "; ")
 }

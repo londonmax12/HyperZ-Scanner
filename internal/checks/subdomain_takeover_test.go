@@ -452,3 +452,301 @@ func TestSubdomainTakeoverMatchesFingerprintAnyStatus(t *testing.T) {
 		t.Errorf("expected match with empty statuses list and 500")
 	}
 }
+
+// fakeEdgeWithHeaders is fakeEdge with caller-specified response
+// headers, used by the fingerprint-only path tests where the
+// provider-identifying Server / Via / x-amz-* headers are the
+// discriminator.
+func fakeEdgeWithHeaders(t *testing.T, status int, headers map[string]string, body string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for k, v := range headers {
+			w.Header().Set(k, v)
+		}
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestSubdomainTakeoverFingerprintOnlyS3(t *testing.T) {
+	// Hostname's CNAME does not resolve to a known provider (third-party
+	// DNS flattens it, CDN proxy in front, etc.) but the edge response
+	// is unmistakably S3 serving NoSuchBucket. Body + header together
+	// fire the fingerprint-only path at Medium severity.
+	srv := fakeEdgeWithHeaders(t, http.StatusNotFound, map[string]string{
+		"Server":           "AmazonS3",
+		"x-amz-request-id": "ABCDEF0123456789",
+	}, "<Error><Code>NoSuchBucket</Code><Message>The specified bucket does not exist</Message></Error>")
+	u, _ := url.Parse(srv.URL)
+
+	// CNAME points at an unrelated internal name - no provider match
+	// via DNS.
+	withFakeCNAME(t, map[string]string{u.Hostname(): "internal-front.example.com."})
+	withFakeLookupHost(t, nil)
+
+	c := &SubdomainTakeover{}
+	findings, err := c.Run(context.Background(), newTestClient(t), nil, page.FromURL(srv.URL+"/some/path"))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("want 1 finding, got %d: %+v", len(findings), findings)
+	}
+	f := findings[0]
+	if f.Severity != SeverityMedium {
+		t.Errorf("severity = %q, want medium for fingerprint-only path", f.Severity)
+	}
+	if !strings.Contains(f.Title, "AWS S3") {
+		t.Errorf("title = %q, want it to mention AWS S3", f.Title)
+	}
+	if !strings.Contains(strings.Join(f.Details, "\n"), "AmazonS3") {
+		t.Errorf("expected matched-header summary to include AmazonS3, got: %+v", f.Details)
+	}
+	if !strings.Contains(strings.Join(f.Details, "\n"), "DNS does not surface") {
+		t.Errorf("expected detail to call out DNS-blind detection, got: %+v", f.Details)
+	}
+}
+
+func TestSubdomainTakeoverFingerprintOnlyHeroku(t *testing.T) {
+	srv := fakeEdgeWithHeaders(t, http.StatusNotFound, map[string]string{
+		"Via":    "1.1 vegur",
+		"Server": "Cowboy",
+	}, "There's nothing here, yet.")
+	u, _ := url.Parse(srv.URL)
+	withFakeCNAME(t, map[string]string{u.Hostname(): "front.example.com."})
+	withFakeLookupHost(t, nil)
+
+	c := &SubdomainTakeover{}
+	findings, err := c.Run(context.Background(), newTestClient(t), nil, page.FromURL(srv.URL))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("want 1 finding, got %d", len(findings))
+	}
+	if !strings.Contains(findings[0].Title, "Heroku") {
+		t.Errorf("title = %q, want Heroku", findings[0].Title)
+	}
+}
+
+func TestSubdomainTakeoverFingerprintOnlyGitHubPages(t *testing.T) {
+	srv := fakeEdgeWithHeaders(t, http.StatusNotFound, map[string]string{
+		"Server": "GitHub.com",
+	}, "There isn't a GitHub Pages site here.")
+	u, _ := url.Parse(srv.URL)
+	withFakeCNAME(t, map[string]string{u.Hostname(): "proxy.cdn.example."})
+	withFakeLookupHost(t, nil)
+
+	c := &SubdomainTakeover{}
+	findings, err := c.Run(context.Background(), newTestClient(t), nil, page.FromURL(srv.URL))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("want 1 finding, got %d", len(findings))
+	}
+	if findings[0].Severity != SeverityMedium {
+		t.Errorf("severity = %q, want medium", findings[0].Severity)
+	}
+}
+
+func TestSubdomainTakeoverFingerprintBodyOnlyNoFire(t *testing.T) {
+	// Body matches an S3 fingerprint but no S3-identifying header is
+	// present. The DNS-blind path must NOT fire on body alone - a
+	// benign mirror or status page could echo the same string. (The
+	// CNAME-gated path also does not fire because CNAME does not match
+	// a known provider.)
+	srv := fakeEdgeWithHeaders(t, http.StatusNotFound, map[string]string{
+		"Server": "nginx",
+	}, "<Code>NoSuchBucket</Code> error here from an unrelated server")
+	u, _ := url.Parse(srv.URL)
+	withFakeCNAME(t, map[string]string{u.Hostname(): "front.example.com."})
+	withFakeLookupHost(t, nil)
+
+	c := &SubdomainTakeover{}
+	findings, err := c.Run(context.Background(), newTestClient(t), nil, page.FromURL(srv.URL))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("want 0 findings (body without header is too weak), got %d: %+v", len(findings), findings)
+	}
+}
+
+func TestSubdomainTakeoverFingerprintHeaderOnlyNoFire(t *testing.T) {
+	// Header identifies S3 but the body is a healthy page. This is a
+	// claimed S3 bucket serving real content - the fingerprint-only
+	// path must not fire on header alone.
+	srv := fakeEdgeWithHeaders(t, http.StatusOK, map[string]string{
+		"Server":           "AmazonS3",
+		"x-amz-request-id": "ABCDEF",
+	}, "<html>Welcome to my static site</html>")
+	u, _ := url.Parse(srv.URL)
+	withFakeCNAME(t, map[string]string{u.Hostname(): "front.example.com."})
+	withFakeLookupHost(t, nil)
+
+	c := &SubdomainTakeover{}
+	findings, err := c.Run(context.Background(), newTestClient(t), nil, page.FromURL(srv.URL))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("want 0 findings (header without body is a claimed deployment), got %d: %+v", len(findings), findings)
+	}
+}
+
+func TestSubdomainTakeoverFingerprintWrongStatusNoFire(t *testing.T) {
+	// Body + header both match S3 but the status is 200, not 404. The
+	// provider's status gate is [404]; serving the NoSuchBucket body
+	// on 200 is not a real S3 unclaimed-bucket response (probably a
+	// custom error page that happens to embed the string).
+	srv := fakeEdgeWithHeaders(t, http.StatusOK, map[string]string{
+		"Server":           "AmazonS3",
+		"x-amz-request-id": "ABCDEF",
+	}, "<Code>NoSuchBucket</Code>")
+	u, _ := url.Parse(srv.URL)
+	withFakeCNAME(t, map[string]string{u.Hostname(): "front.example.com."})
+	withFakeLookupHost(t, nil)
+
+	c := &SubdomainTakeover{}
+	findings, err := c.Run(context.Background(), newTestClient(t), nil, page.FromURL(srv.URL))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("want 0 findings (status outside provider gate), got %d: %+v", len(findings), findings)
+	}
+}
+
+func TestSubdomainTakeoverFingerprintDedupesPerHost(t *testing.T) {
+	// Fingerprint-only findings must cache the same way as CNAME-gated
+	// ones: two crawled pages on the same host should hit the edge
+	// once and re-emit the cached finding rewritten to the new URL.
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.Header().Set("Server", "AmazonS3")
+		w.Header().Set("x-amz-request-id", "ABCDEF")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte("<Code>NoSuchBucket</Code>"))
+	}))
+	t.Cleanup(srv.Close)
+	u, _ := url.Parse(srv.URL)
+	withFakeCNAME(t, map[string]string{u.Hostname(): "front.example.com."})
+	withFakeLookupHost(t, nil)
+
+	c := &SubdomainTakeover{}
+	p1 := page.FromURL(srv.URL + "/a")
+	p2 := page.FromURL(srv.URL + "/b")
+
+	f1, err := c.Run(context.Background(), newTestClient(t), nil, p1)
+	if err != nil {
+		t.Fatalf("Run p1: %v", err)
+	}
+	f2, err := c.Run(context.Background(), newTestClient(t), nil, p2)
+	if err != nil {
+		t.Fatalf("Run p2: %v", err)
+	}
+	if hits != 1 {
+		t.Fatalf("edge hits = %d, want 1 (second call should hit cache)", hits)
+	}
+	if len(f1) != 1 || len(f2) != 1 {
+		t.Fatalf("want 1 finding per run, got %d/%d", len(f1), len(f2))
+	}
+	if f2[0].URL != srv.URL+"/b" {
+		t.Errorf("cached URL = %q, want %q", f2[0].URL, srv.URL+"/b")
+	}
+}
+
+func TestSubdomainTakeoverCNAMEMatchStillBeatsFingerprintPath(t *testing.T) {
+	// When BOTH paths would match (CNAME points at the provider AND
+	// the response has body+header), the CNAME-gated path wins (it
+	// runs first and returns) and severity is High, not Medium.
+	srv := fakeEdgeWithHeaders(t, http.StatusNotFound, map[string]string{
+		"Server":           "AmazonS3",
+		"x-amz-request-id": "ABCDEF",
+	}, "<Code>NoSuchBucket</Code>")
+	u, _ := url.Parse(srv.URL)
+	withFakeCNAME(t, map[string]string{u.Hostname(): "abandoned-bucket.s3.amazonaws.com."})
+	withFakeLookupHost(t, nil)
+
+	c := &SubdomainTakeover{}
+	findings, err := c.Run(context.Background(), newTestClient(t), nil, page.FromURL(srv.URL))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("want 1 finding, got %d", len(findings))
+	}
+	if findings[0].Severity != SeverityHigh {
+		t.Errorf("severity = %q, want high (CNAME path should win)", findings[0].Severity)
+	}
+	if !strings.Contains(findings[0].Title, "dangling") {
+		t.Errorf("title = %q, want CNAME-path wording (\"dangling\")", findings[0].Title)
+	}
+}
+
+func TestSubdomainTakeoverMatchesHeaderFingerprint(t *testing.T) {
+	headers := http.Header{}
+	headers.Set("Server", "AmazonS3")
+	headers.Set("X-Amz-Request-Id", "DEADBEEF0123")
+
+	tests := []struct {
+		name string
+		hf   headerFingerprint
+		want bool
+	}{
+		{"server substring matches", headerFingerprint{name: "Server", value: "AmazonS3"}, true},
+		{"server substring case-insensitive", headerFingerprint{name: "server", value: "amazons3"}, true},
+		{"server substring no match", headerFingerprint{name: "Server", value: "nginx"}, false},
+		{"empty value means presence", headerFingerprint{name: "x-amz-request-id"}, true},
+		{"empty value missing header", headerFingerprint{name: "x-unknown"}, false},
+		{"unknown header with value", headerFingerprint{name: "x-other", value: "x"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := matchesHeaderFingerprint(headers, tt.hf); got != tt.want {
+				t.Errorf("matchesHeaderFingerprint(%+v) = %v, want %v", tt.hf, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSubdomainTakeoverMatchesProviderEdge(t *testing.T) {
+	provider := &takeoverProvider{
+		name:         "Test",
+		fingerprints: []string{"unclaimed"},
+		statuses:     []int{http.StatusNotFound},
+		headerFingerprints: []headerFingerprint{
+			{name: "Server", value: "TestEdge"},
+		},
+	}
+	hOK := http.Header{"Server": []string{"TestEdge"}}
+	hBad := http.Header{"Server": []string{"nginx"}}
+
+	if !matchesProviderEdge(404, hOK, []byte("...unclaimed..."), provider) {
+		t.Errorf("expected match when status + body + header all align")
+	}
+	if matchesProviderEdge(404, hBad, []byte("...unclaimed..."), provider) {
+		t.Errorf("must not match with wrong header")
+	}
+	if matchesProviderEdge(404, hOK, []byte("nothing here"), provider) {
+		t.Errorf("must not match with wrong body")
+	}
+	if matchesProviderEdge(200, hOK, []byte("...unclaimed..."), provider) {
+		t.Errorf("must not match with wrong status")
+	}
+
+	// A provider with no headerFingerprints declared cannot match
+	// through the DNS-blind path - body alone is too weak.
+	bodyOnly := &takeoverProvider{
+		name:         "BodyOnly",
+		fingerprints: []string{"unclaimed"},
+		statuses:     []int{http.StatusNotFound},
+	}
+	if matchesProviderEdge(404, hOK, []byte("...unclaimed..."), bodyOnly) {
+		t.Errorf("provider without header fingerprints must not match via DNS-blind path")
+	}
+}
