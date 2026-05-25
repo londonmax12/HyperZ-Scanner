@@ -724,6 +724,122 @@ func TestIsJWTShapeRejectsNonJWT(t *testing.T) {
 	}
 }
 
+func TestJWTVulnsKidAsURLPassiveAdvisory(t *testing.T) {
+	// Token's kid is structured as a URL. The check must emit a Low
+	// passive advisory without any active fetch (the active fetch path
+	// is the OOB-confirmed jku/x5u case, not this one).
+	token := mintJWT(t,
+		map[string]any{"alg": "HS256", "kid": "https://attacker.example/key.pem"},
+		map[string]any{"sub": "alice"},
+		"a-key-not-in-wordlist-QZX7",
+	)
+	p := page.Page{
+		URL:     "https://example.com/me",
+		Status:  200,
+		Headers: http.Header{"Set-Cookie": []string{"session=" + token + "; Path=/"}},
+		Fetched: true,
+	}
+	findings, err := (&JWTVulns{}).Run(context.Background(), newTestClient(t), nil, p)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !findingsContainTitle(findings, "kid header is a URL") {
+		t.Fatalf("expected kid-as-URL advisory, got: %+v", titles(findings))
+	}
+	f := findingByTitle(findings, "kid header is a URL")
+	if f.Severity != SeverityLow {
+		t.Errorf("Severity = %q, want low", f.Severity)
+	}
+}
+
+func TestJWTVulnsKidAsURLNotFiredForOpaqueKid(t *testing.T) {
+	// Opaque kid (no URL shape) must not trigger the advisory.
+	token := mintJWT(t,
+		map[string]any{"alg": "HS256", "kid": "key-2024-04"},
+		map[string]any{"sub": "alice"},
+		"another-key-not-in-wordlist-XYZ",
+	)
+	p := page.Page{
+		URL:     "https://example.com/me",
+		Status:  200,
+		Headers: http.Header{"Set-Cookie": []string{"session=" + token + "; Path=/"}},
+		Fetched: true,
+	}
+	findings, err := (&JWTVulns{}).Run(context.Background(), newTestClient(t), nil, p)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if findingsContainTitle(findings, "kid header is a URL") {
+		t.Fatalf("did not expect kid-as-URL advisory on opaque kid: %+v", titles(findings))
+	}
+}
+
+func TestKidLooksLikeURLDetectsCommonForms(t *testing.T) {
+	cases := map[string]bool{
+		"https://attacker.example/key.pem": true,
+		"http://k.example/jwks":            true,
+		"//k.example/jwks":                 true,
+		"key-2024-01":                      false,
+		"":                                 false,
+		"main":                             false,
+		"ftp://k/key":                      false,
+	}
+	for in, want := range cases {
+		if got := kidLooksLikeURL(in); got != want {
+			t.Errorf("kidLooksLikeURL(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
+
+func TestJWTVulnsJKUOOBSplitPerFieldRegistersTwoCanaries(t *testing.T) {
+	// The OOB probe should mint one canary per field (jku and x5u),
+	// in their own tokens. Even when no callback ever lands, the
+	// listener's per-check Registrations list should have two entries
+	// - one tagged field=jku and one tagged field=x5u - so the
+	// attribution path covers each header in isolation.
+	oobSrv := startOOB(t)
+	srv := newOOBHostWrapper(oobSrv)
+
+	hardSecret := "qLY7Wm9aXdNyV3xPbZ8KsR2u"
+	token := mintJWT(t, nil, map[string]any{"sub": "alice"}, hardSecret)
+	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Set-Cookie", "session="+token+"; Path=/")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte("homepage"))
+	}))
+	defer httpSrv.Close()
+
+	resp, err := http.Get(httpSrv.URL)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	resp.Body.Close()
+	p := page.Page{
+		URL:     httpSrv.URL,
+		Status:  resp.StatusCode,
+		Headers: resp.Header,
+		Fetched: true,
+	}
+
+	check := &JWTVulns{}
+	ctx := WithOOB(context.Background(), srv)
+	if _, err := check.Run(ctx, newTestClient(t), nil, p); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	regs := srv.Registrations((&JWTVulns{}).Name())
+	fields := map[string]int{}
+	for _, r := range regs {
+		fields[r.Extra["field"]]++
+	}
+	if fields["jku"] != 1 {
+		t.Errorf("expected exactly 1 jku registration, got %d (all=%+v)", fields["jku"], fields)
+	}
+	if fields["x5u"] != 1 {
+		t.Errorf("expected exactly 1 x5u registration, got %d (all=%+v)", fields["x5u"], fields)
+	}
+}
+
 // findingsContainTitle reports whether any finding's Title contains
 // substr. Tests assert against substring rather than full title so a
 // future title tweak doesn't break the suite.

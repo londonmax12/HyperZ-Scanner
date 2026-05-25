@@ -269,20 +269,26 @@ func (c *JWTVulns) Run(ctx context.Context, client *httpclient.Client, sc *scope
 
 // probeToken runs every sub-probe for one token in the order:
 // offline HS256 brute, then the network probes (alg=none, kid
-// traversal, kid SQLi), then the passive jku/x5u advisory. The
+// traversal, kid SQLi, asymmetric->HMAC algorithm confusion, crit
+// abuse), then the passive jku/x5u and kid-as-URL advisories. The
 // network probes share a single oracle so we don't issue two
 // baselines per token.
 func (c *JWTVulns) probeToken(ctx context.Context, client *httpclient.Client, target string, src jwtSource, parsed *parsedJWT) []Finding {
 	var findings []Finding
 
+	weakSecret, weakSecretFound := "", false
 	alg := strings.ToUpper(asString(parsed.header["alg"]))
 	if hashFor(alg) != nil {
 		if secret, ok := tryWeakHMACSecret(parsed, alg); ok {
+			weakSecret, weakSecretFound = secret, true
 			findings = append(findings, buildWeakSecretFinding(target, parsed, alg, secret))
 		}
 	}
 
 	if f := buildJKUFinding(target, parsed); f != nil {
+		findings = append(findings, *f)
+	}
+	if f := buildKidAsURLFinding(target, parsed); f != nil {
 		findings = append(findings, *f)
 	}
 
@@ -308,8 +314,10 @@ func (c *JWTVulns) probeToken(ctx context.Context, client *httpclient.Client, ta
 		return findings
 	}
 
+	algNoneAccepted := false
 	if f := c.probeAlgNone(ctx, client, target, src, parsed, oracle); f != nil {
 		findings = append(findings, *f)
+		algNoneAccepted = true
 	}
 	if alg == "" || hashFor(alg) != nil {
 		// kid manipulations only re-sign in HMAC form; they don't
@@ -332,6 +340,16 @@ func (c *JWTVulns) probeToken(ctx context.Context, client *httpclient.Client, ta
 				findings = append(findings, *f)
 				break
 			}
+		}
+	}
+	if ctx.Err() == nil {
+		if f := c.probeAlgConfusion(ctx, client, target, src, parsed, oracle); f != nil {
+			findings = append(findings, *f)
+		}
+	}
+	if ctx.Err() == nil {
+		if f := c.probeCritAbuse(ctx, client, target, src, parsed, oracle, weakSecret, weakSecretFound, algNoneAccepted); f != nil {
+			findings = append(findings, *f)
 		}
 	}
 	return findings
@@ -652,11 +670,11 @@ func buildWeakSecretFinding(target string, parsed *parsedJWT, alg, secret string
 	}
 }
 
-// probeOOBKeyURL forges a token whose JOSE header carries canary URLs
-// in jku and x5u and sends it through the source channel. Both fields
-// are planted in one token so a single probe covers both code paths;
-// the canaries have distinct tokens so the Drain hit attributes the
-// fetch to whichever field the validator honoured. alg is rewritten
+// probeOOBKeyURL forges JWTs whose JOSE headers carry canary URLs in
+// the jku and x5u fields and sends them through the source channel.
+// Each field is exercised in its own token so attribution is clean
+// and a validator that rejects tokens carrying any unknown header
+// still gets a fair test of each field in isolation. alg is rewritten
 // to RS256 because most JWT libraries gate jku/x5u handling on an
 // asymmetric algorithm; the signature bytes are garbage because the
 // validator fetches the key URL before signature verification (or
@@ -664,32 +682,38 @@ func buildWeakSecretFinding(target string, parsed *parsedJWT, alg, secret string
 // signal). No finding is emitted here: Drain emits one Critical
 // finding per registration whose canary received a callback.
 func (c *JWTVulns) probeOOBKeyURL(ctx context.Context, client *httpclient.Client, srv oob.Server, target string, src jwtSource, parsed *parsedJWT) error {
-	jkuCanary := srv.Register((&JWTVulns{}).Name(), map[string]string{
-		"target":       target,
-		"field":        "jku",
-		"original_alg": asString(parsed.header["alg"]),
-		"token_fp":     tokenFingerprint(src.raw),
-	})
-	x5uCanary := srv.Register((&JWTVulns{}).Name(), map[string]string{
-		"target":       target,
-		"field":        "x5u",
-		"original_alg": asString(parsed.header["alg"]),
-		"token_fp":     tokenFingerprint(src.raw),
-	})
-
-	hdr := cloneHeader(parsed.header)
-	hdr["alg"] = "RS256"
-	hdr["jku"] = jkuCanary.HTTPURL
-	hdr["x5u"] = x5uCanary.HTTPURL
-	if _, ok := hdr["kid"]; !ok {
-		hdr["kid"] = "hyperz-probe"
-	}
-	token, err := assembleToken(hdr, parsed.payloadRaw, []byte("hyperz-probe-signature"))
-	if err != nil {
-		return err
-	}
-	if _, err := c.send(ctx, client, target, src, token); err != nil {
-		return err
+	for _, field := range []string{"jku", "x5u"} {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		canary := srv.Register((&JWTVulns{}).Name(), map[string]string{
+			"target":       target,
+			"field":        field,
+			"original_alg": asString(parsed.header["alg"]),
+			"token_fp":     tokenFingerprint(src.raw),
+		})
+		hdr := cloneHeader(parsed.header)
+		hdr["alg"] = "RS256"
+		hdr[field] = canary.HTTPURL
+		// Mutually exclude the other field so a validator that
+		// dereferences only the first header it sees does not
+		// silently swallow this canary in favour of a stale value
+		// from the original token.
+		if field == "jku" {
+			delete(hdr, "x5u")
+		} else {
+			delete(hdr, "jku")
+		}
+		if _, ok := hdr["kid"]; !ok {
+			hdr["kid"] = "hyperz-probe"
+		}
+		token, err := assembleToken(hdr, parsed.payloadRaw, []byte("hyperz-probe-signature"))
+		if err != nil {
+			return err
+		}
+		if _, err := c.send(ctx, client, target, src, token); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -798,6 +822,59 @@ func buildJKUFinding(target string, parsed *parsedJWT) *Finding {
 		},
 		DedupeKey: MakeKey((&JWTVulns{}).Name(), ScopeHost, target, "jku-x5u", field),
 	}
+}
+
+// buildKidAsURLFinding emits a passive advisory when the kid header
+// value is structured as a URL. RFC 7515 does not assign URL
+// semantics to kid, but several libraries have shipped (and shipped
+// CVEs for) treating an http:// kid as a fetch target equivalent to
+// jku. The advisory exists so a reviewer notices the misuse before a
+// future library upgrade activates the URL fetch path.
+func buildKidAsURLFinding(target string, parsed *parsedJWT) *Finding {
+	kid := asString(parsed.header["kid"])
+	if !kidLooksLikeURL(kid) {
+		return nil
+	}
+	detail := fmt.Sprintf(
+		"The JWT carries a kid header structured as a URL (%q). RFC 7515 §4.1.4 defines kid as an opaque hint, not a "+
+			"URL; libraries that have historically dereferenced kid as if it were jku (multiple CVEs across "+
+			"node-jsonwebtoken downstream wrappers and Java jose-jwt forks) silently fetch attacker-controlled keys "+
+			"from this value. Active exploitation requires a controlled URL the validator reaches; this finding is "+
+			"the structural advisory.",
+		kid)
+	return &Finding{
+		Check:    (&JWTVulns{}).Name(),
+		Target:   target,
+		URL:      target,
+		Severity: SeverityLow,
+		Title:    "JWT kid header is a URL (attacker-controlled key fetch risk)",
+		Detail:   detail,
+		CWE:      "CWE-347, CWE-918",
+		OWASP:    "A05:2021 Security Misconfiguration",
+		Remediation: "Treat kid as an opaque identifier; look it up against a fixed allow-list of known key IDs and never " +
+			"feed the value into a URL fetcher. Canonicalise before lookup - reject anything containing \"://\", a " +
+			"leading \"//\", or any byte outside an allow-list of identifier characters - so a future library upgrade " +
+			"cannot reintroduce a URL fetch from kid.",
+		Evidence: &Evidence{
+			RequestURL: target,
+			Snippet:    fmt.Sprintf("Header field: kid\nValue: %s\nHeader JSON: %s", kid, string(parsed.headerRaw)),
+		},
+		DedupeKey: MakeKey((&JWTVulns{}).Name(), ScopeHost, target, "kid-as-url"),
+	}
+}
+
+// kidLooksLikeURL is the cheap URL-shape gate the kid advisory uses.
+// Matches absolute URLs (http://, https://) and protocol-relative
+// shorthand (//), which are the three forms the historical kid-as-URL
+// CVEs honoured.
+func kidLooksLikeURL(s string) bool {
+	switch {
+	case strings.HasPrefix(s, "http://"),
+		strings.HasPrefix(s, "https://"),
+		strings.HasPrefix(s, "//"):
+		return true
+	}
+	return false
 }
 
 // harvestJWTs scrapes the page for every distinct JWT-shaped token,
