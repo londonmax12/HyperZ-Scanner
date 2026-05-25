@@ -60,6 +60,7 @@ func registry(pollute bool) []checks.Check {
 		checks.InsecureDeserialization{},
 		checks.XXE{},
 		checks.GraphQLAudit{},
+		&checks.OpenAPIAudit{},
 		checks.JSLibsKnownVuln{},
 		checks.SRIMissing{},
 		checks.SourceMapExposure{},
