@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/asn1"
 	"fmt"
 	"net"
 	"net/url"
@@ -16,8 +17,10 @@ import (
 )
 
 // TLSAudit performs a single, passive TLS handshake against the target host
-// and reports on the negotiated protocol version, leaf certificate validity
-// window, and hostname coverage. It issues no HTTP request.
+// and reports on the negotiated protocol version, negotiated cipher suite,
+// OCSP stapling presence, SCT (Certificate Transparency) presence, the
+// validity windows of every certificate in the chain, and hostname
+// coverage. It issues no HTTP request.
 type TLSAudit struct{}
 
 func (TLSAudit) Name() string { return "tls-audit" }
@@ -31,6 +34,12 @@ const (
 	tlsExpirySoonWindow   = 30 * 24 * time.Hour
 	tlsDialTimeout        = 10 * time.Second
 )
+
+// sctExtensionOID is the X.509 extension carrying embedded Signed
+// Certificate Timestamps (RFC 6962 section 3.3). Public CAs embed SCTs
+// here so CT compliance survives even when the TLS terminator does not
+// deliver them over the handshake extension or stapled OCSP response.
+var sctExtensionOID = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 11129, 2, 4, 2}
 
 // tlsAuditDial is indirected so tests can intercept the network dial and
 // inject a controlled ConnectionState without spinning up a TLS server.
@@ -84,6 +93,7 @@ func (c TLSAudit) Run(ctx context.Context, _ *httpclient.Client, _ *scope.Scope,
 
 	var findings []Finding
 	findings = append(findings, c.versionFinding(target, state.Version)...)
+	findings = append(findings, c.cipherFinding(target, state.CipherSuite)...)
 
 	if len(state.PeerCertificates) == 0 {
 		findings = append(findings, Finding{
@@ -102,6 +112,9 @@ func (c TLSAudit) Run(ctx context.Context, _ *httpclient.Client, _ *scope.Scope,
 	}
 	leaf := state.PeerCertificates[0]
 	findings = append(findings, c.expiryFindings(target, leaf)...)
+	findings = append(findings, c.intermediateExpiryFindings(target, state.PeerCertificates[1:])...)
+	findings = append(findings, c.ocspStapleFinding(target, state.OCSPResponse)...)
+	findings = append(findings, c.sctFinding(target, leaf, state.SignedCertificateTimestamps)...)
 	if f, ok := c.hostnameFinding(target, host, leaf); ok {
 		findings = append(findings, f)
 	}
@@ -134,6 +147,64 @@ func (c TLSAudit) versionFinding(target string, version uint16) []Finding {
 		Remediation: "Disable TLS 1.1 and below; allow only TLS 1.2 and TLS 1.3 with modern cipher suites.",
 		DedupeKey:   MakeKey(c.Name(), ScopeHost, target, "version:"+name),
 	}}
+}
+
+// cipherFinding flags negotiated cipher suites that Go's standard library
+// classifies as insecure (RC4, 3DES, CBC-only, RSA key exchange without
+// forward secrecy). Severity is High for the worst offenders (RC4, 3DES,
+// NULL, EXPORT, anonymous) and Medium for everything else. TLS 1.3 cipher
+// suites are all acceptable and never appear in InsecureCipherSuites().
+func (c TLSAudit) cipherFinding(target string, suite uint16) []Finding {
+	if !isInsecureCipher(suite) {
+		return nil
+	}
+	name := tls.CipherSuiteName(suite)
+	severity := SeverityMedium
+	upper := strings.ToUpper(name)
+	switch {
+	case strings.Contains(upper, "RC4"),
+		strings.Contains(upper, "3DES"),
+		strings.Contains(upper, "_DES_"),
+		strings.Contains(upper, "NULL"),
+		strings.Contains(upper, "EXPORT"),
+		strings.Contains(upper, "ANON"):
+		severity = SeverityHigh
+	}
+	return []Finding{{
+		Check:       c.Name(),
+		Target:      target,
+		URL:         target,
+		Severity:    severity,
+		Title:       "weak TLS cipher suite negotiated: " + name,
+		Detail:      fmt.Sprintf("server selected %s; this suite is considered insecure (no forward secrecy, RC4/3DES, CBC, or similar weakness)", name),
+		CWE:         "CWE-327",
+		OWASP:       "A02:2021 Cryptographic Failures",
+		Remediation: "Restrict the server cipher list to AEAD suites with forward secrecy (TLS_AES_*_GCM, TLS_CHACHA20_POLY1305, TLS_ECDHE_*_GCM, TLS_ECDHE_*_CHACHA20).",
+		DedupeKey:   MakeKey(c.Name(), ScopeHost, target, "weak-cipher", name),
+	}}
+}
+
+// isInsecureCipher classifies a negotiated cipher suite by name rather
+// than by tls.InsecureCipherSuites() alone. The stdlib's list omits the
+// CBC-SHA1 ECDHE suites that modern guidance still flags (Lucky13,
+// generic padding-oracle exposure), so name-substring matching picks up
+// the broader weak set: any CBC mode, RC4, 3DES/DES, NULL, EXPORT,
+// anonymous, or static-RSA (no forward secrecy). TLS 1.3 AEAD suites
+// (AES_GCM, CHACHA20_POLY1305) contain none of these tokens and pass.
+func isInsecureCipher(id uint16) bool {
+	upper := strings.ToUpper(tls.CipherSuiteName(id))
+	switch {
+	case strings.Contains(upper, "RC4"),
+		strings.Contains(upper, "3DES"),
+		strings.Contains(upper, "_DES_"),
+		strings.Contains(upper, "NULL"),
+		strings.Contains(upper, "EXPORT"),
+		strings.Contains(upper, "ANON"),
+		strings.Contains(upper, "_CBC_"),
+		strings.HasPrefix(upper, "TLS_RSA_WITH_"):
+		return true
+	}
+	return false
 }
 
 func (c TLSAudit) expiryFindings(target string, leaf *x509.Certificate) []Finding {
@@ -192,6 +263,149 @@ func (c TLSAudit) expiryFindings(target string, leaf *x509.Certificate) []Findin
 		// Day count drifts each run; key off scope so repeated runs collapse.
 		DedupeKey: MakeKey(c.Name(), ScopeHost, target, "cert-expiry-soon"),
 	}}
+}
+
+// intermediateExpiryFindings walks PeerCertificates[1:] and applies the
+// same three-band expiry test as the leaf check. CAs rotate intermediates
+// independently of leaves and on tighter schedules, so an intermediate
+// that expires next week is a separate operational signal from a healthy
+// leaf chained off it. Findings are dedupe-keyed by chain position so
+// repeated runs collapse rather than fanning out on day-count drift.
+func (c TLSAudit) intermediateExpiryFindings(target string, intermediates []*x509.Certificate) []Finding {
+	now := tlsAuditNow()
+	var out []Finding
+	for i, cert := range intermediates {
+		role := fmt.Sprintf("intermediate #%d", i+1)
+		cn := cert.Subject.CommonName
+		posPart := fmt.Sprintf("pos=%d", i+1)
+		if now.After(cert.NotAfter) {
+			out = append(out, Finding{
+				Check:       c.Name(),
+				Target:      target,
+				URL:         target,
+				Severity:    SeverityHigh,
+				Title:       "TLS chain " + role + " certificate has expired",
+				Detail:      fmt.Sprintf("%s certificate (CN=%s) expired on %s", role, cn, cert.NotAfter.UTC().Format(time.RFC3339)),
+				CWE:         "CWE-298",
+				OWASP:       "A02:2021 Cryptographic Failures",
+				Remediation: "Refresh the chain bundle from the issuing CA so an unexpired intermediate is presented in the handshake.",
+				DedupeKey:   MakeKey(c.Name(), ScopeHost, target, "chain-expired", posPart),
+			})
+			continue
+		}
+		if now.Before(cert.NotBefore) {
+			out = append(out, Finding{
+				Check:       c.Name(),
+				Target:      target,
+				URL:         target,
+				Severity:    SeverityHigh,
+				Title:       "TLS chain " + role + " certificate is not yet valid",
+				Detail:      fmt.Sprintf("%s certificate (CN=%s) becomes valid at %s", role, cn, cert.NotBefore.UTC().Format(time.RFC3339)),
+				CWE:         "CWE-298",
+				OWASP:       "A02:2021 Cryptographic Failures",
+				Remediation: "Verify the server clock is correct, or rebuild the chain with an intermediate that is already valid.",
+				DedupeKey:   MakeKey(c.Name(), ScopeHost, target, "chain-not-yet-valid", posPart),
+			})
+			continue
+		}
+		until := cert.NotAfter.Sub(now)
+		var severity Severity
+		var window string
+		switch {
+		case until < tlsExpiryUrgentWindow:
+			severity, window = SeverityMedium, "14 days"
+		case until < tlsExpirySoonWindow:
+			severity, window = SeverityLow, "30 days"
+		default:
+			continue
+		}
+		days := int(until / (24 * time.Hour))
+		out = append(out, Finding{
+			Check:       c.Name(),
+			Target:      target,
+			URL:         target,
+			Severity:    severity,
+			Title:       fmt.Sprintf("TLS chain %s expires in %d days", role, days),
+			Detail:      fmt.Sprintf("%s certificate (CN=%s) expires on %s - within %s", role, cn, cert.NotAfter.UTC().Format(time.RFC3339), window),
+			CWE:         "CWE-298",
+			OWASP:       "A02:2021 Cryptographic Failures",
+			Remediation: "Refresh the chain bundle from the issuing CA before the intermediate expires.",
+			DedupeKey:   MakeKey(c.Name(), ScopeHost, target, "chain-expiry-soon", posPart),
+		})
+	}
+	return out
+}
+
+// ocspStapleFinding flags handshakes the server did not staple an OCSP
+// response onto. Stapling avoids a third-party CA round-trip on every
+// connection and the privacy leak that comes with it; without it,
+// clients either fall back to direct OCSP fetches (slow, often soft-
+// fail) or skip revocation checks entirely. If the leaf cert carries
+// the OCSP-Must-Staple TLS-feature extension (RFC 7633), a missing
+// staple is a hard trust failure for compliant clients.
+func (c TLSAudit) ocspStapleFinding(target string, ocsp []byte) []Finding {
+	if len(ocsp) > 0 {
+		return nil
+	}
+	return []Finding{{
+		Check:       c.Name(),
+		Target:      target,
+		URL:         target,
+		Severity:    SeverityLow,
+		Title:       "TLS handshake did not include a stapled OCSP response",
+		Detail:      "the server returned no OCSP response in the handshake; clients must perform their own revocation checks (or skip them entirely)",
+		CWE:         "CWE-299",
+		OWASP:       "A02:2021 Cryptographic Failures",
+		Remediation: "Enable OCSP stapling at the TLS terminator (nginx ssl_stapling, Apache SSLUseStapling, or the equivalent on your CDN / load balancer) so revocation status rides with the handshake.",
+		DedupeKey:   MakeKey(c.Name(), ScopeHost, target, "no-ocsp-staple"),
+	}}
+}
+
+// sctFinding flags leaves that carry no Signed Certificate Timestamps,
+// either via the TLS handshake extension (RFC 6962 section 3.3.1) or
+// embedded directly in the certificate (extension OID
+// 1.3.6.1.4.1.11129.2.4.2). Browsers like Chrome require at least two
+// SCTs from independent CT logs for a publicly-trusted cert; a cert
+// with none will fail trust on those clients. Private / internal CAs
+// legitimately produce SCT-less certs, so the severity is Low rather
+// than Medium.
+func (c TLSAudit) sctFinding(target string, leaf *x509.Certificate, handshakeSCTs [][]byte) []Finding {
+	if hasNonEmptySCT(handshakeSCTs) {
+		return nil
+	}
+	if leafEmbedsSCT(leaf) {
+		return nil
+	}
+	return []Finding{{
+		Check:       c.Name(),
+		Target:      target,
+		URL:         target,
+		Severity:    SeverityLow,
+		Title:       "TLS leaf certificate carries no Signed Certificate Timestamps",
+		Detail:      "the handshake exposed no SCT extension and the leaf certificate embeds none; Certificate-Transparency-enforcing clients may reject this certificate",
+		CWE:         "CWE-295",
+		OWASP:       "A02:2021 Cryptographic Failures",
+		Remediation: "Issue the certificate from a CA that logs to public CT logs and embeds SCTs (every public CA today), or configure the TLS terminator to deliver SCTs via the handshake extension or a stapled OCSP response.",
+		DedupeKey:   MakeKey(c.Name(), ScopeHost, target, "no-sct"),
+	}}
+}
+
+func hasNonEmptySCT(scts [][]byte) bool {
+	for _, s := range scts {
+		if len(s) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func leafEmbedsSCT(leaf *x509.Certificate) bool {
+	for _, ext := range leaf.Extensions {
+		if ext.Id.Equal(sctExtensionOID) && len(ext.Value) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (c TLSAudit) hostnameFinding(target, host string, leaf *x509.Certificate) (Finding, bool) {
