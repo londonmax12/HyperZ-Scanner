@@ -79,6 +79,7 @@ type staticHelpers struct {
 	sinks    *lua.LTable
 	html     *lua.LTable
 	cookies  *lua.LTable
+	takeover *lua.LTable
 }
 
 func storeStaticHelpers(L *lua.LState, h *staticHelpers) {

@@ -2,6 +2,8 @@ package checks
 
 import (
 	"bytes"
+	"context"
+	"fmt"
 	"net/http"
 	"net/url"
 	"sort"
@@ -287,4 +289,246 @@ func LooksLikeSourceMap(body []byte) bool { return looksLikeSourceMap(body) }
 // Lua port gets the same scheme + host validation.
 func ResolveSourceMapURL(base, ref string) (string, error) {
 	return resolveSourceMapURL(base, ref)
+}
+
+// JSLibHit is one library identified in an HTML body's <script src>
+// tags. Vulnerabilities is non-empty when the matched version maps to
+// a known-bad row in the library's vulnerable-version table; otherwise
+// the row is informational ("library detected, no known vulns").
+type JSLibHit struct {
+	Name            string
+	Version         string
+	Vulnerabilities []string
+}
+
+// ScanScriptTagsForKnownJSLibraries walks body for <script src=...> tags, identifies
+// each script URL against the JS-library fingerprint catalogue, and
+// returns one entry per detected library. The catalogue + regex match
+// stay in Go; the Lua port consumes the typed result. Map iteration
+// in the underlying scanner is non-deterministic, so the returned
+// slice is sorted by name to keep the Lua port emitting stable order
+// across runs.
+func ScanScriptTagsForKnownJSLibraries(body []byte) []JSLibHit {
+	detected := extractLibraries(string(body))
+	if len(detected) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(detected))
+	for n := range detected {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	out := make([]JSLibHit, 0, len(names))
+	for _, n := range names {
+		d := detected[n]
+		out = append(out, JSLibHit{
+			Name:            n,
+			Version:         d.version,
+			Vulnerabilities: append([]string{}, d.vulnerabilities...),
+		})
+	}
+	return out
+}
+
+// CSPWeakness is one (directive, weakness) pair the CSP analyzer
+// produced. id is a short stable token used as a per-finding dedupe
+// suffix so the same weakness on the same host re-emits the same key.
+type CSPWeakness struct {
+	Directive string
+	Severity  Severity
+	ID        string
+	Detail    string
+}
+
+// AnalyzeCSP runs the full CSP-weak analysis pass against enforcing
+// + reportOnly header values and returns the deduplicated, sorted
+// weakness list the Go check produces. Both arguments are the raw
+// header value sets (http.Header.Values shape); pass an empty slice
+// when the header is absent. Returns nil when neither header is
+// present, matching the Go check's "absence is security-headers'
+// job" short-circuit.
+func AnalyzeCSP(enforcing, reportOnly []string) []CSPWeakness {
+	if len(enforcing) == 0 && len(reportOnly) == 0 {
+		return nil
+	}
+	var (
+		policyHeader string
+		isReportOnly bool
+	)
+	if len(enforcing) > 0 {
+		policyHeader = enforcing[0]
+	} else {
+		policyHeader = reportOnly[0]
+		isReportOnly = true
+	}
+	directives := parseCSP(policyHeader)
+	var weaknesses []cspWeakness
+	weaknesses = append(weaknesses, analyzeScriptSrc(directives)...)
+	weaknesses = append(weaknesses, analyzeStyleSrc(directives)...)
+	weaknesses = append(weaknesses, analyzeObjectSrc(directives)...)
+	weaknesses = append(weaknesses, analyzeBaseURI(directives)...)
+	weaknesses = append(weaknesses, analyzeFrameAncestors(directives)...)
+	weaknesses = append(weaknesses, analyzeFormAction(directives)...)
+	if isReportOnly {
+		weaknesses = append(weaknesses, cspWeakness{
+			directive: "<policy>",
+			severity:  SeverityMedium,
+			id:        "report-only-only",
+			detail:    "Only Content-Security-Policy-Report-Only is set; the browser collects violation reports but does not block any of the policy's would-be denials. Until the policy is delivered via Content-Security-Policy as well, none of the CSP-based XSS / framing defenses below are actually enforced.",
+		})
+	}
+	if len(enforcing) > 1 {
+		weaknesses = append(weaknesses, cspWeakness{
+			directive: "<policy>",
+			severity:  SeverityLow,
+			id:        "multiple-csp-headers",
+			detail: fmt.Sprintf("Response carries %d Content-Security-Policy headers. Browsers intersect them, so the effective policy is the most restrictive of all directives across the headers - which is rarely what authors intend and tends to mask which directive is doing the blocking. Consolidate to a single CSP header.", len(enforcing)),
+		})
+	}
+	if len(weaknesses) == 0 {
+		return nil
+	}
+	sort.SliceStable(weaknesses, func(i, j int) bool {
+		if weaknesses[i].directive != weaknesses[j].directive {
+			return weaknesses[i].directive < weaknesses[j].directive
+		}
+		return weaknesses[i].id < weaknesses[j].id
+	})
+	out := make([]CSPWeakness, 0, len(weaknesses))
+	for _, w := range weaknesses {
+		out = append(out, CSPWeakness{
+			Directive: w.directive,
+			Severity:  w.severity,
+			ID:        w.id,
+			Detail:    w.detail,
+		})
+	}
+	return out
+}
+
+// CSPIsReportOnly tells the Lua port whether AnalyzeCSP analyzed the
+// report-only policy (because the enforcing header was absent). The
+// .lua port uses this to shape the title suffix and lead-in without
+// re-implementing the "which header did we just analyze" decision the
+// Go check makes inside Run.
+func CSPIsReportOnly(enforcing, reportOnly []string) bool {
+	return len(enforcing) == 0 && len(reportOnly) > 0
+}
+
+// SQLiErrorNewMatches returns the SQL-driver error patterns that
+// appear in body but did not appear in baseline. The pattern catalogue
+// lives in Go (sqli_error.go's SQLErrorPatterns); the Lua port owns
+// the orchestration (baseline send, per-payload probe, finding shape).
+// Each result is the matched pattern name so the Lua side can stamp
+// it into the per-finding detail.
+func SQLiErrorNewMatches(body, baseline []byte) []string {
+	return subtractPatterns(matchSQLPatterns(body), matchSQLPatterns(baseline))
+}
+
+// FormActionCandidate is one (action, originating-form) pair the
+// form-action-insecure parser produced. Resolved is the absolute URL
+// the browser would submit to (after applying any <base href>); Raw
+// is the attribute text as the document carried it (kept for the
+// per-finding detail). Method is uppercase ("GET" / "POST"). Override
+// is true for candidates produced by a <button formaction> or
+// <input formaction> rather than the parent <form>'s own action.
+// Inputs is the form's input inventory; HasCredentialField records
+// whether any input matched the sensitive-name heuristic, so the Lua
+// port can branch on severity / title without re-walking the list.
+type FormActionCandidate struct {
+	Raw                string
+	Resolved           string
+	Method             string
+	Override           bool
+	Inputs             []FormActionInput
+	HasCredentialField bool
+}
+
+// FormActionInput is one named field on the parent form. Sensitive is
+// true when name + type triggered the credential-shape heuristic.
+type FormActionInput struct {
+	Name      string
+	Type      string
+	Sensitive bool
+}
+
+// ScanFormActions walks body once and returns one FormActionCandidate
+// per <form action> + per <button formaction> / <input formaction>
+// override the document carries. baseURL drives relative resolution
+// (and is updated when a <base href> is observed in document order).
+// Non-network actions (javascript:, mailto:, fragment, ...) are
+// filtered out; the Lua port iterates the remaining candidates and
+// emits a finding for each whose Resolved is http://.
+func ScanFormActions(body []byte, baseURL string) []FormActionCandidate {
+	pageURL, err := url.Parse(baseURL)
+	if err != nil || pageURL == nil {
+		return nil
+	}
+	forms, cands := (FormActionInsecure{}).parse(body, pageURL)
+	out := make([]FormActionCandidate, 0, len(cands))
+	for _, c := range cands {
+		var inputs []FormActionInput
+		var hasCred bool
+		if c.formIdx >= 0 && c.formIdx < len(forms) {
+			for _, in := range forms[c.formIdx].inputs {
+				inputs = append(inputs, FormActionInput{
+					Name:      in.name,
+					Type:      in.typ,
+					Sensitive: in.sensitive,
+				})
+				if in.sensitive {
+					hasCred = true
+				}
+			}
+		}
+		out = append(out, FormActionCandidate{
+			Raw:                c.raw,
+			Resolved:           c.resolved.String(),
+			Method:             c.method,
+			Override:           c.override,
+			Inputs:             inputs,
+			HasCredentialField: hasCred,
+		})
+	}
+	return out
+}
+
+// SQLiErrorPayloads returns the curated PayloadSQLiError catalogue in
+// the same order PayloadsFor produces it. The Lua port iterates these
+// in order so its first-hit-wins behavior matches the Go check 1:1.
+type SQLiErrorPayload struct {
+	Name     string
+	Template string
+}
+
+func SQLiErrorPayloads() []SQLiErrorPayload {
+	src := PayloadsFor(PayloadSQLiError)
+	out := make([]SQLiErrorPayload, 0, len(src))
+	for _, p := range src {
+		out = append(out, SQLiErrorPayload{Name: p.Name, Template: p.Template})
+	}
+	return out
+}
+
+// SubdomainTakeoverLookupCNAMEForTest / SetSubdomainTakeoverLookupCNAMEForTest
+// expose the package-level CNAME resolver indirection so the
+// checks_lua parity tests can swap in a synthetic resolver without
+// reaching into private state. The Go-side check_test.go uses the
+// private var directly; the Lua-side parity tests live in a different
+// package and must use these wrappers.
+func SubdomainTakeoverLookupCNAMEForTest() func(ctx context.Context, host string) (string, error) {
+	return subdomainTakeoverLookupCNAME
+}
+func SetSubdomainTakeoverLookupCNAMEForTest(fn func(ctx context.Context, host string) (string, error)) {
+	subdomainTakeoverLookupCNAME = fn
+}
+
+// SubdomainTakeoverLookupHostForTest / SetSubdomainTakeoverLookupHostForTest
+// expose the package-level host-resolver indirection for the same
+// reason as the CNAME pair above.
+func SubdomainTakeoverLookupHostForTest() func(ctx context.Context, host string) ([]string, error) {
+	return subdomainTakeoverLookupHost
+}
+func SetSubdomainTakeoverLookupHostForTest(fn func(ctx context.Context, host string) ([]string, error)) {
+	subdomainTakeoverLookupHost = fn
 }

@@ -41,6 +41,32 @@ type LuaCheck struct {
 	source string
 
 	pool sync.Pool
+
+	// aux is per-check auxiliary state that bridge helpers need to keep
+	// alive for the lifetime of this LuaCheck (one entry per helper that
+	// asks for one, keyed by an opaque helper-private struct{} type).
+	// Used so a stateful Go-side evaluator (the subdomain-takeover DNS
+	// cache) gets one instance per registered check - the same shape as
+	// the Go check, which is registered as a single *SubdomainTakeover
+	// shared across all the goroutines that scan with it. Keeping the
+	// state here rather than as a package-level singleton means the
+	// engine can be reloaded mid-process without re-using stale caches.
+	aux sync.Map
+}
+
+// AuxOrCreate returns the per-LuaCheck auxiliary value stored under
+// key, building it with the supplied factory on first use. The build
+// function may be called more than once under contention (LoadOrStore
+// semantics); only one of the built values is retained, the rest are
+// discarded by the GC. Used by bridge helpers that need a long-lived
+// Go-side struct (e.g. the subdomain-takeover evaluator) whose
+// lifetime should match this LuaCheck, not the host process.
+func (c *LuaCheck) AuxOrCreate(key any, build func() any) any {
+	if v, ok := c.aux.Load(key); ok {
+		return v
+	}
+	v, _ := c.aux.LoadOrStore(key, build())
+	return v
 }
 
 // Load parses src as a Lua check module, validates the metadata it

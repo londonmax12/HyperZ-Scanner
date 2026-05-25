@@ -28,6 +28,7 @@ func bindHyperzAPI(L *lua.LState) {
 		sinks:    buildSinksTable(L),
 		html:     buildHTMLTable(L),
 		cookies:  buildCookiesTable(L),
+		takeover: buildTakeoverTable(L),
 	}
 	storeStaticHelpers(L, h)
 }

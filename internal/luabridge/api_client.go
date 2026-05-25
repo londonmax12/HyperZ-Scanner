@@ -375,6 +375,15 @@ func clientNewRequest(L *lua.LState) int {
 			}
 		})
 	}
+	// `host` override sets req.Host (the value Go's transport sends as
+	// the Host: header on the wire). Necessary for host-header-injection
+	// probes: a bare Header.Set("Host", ...) is stripped by net/http
+	// because the transport reads from req.Host, not req.Header.
+	if hv := opts.RawGetString("host"); hv != lua.LNil {
+		if hostStr := lvalString(hv); hostStr != "" {
+			req.Host = hostStr
+		}
+	}
 	var snap []byte
 	var trunc bool
 	if bodyStr != "" {

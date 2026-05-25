@@ -47,23 +47,59 @@ import (
 // produces one finding, not 50. Probing is cached per hostname for
 // the lifetime of the scan to keep DNS and probe traffic bounded
 // regardless of how many crawled pages share a host.
+//
+// The check's algorithm produces a SubdomainTakeoverFacts value;
+// composing a Finding from those facts (title, severity, detail,
+// remediation, dedupe key, evidence) is the consumer's job. The Go
+// check's Run path does it via buildFindingFromFacts; the Lua bridge
+// exposes facts directly so the .lua port composes its own finding
+// catalog. That separation keeps user-visible strings in the rule
+// definition (Go or Lua) rather than inside the scanner algorithm.
 type SubdomainTakeover struct {
 	once  sync.Once
 	mu    sync.Mutex
-	cache map[string]subdomainTakeoverCacheEntry
+	cache map[string]*SubdomainTakeoverFacts // nil entry = checked, clean
 }
 
 func (c *SubdomainTakeover) Name() string { return "subdomain-takeover" }
 
 func (c *SubdomainTakeover) Level() Level { return LevelPassive }
 
-// subdomainTakeoverCacheEntry memoizes the per-host result so each
-// hostname is resolved + probed once per scan, no matter how many
-// crawled pages share it. A nil finding pointer represents a confirmed
-// non-vulnerable host (skip without re-probing); a non-nil pointer is
-// re-emitted with the new page URL attached.
-type subdomainTakeoverCacheEntry struct {
-	finding *Finding
+// SubdomainTakeoverFacts is the algorithm's raw output: which provider
+// matched, which detection path (CNAME-confirmed vs fingerprint-only),
+// and the probe observations the consumer needs to render a finding.
+// Two consumers compose Findings from this:
+//
+//   - The Go check's Run path (via buildFindingFromFacts) for the Go-
+//     registered subdomain-takeover check.
+//   - The Lua bridge in internal/luabridge/api_takeover.go for the
+//     subdomain-takeover Lua port.
+//
+// Both render their own title / severity / detail / remediation /
+// dedupe key / evidence from these facts; the facts struct deliberately
+// carries no operator-visible catalog text beyond ProviderGuidance,
+// which is the per-provider remediation prefix that ships alongside
+// the provider's CNAME-suffix and fingerprint definitions.
+type SubdomainTakeoverFacts struct {
+	Provider         string                          // catalog provider name (e.g. "GitHub Pages")
+	ProviderGuidance string                          // per-provider remediation prefix from the provider catalog
+	Detection        string                          // "cname" (CNAME-confirmed) or "fingerprint" (DNS-blind)
+	CNAME            string                          // normalized CNAME target (empty for the fingerprint path)
+	DNSNote          string                          // optional special-case note (e.g. NXDOMAIN on the CNAME target)
+	ProbeURL         string                          // host-root URL that was probed
+	Status           int                             // probe HTTP status code
+	BodyPreview      string                          // capped body preview (<= 512 bytes, suffix appended on truncation)
+	MatchedHeaders   []SubdomainTakeoverHeaderHit    // provider-identifying headers observed on the probe response (fingerprint path only)
+}
+
+// SubdomainTakeoverHeaderHit is one provider-identifying header that
+// matched on the probe response. Name is the canonical header name
+// (http.CanonicalHeaderKey-applied) and Value is the first value the
+// response carried for that name. Used by both Finding composers to
+// render the "matched headers" line in their respective Details.
+type SubdomainTakeoverHeaderHit struct {
+	Name  string
+	Value string
 }
 
 // takeoverProvider describes one SaaS edge that can be probed for an
@@ -328,6 +364,12 @@ const (
 	// clears even the long-form Pantheon / HelpScout messages without
 	// letting a misbehaving edge pin the worker on a slow stream.
 	subdomainTakeoverBodyCap = 64 << 10
+
+	// subdomainTakeoverPreviewCap bounds the body slice carried as
+	// evidence. The fingerprint match always lands in the first ~512
+	// bytes; truncating beyond that keeps reports compact without
+	// hiding the matched substring.
+	subdomainTakeoverPreviewCap = 512
 )
 
 // subdomainTakeoverLookupCNAME is indirected so tests can inject a
@@ -348,11 +390,33 @@ var subdomainTakeoverLookupHost = func(ctx context.Context, host string) ([]stri
 }
 
 func (c *SubdomainTakeover) Run(ctx context.Context, client *httpclient.Client, sc *scope.Scope, p page.Page) ([]Finding, error) {
+	facts, err := c.FactsFor(ctx, client, sc, p.URL)
+	if err != nil {
+		// A DNS or probe error against one host should not fail the scan -
+		// leave a breadcrumb and move on so a flaky resolver does not
+		// blank the whole report.
+		Report(ctx, fmt.Errorf("subdomain-takeover: %w", err))
+		return nil, nil
+	}
+	if facts == nil {
+		return nil, nil
+	}
+	return []Finding{*buildFindingFromFacts(facts, p.URL)}, nil
+}
+
+// FactsFor returns the cached or freshly-computed scan facts for
+// pageURL's host. nil with nil error means "checked and clean"; a
+// non-nil facts means a takeover signal was confirmed and the caller
+// can compose a finding from it. A non-nil error is a transient probe
+// failure that the caller decides how to surface (Run wraps it in a
+// non-fatal Report; the Lua bridge propagates it so the .lua port can
+// emit a ctx:report breadcrumb without double-reporting).
+func (c *SubdomainTakeover) FactsFor(ctx context.Context, client *httpclient.Client, sc *scope.Scope, pageURL string) (*SubdomainTakeoverFacts, error) {
 	c.once.Do(func() {
-		c.cache = map[string]subdomainTakeoverCacheEntry{}
+		c.cache = map[string]*SubdomainTakeoverFacts{}
 	})
 
-	u, err := url.Parse(p.URL)
+	u, err := url.Parse(pageURL)
 	if err != nil || u.Host == "" {
 		return nil, nil
 	}
@@ -360,11 +424,6 @@ func (c *SubdomainTakeover) Run(ctx context.Context, client *httpclient.Client, 
 	if host == "" {
 		return nil, nil
 	}
-	// IP literals cannot meaningfully CNAME to a SaaS edge. They naturally
-	// fall out via the "cname equals host" short-circuit downstream, but
-	// only when there is no CNAME record - we still let the lookup run so
-	// tests can drive synthetic CNAMEs against a local edge bound to
-	// 127.0.0.1.
 	// A scan targeted directly at the provider's canonical address has
 	// no dangling CNAME to inspect - the host IS the provider domain.
 	// Skip without probing so we do not noise-flag legitimate hosting.
@@ -372,41 +431,26 @@ func (c *SubdomainTakeover) Run(ctx context.Context, client *httpclient.Client, 
 		return nil, nil
 	}
 
-	// Per-host cache short-circuits repeat work across every crawled
-	// page on the same hostname. A nil finding entry is a confirmed
-	// negative; re-emit a confirmed positive with the current page URL
-	// so the report ties the finding to the URL the user actually saw.
 	c.mu.Lock()
 	entry, cached := c.cache[host]
 	c.mu.Unlock()
 	if cached {
-		if entry.finding == nil {
-			return nil, nil
-		}
-		f := *entry.finding
-		f.Target = p.URL
-		f.URL = p.URL
-		return []Finding{f}, nil
+		return entry, nil
 	}
 
-	finding, err := c.evaluateHost(ctx, client, sc, u, host)
+	// Cache the result either way: a transient evaluateHost error is
+	// recorded as a clean entry so a flaky resolver does not blank the
+	// whole report by re-failing on every page that shares the host.
+	// The error is still surfaced to the first caller for this host so
+	// the scanner gets exactly one breadcrumb per failing host per scan.
+	facts, err := c.evaluateHost(ctx, client, sc, u, host)
 	c.mu.Lock()
-	c.cache[host] = subdomainTakeoverCacheEntry{finding: finding}
+	c.cache[host] = facts
 	c.mu.Unlock()
 	if err != nil {
-		// A DNS or probe error against one host should not fail the scan -
-		// leave a breadcrumb and move on so a flaky resolver does not
-		// blank the whole report.
-		Report(ctx, fmt.Errorf("subdomain-takeover %s: %w", host, err))
-		return nil, nil
+		return nil, fmt.Errorf("%s: %w", host, err)
 	}
-	if finding == nil {
-		return nil, nil
-	}
-	f := *finding
-	f.Target = p.URL
-	f.URL = p.URL
-	return []Finding{f}, nil
+	return facts, nil
 }
 
 // evaluateHost runs the two-stage check for one hostname. The CNAME-
@@ -415,15 +459,14 @@ func (c *SubdomainTakeover) Run(ctx context.Context, client *httpclient.Client, 
 // provider (CDN proxy in front, A record straight to a provider IP,
 // third-party DNS that hides the chain), the fingerprint-only path
 // fires off one probe and looks for a provider's body+header pair in
-// the response. A nil finding return means "not vulnerable" and is
-// cached as such.
-func (c *SubdomainTakeover) evaluateHost(ctx context.Context, client *httpclient.Client, sc *scope.Scope, u *url.URL, host string) (*Finding, error) {
-	finding, err := c.evaluateViaDNS(ctx, client, sc, u, host)
+// the response. A nil facts return means "not vulnerable".
+func (c *SubdomainTakeover) evaluateHost(ctx context.Context, client *httpclient.Client, sc *scope.Scope, u *url.URL, host string) (*SubdomainTakeoverFacts, error) {
+	facts, err := c.evaluateViaDNS(ctx, client, sc, u, host)
 	if err != nil {
 		return nil, err
 	}
-	if finding != nil {
-		return finding, nil
+	if facts != nil {
+		return facts, nil
 	}
 	return c.evaluateViaFingerprint(ctx, client, sc, u)
 }
@@ -431,7 +474,7 @@ func (c *SubdomainTakeover) evaluateHost(ctx context.Context, client *httpclient
 // evaluateViaDNS is the original two-signal check: CNAME match + body
 // fingerprint. Returns nil/nil when DNS does not point at a known
 // provider so the caller can fall back to the fingerprint-only path.
-func (c *SubdomainTakeover) evaluateViaDNS(ctx context.Context, client *httpclient.Client, sc *scope.Scope, u *url.URL, host string) (*Finding, error) {
+func (c *SubdomainTakeover) evaluateViaDNS(ctx context.Context, client *httpclient.Client, sc *scope.Scope, u *url.URL, host string) (*SubdomainTakeoverFacts, error) {
 	cname, err := subdomainTakeoverLookupCNAME(ctx, host)
 	if err != nil {
 		// A LookupCNAME failure is not by itself a takeover signal: many
@@ -460,7 +503,14 @@ func (c *SubdomainTakeover) evaluateViaDNS(ctx context.Context, client *httpclie
 	// connection / resolution error in that case.
 	if _, hostErr := subdomainTakeoverLookupHost(ctx, cnameNormalized); hostErr != nil {
 		if isDNSNotFound(hostErr) {
-			return c.buildDNSFinding(probeURL, provider, cnameNormalized, 0, "", "CNAME target resolves to NXDOMAIN; the upstream resource has been released."), nil
+			return &SubdomainTakeoverFacts{
+				Provider:         provider.name,
+				ProviderGuidance: provider.guidance,
+				Detection:        "cname",
+				CNAME:            cnameNormalized,
+				DNSNote:          "CNAME target resolves to NXDOMAIN; the upstream resource has been released.",
+				ProbeURL:         probeURL,
+			}, nil
 		}
 		// Other lookup errors (transient) leave the question open; the
 		// edge probe below decides.
@@ -473,7 +523,15 @@ func (c *SubdomainTakeover) evaluateViaDNS(ctx context.Context, client *httpclie
 	if status == 0 || !matchesFingerprint(status, body, provider) {
 		return nil, nil
 	}
-	return c.buildDNSFinding(probeURL, provider, cnameNormalized, status, string(body), ""), nil
+	return &SubdomainTakeoverFacts{
+		Provider:         provider.name,
+		ProviderGuidance: provider.guidance,
+		Detection:        "cname",
+		CNAME:            cnameNormalized,
+		ProbeURL:         probeURL,
+		Status:           status,
+		BodyPreview:      cappedPreview(string(body), subdomainTakeoverPreviewCap),
+	}, nil
 }
 
 // evaluateViaFingerprint is the DNS-blind path: probe the host root
@@ -483,11 +541,12 @@ func (c *SubdomainTakeover) evaluateViaDNS(ctx context.Context, client *httpclie
 // confirmation - a benign mirror could echo the same string - but
 // body+header together pins the response to the actual SaaS edge.
 //
-// Severity is Medium for these findings: without the CNAME chain we
-// can name, the resource may be fronted by a proxy / CDN that limits
-// trivial claimability, so the operator should verify the DNS
-// configuration before treating this as a guaranteed takeover.
-func (c *SubdomainTakeover) evaluateViaFingerprint(ctx context.Context, client *httpclient.Client, sc *scope.Scope, u *url.URL) (*Finding, error) {
+// Severity is Medium for these findings (set by the Finding composers):
+// without the CNAME chain we can name, the resource may be fronted by
+// a proxy / CDN that limits trivial claimability, so the operator
+// should verify the DNS configuration before treating this as a
+// guaranteed takeover.
+func (c *SubdomainTakeover) evaluateViaFingerprint(ctx context.Context, client *httpclient.Client, sc *scope.Scope, u *url.URL) (*SubdomainTakeoverFacts, error) {
 	probeURL, ok := c.buildProbeURL(sc, u)
 	if !ok {
 		return nil, nil
@@ -502,7 +561,15 @@ func (c *SubdomainTakeover) evaluateViaFingerprint(ctx context.Context, client *
 	for i := range subdomainTakeoverProviders {
 		p := &subdomainTakeoverProviders[i]
 		if matchesProviderEdge(status, headers, body, p) {
-			return c.buildFingerprintFinding(probeURL, p, status, headers, string(body)), nil
+			return &SubdomainTakeoverFacts{
+				Provider:         p.name,
+				ProviderGuidance: p.guidance,
+				Detection:        "fingerprint",
+				ProbeURL:         probeURL,
+				Status:           status,
+				BodyPreview:      cappedPreview(string(body), subdomainTakeoverPreviewCap),
+				MatchedHeaders:   matchedHeaderHits(headers, p),
+			}, nil
 		}
 	}
 	return nil, nil
@@ -694,131 +761,157 @@ func isDNSNotFound(err error) bool {
 	return false
 }
 
-// buildDNSFinding emits a finding for the CNAME-confirmed path. The
-// CNAME chain we can name end-to-end gives unambiguous proof the
-// hostname is delegated to the provider, so severity is High.
-func (c *SubdomainTakeover) buildDNSFinding(probeURL string, provider *takeoverProvider, cname string, status int, bodyPreview, dnsNote string) *Finding {
-	var detailLines []string
-	detailLines = append(detailLines, fmt.Sprintf("Hostname resolves via CNAME to %q, which matches %s's edge.", cname, provider.name))
-	if dnsNote != "" {
-		detailLines = append(detailLines, dnsNote)
+// cappedPreview returns s shortened to max bytes with a unicode ellipsis
+// appended when truncation happened. Used so both Finding composers
+// (Go-side and Lua-side, which consumes the same facts) see the same
+// preview shape without each re-capping the body.
+func cappedPreview(s string, max int) string {
+	if len(s) <= max {
+		return s
 	}
-	if status != 0 {
-		detailLines = append(detailLines, fmt.Sprintf("The %s edge responded with status %d and the provider's canonical \"unclaimed resource\" fingerprint.", provider.name, status))
-	}
-	detailLines = append(detailLines, "An attacker who registers the freed-up resource on their own account will host arbitrary content at this hostname, with valid TLS and any cookies the parent domain scopes to it.")
-
-	preview := bodyPreview
-	const previewCap = 512
-	if len(preview) > previewCap {
-		preview = preview[:previewCap] + "..."
-	}
-
-	headers := http.Header{}
-	if status != 0 {
-		headers.Set("X-Subdomain-Takeover-Provider", provider.name)
-		headers.Set("X-Subdomain-Takeover-CNAME", cname)
-	}
-
-	return &Finding{
-		Check:    "subdomain-takeover",
-		Target:   probeURL,
-		URL:      probeURL,
-		Severity: SeverityHigh,
-		Title:    fmt.Sprintf("subdomain takeover via dangling %s CNAME", provider.name),
-		Detail:   fmt.Sprintf("Hostname's DNS still points at %s but the upstream resource is unclaimed; the edge serves its canonical \"this resource does not exist\" page. Each entry below explains the evidence.", provider.name),
-		Details:  detailLines,
-		CWE:      "CWE-1104",
-		OWASP:    "A05:2021 Security Misconfiguration",
-		Remediation: provider.guidance + " " +
-			"Before remediating, audit cookies scoped to the parent domain (Domain=.example.com) and any OAuth / SSO callbacks that trust the hostname - a successful takeover would have inherited both. " +
-			"As a longer-term control, gate DNS record creation on proof of upstream ownership and add periodic checks (or a SIEM rule) that re-resolves CNAMEs and probes the listed providers for unclaimed-resource fingerprints.",
-		Evidence:  BuildEvidence("GET", probeURL, status, headers, preview),
-		DedupeKey: MakeKey("subdomain-takeover", ScopeHost, probeURL, "cname:"+cname, "provider:"+provider.name),
-	}
+	return s[:max] + "..."
 }
 
-// buildFingerprintFinding emits a finding for the DNS-blind path: body
-// fingerprint AND a provider-identifying header both matched but the
-// CNAME chain we resolved did not pin the hostname to the provider.
-// Severity is Medium: the provider's edge is clearly serving the
-// unclaimed page (otherwise we would not have matched), but without
-// the DNS chain we cannot tell whether the resource is fronted by a
-// proxy/CDN that limits trivial claimability, so the operator should
-// verify the DNS configuration before treating it as a guaranteed
-// takeover.
-func (c *SubdomainTakeover) buildFingerprintFinding(probeURL string, provider *takeoverProvider, status int, headers http.Header, bodyPreview string) *Finding {
-	matchedHeaders := matchedHeaderSummary(headers, provider)
-	detailLines := []string{
-		fmt.Sprintf("The edge at this hostname responded with status %d, the canonical %s \"unclaimed resource\" body, and the provider-identifying response header(s) %s.", status, provider.name, matchedHeaders),
-		"DNS does not surface a CNAME to this provider, so the chain is either A-recorded straight at the provider, fronted by a CDN/proxy that hides the upstream, or served through a third-party DNS that flattens it. Either way, the public-facing edge is the provider's and the upstream resource is unclaimed.",
-		"Verify who controls the DNS record and whether the upstream resource can be claimed under the provider's account model; if so, an attacker can host arbitrary content at this hostname with valid TLS and inherit cookies the parent domain scopes to it.",
+// matchedHeaderHits returns the provider-identifying headers that
+// were present on the response, in the order the provider declared
+// them and deduplicated by canonical header name. Both Finding
+// composers (Go-side and Lua-side) iterate this list to render the
+// "matched headers" line in their respective Details.
+func matchedHeaderHits(headers http.Header, provider *takeoverProvider) []SubdomainTakeoverHeaderHit {
+	if headers == nil {
+		return nil
 	}
-
-	preview := bodyPreview
-	const previewCap = 512
-	if len(preview) > previewCap {
-		preview = preview[:previewCap] + "..."
-	}
-
-	evidenceHeaders := http.Header{}
-	evidenceHeaders.Set("X-Subdomain-Takeover-Provider", provider.name)
-	evidenceHeaders.Set("X-Subdomain-Takeover-Detection", "response-fingerprint")
-	for _, hf := range provider.headerFingerprints {
-		for _, v := range headers.Values(hf.name) {
-			evidenceHeaders.Add(hf.name, v)
-		}
-	}
-
-	return &Finding{
-		Check:    "subdomain-takeover",
-		Target:   probeURL,
-		URL:      probeURL,
-		Severity: SeverityMedium,
-		Title:    fmt.Sprintf("possible subdomain takeover: %s edge serves unclaimed-resource page", provider.name),
-		Detail:   fmt.Sprintf("The hostname's edge response identifies it as %s and matches the provider's canonical \"unclaimed resource\" page, but DNS does not surface a CNAME to this provider. Each entry below explains the evidence.", provider.name),
-		Details:  detailLines,
-		CWE:      "CWE-1104",
-		OWASP:    "A05:2021 Security Misconfiguration",
-		Remediation: provider.guidance + " " +
-			"Confirm the hostname's DNS chain (CNAME, A, fronting proxies) before treating this as exploitable - the edge response alone proves the upstream is unclaimed, but a fronting proxy may limit claimability. " +
-			"As a longer-term control, gate DNS record creation on proof of upstream ownership and add periodic checks that probe known SaaS edges for unclaimed-resource fingerprints regardless of DNS shape.",
-		Evidence:  BuildEvidence("GET", probeURL, status, evidenceHeaders, preview),
-		DedupeKey: MakeKey("subdomain-takeover", ScopeHost, probeURL, "fingerprint", "provider:"+provider.name),
-	}
-}
-
-// matchedHeaderSummary renders the provider-identifying headers that
-// were present on the response into a human-readable list, for the
-// finding's Details. Keeps the rendering deterministic by iterating
-// over the provider's declared headerFingerprints in order.
-func matchedHeaderSummary(headers http.Header, provider *takeoverProvider) string {
-	var summaries []string
-	renderedHeader := map[string]bool{}
+	var out []SubdomainTakeoverHeaderHit
+	rendered := map[string]bool{}
 	for _, fingerprint := range provider.headerFingerprints {
 		if !matchesHeaderFingerprint(headers, fingerprint) {
 			continue
 		}
-		// Render once per header name even if the provider declared
-		// multiple value variants on the same header.
-		canonicalName := http.CanonicalHeaderKey(fingerprint.name)
-		if renderedHeader[canonicalName] {
+		canonical := http.CanonicalHeaderKey(fingerprint.name)
+		if rendered[canonical] {
 			continue
 		}
-		renderedHeader[canonicalName] = true
+		rendered[canonical] = true
 		values := headers.Values(fingerprint.name)
 		if len(values) == 0 {
 			continue
 		}
-		const headerValueCap = 80
-		headerValue := values[0]
-		if len(headerValue) > headerValueCap {
-			headerValue = headerValue[:headerValueCap] + "..."
-		}
-		summaries = append(summaries, fmt.Sprintf("%s: %s", canonicalName, headerValue))
+		out = append(out, SubdomainTakeoverHeaderHit{
+			Name:  canonical,
+			Value: values[0],
+		})
 	}
-	if len(summaries) == 0 {
+	return out
+}
+
+// buildFindingFromFacts is the Go-side Finding composer. It dispatches
+// on facts.Detection to pick the CNAME-confirmed (High severity) or
+// fingerprint-only (Medium severity) finding shape. The Lua port lives
+// in internal/checks_lua/subdomain_takeover.lua and composes its own
+// finding directly from the same facts struct, surfaced via the Lua
+// bridge in internal/luabridge/api_takeover.go.
+func buildFindingFromFacts(facts *SubdomainTakeoverFacts, currentPageURL string) *Finding {
+	if facts.Detection == "fingerprint" {
+		return buildFingerprintFindingFromFacts(facts, currentPageURL)
+	}
+	return buildCNAMEFindingFromFacts(facts, currentPageURL)
+}
+
+// buildCNAMEFindingFromFacts composes the CNAME-confirmed (High) finding
+// from raw scan facts. Target and URL are stamped with the currently
+// crawled page so the report ties the finding to the URL the user
+// actually saw; the dedupe key uses the probed host-root URL so a 50-
+// page crawl of one vulnerable subdomain produces one finding, not 50.
+func buildCNAMEFindingFromFacts(facts *SubdomainTakeoverFacts, currentPageURL string) *Finding {
+	var detailLines []string
+	detailLines = append(detailLines, fmt.Sprintf("Hostname resolves via CNAME to %q, which matches %s's edge.", facts.CNAME, facts.Provider))
+	if facts.DNSNote != "" {
+		detailLines = append(detailLines, facts.DNSNote)
+	}
+	if facts.Status != 0 {
+		detailLines = append(detailLines, fmt.Sprintf("The %s edge responded with status %d and the provider's canonical \"unclaimed resource\" fingerprint.", facts.Provider, facts.Status))
+	}
+	detailLines = append(detailLines, "An attacker who registers the freed-up resource on their own account will host arbitrary content at this hostname, with valid TLS and any cookies the parent domain scopes to it.")
+
+	headers := http.Header{}
+	if facts.Status != 0 {
+		headers.Set("X-Subdomain-Takeover-Provider", facts.Provider)
+		headers.Set("X-Subdomain-Takeover-CNAME", facts.CNAME)
+	}
+
+	return &Finding{
+		Check:    "subdomain-takeover",
+		Target:   currentPageURL,
+		URL:      currentPageURL,
+		Severity: SeverityHigh,
+		Title:    fmt.Sprintf("subdomain takeover via dangling %s CNAME", facts.Provider),
+		Detail:   fmt.Sprintf("Hostname's DNS still points at %s but the upstream resource is unclaimed; the edge serves its canonical \"this resource does not exist\" page. Each entry below explains the evidence.", facts.Provider),
+		Details:  detailLines,
+		CWE:      "CWE-1104",
+		OWASP:    "A05:2021 Security Misconfiguration",
+		Remediation: facts.ProviderGuidance + " " +
+			"Before remediating, audit cookies scoped to the parent domain (Domain=.example.com) and any OAuth / SSO callbacks that trust the hostname - a successful takeover would have inherited both. " +
+			"As a longer-term control, gate DNS record creation on proof of upstream ownership and add periodic checks (or a SIEM rule) that re-resolves CNAMEs and probes the listed providers for unclaimed-resource fingerprints.",
+		Evidence:  BuildEvidence("GET", facts.ProbeURL, facts.Status, headers, facts.BodyPreview),
+		DedupeKey: MakeKey("subdomain-takeover", ScopeHost, facts.ProbeURL, "cname:"+facts.CNAME, "provider:"+facts.Provider),
+	}
+}
+
+// buildFingerprintFindingFromFacts composes the DNS-blind (Medium)
+// finding from raw scan facts. The provider-identifying headers that
+// matched are rendered into the Detail and re-attached to the evidence
+// so the report shows exactly which response markers triggered the
+// match.
+func buildFingerprintFindingFromFacts(facts *SubdomainTakeoverFacts, currentPageURL string) *Finding {
+	matchedSummary := matchedHeaderHitsSummary(facts.MatchedHeaders)
+	detailLines := []string{
+		fmt.Sprintf("The edge at this hostname responded with status %d, the canonical %s \"unclaimed resource\" body, and the provider-identifying response header(s) %s.", facts.Status, facts.Provider, matchedSummary),
+		"DNS does not surface a CNAME to this provider, so the chain is either A-recorded straight at the provider, fronted by a CDN/proxy that hides the upstream, or served through a third-party DNS that flattens it. Either way, the public-facing edge is the provider's and the upstream resource is unclaimed.",
+		"Verify who controls the DNS record and whether the upstream resource can be claimed under the provider's account model; if so, an attacker can host arbitrary content at this hostname with valid TLS and inherit cookies the parent domain scopes to it.",
+	}
+
+	evidenceHeaders := http.Header{}
+	evidenceHeaders.Set("X-Subdomain-Takeover-Provider", facts.Provider)
+	evidenceHeaders.Set("X-Subdomain-Takeover-Detection", "response-fingerprint")
+	for _, hit := range facts.MatchedHeaders {
+		evidenceHeaders.Add(hit.Name, hit.Value)
+	}
+
+	return &Finding{
+		Check:    "subdomain-takeover",
+		Target:   currentPageURL,
+		URL:      currentPageURL,
+		Severity: SeverityMedium,
+		Title:    fmt.Sprintf("possible subdomain takeover: %s edge serves unclaimed-resource page", facts.Provider),
+		Detail:   fmt.Sprintf("The hostname's edge response identifies it as %s and matches the provider's canonical \"unclaimed resource\" page, but DNS does not surface a CNAME to this provider. Each entry below explains the evidence.", facts.Provider),
+		Details:  detailLines,
+		CWE:      "CWE-1104",
+		OWASP:    "A05:2021 Security Misconfiguration",
+		Remediation: facts.ProviderGuidance + " " +
+			"Confirm the hostname's DNS chain (CNAME, A, fronting proxies) before treating this as exploitable - the edge response alone proves the upstream is unclaimed, but a fronting proxy may limit claimability. " +
+			"As a longer-term control, gate DNS record creation on proof of upstream ownership and add periodic checks that probe known SaaS edges for unclaimed-resource fingerprints regardless of DNS shape.",
+		Evidence:  BuildEvidence("GET", facts.ProbeURL, facts.Status, evidenceHeaders, facts.BodyPreview),
+		DedupeKey: MakeKey("subdomain-takeover", ScopeHost, facts.ProbeURL, "fingerprint", "provider:"+facts.Provider),
+	}
+}
+
+// matchedHeaderHitsSummary renders the list of matched provider-
+// identifying headers into a human-readable string for the finding's
+// Details. Long values are clipped so the line stays a reasonable
+// width; an empty list returns the "(none captured)" sentinel both
+// Finding composers (Go-side and the Lua port) use consistently.
+func matchedHeaderHitsSummary(hits []SubdomainTakeoverHeaderHit) string {
+	if len(hits) == 0 {
 		return "(none captured)"
 	}
-	return strings.Join(summaries, "; ")
+	const headerValueCap = 80
+	var rendered []string
+	for _, hit := range hits {
+		value := hit.Value
+		if len(value) > headerValueCap {
+			value = value[:headerValueCap] + "..."
+		}
+		rendered = append(rendered, fmt.Sprintf("%s: %s", hit.Name, value))
+	}
+	return strings.Join(rendered, "; ")
 }

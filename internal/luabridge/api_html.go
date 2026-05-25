@@ -31,6 +31,7 @@ func buildHTMLTable(L *lua.LState) *lua.LTable {
 	t := L.NewTable()
 	t.RawSetString("iter_tags", L.NewFunction(htmlIterTags))
 	t.RawSetString("resolve_ref", L.NewFunction(htmlResolveRef))
+	t.RawSetString("scan_form_actions", L.NewFunction(htmlScanFormActions))
 	return t
 }
 
@@ -72,6 +73,44 @@ func htmlIterTags(L *lua.LState) int {
 		}
 		entry.RawSetString("attrs", attrs)
 		entry.RawSetString("attr", attrMap)
+		out.RawSetInt(i+1, entry)
+	}
+	L.Push(out)
+	return 1
+}
+
+// htmlScanFormActions implements ctx.html.scan_form_actions(body,
+// base_url). Returns an array of candidate tables, one per
+// (form action, override) pair the document carries:
+//
+//	{ raw, resolved, method, override, has_credential_field,
+//	  inputs = [{name, type, sensitive}, ...] }
+//
+// Non-network actions (javascript:, mailto:, fragment) are filtered
+// out on the Go side so the Lua port only sees candidates worth a
+// scheme inspection. The form-action-insecure port consumes this
+// directly and only owns the http:// branch decision + finding shape.
+func htmlScanFormActions(L *lua.LState) int {
+	body := requireString(L, 1)
+	base := requireString(L, 2)
+	cands := checks.ScanFormActions([]byte(body), base)
+	out := L.NewTable()
+	for i, c := range cands {
+		entry := L.NewTable()
+		entry.RawSetString("raw", lua.LString(c.Raw))
+		entry.RawSetString("resolved", lua.LString(c.Resolved))
+		entry.RawSetString("method", lua.LString(c.Method))
+		entry.RawSetString("override", lua.LBool(c.Override))
+		entry.RawSetString("has_credential_field", lua.LBool(c.HasCredentialField))
+		inputs := L.NewTable()
+		for j, in := range c.Inputs {
+			it := L.NewTable()
+			it.RawSetString("name", lua.LString(in.Name))
+			it.RawSetString("type", lua.LString(in.Type))
+			it.RawSetString("sensitive", lua.LBool(in.Sensitive))
+			inputs.RawSetInt(j+1, it)
+		}
+		entry.RawSetString("inputs", inputs)
 		out.RawSetInt(i+1, entry)
 	}
 	L.Push(out)

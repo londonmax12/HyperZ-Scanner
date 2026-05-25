@@ -66,6 +66,10 @@ func buildBodyTable(L *lua.LState) *lua.LTable {
 	t.RawSetString("source_map_kind", L.NewFunction(bodySourceMapKind))
 	t.RawSetString("find_source_map_ref", L.NewFunction(bodyFindSourceMapRef))
 	t.RawSetString("looks_like_source_map", L.NewFunction(bodyLooksLikeSourceMap))
+	t.RawSetString("scan_known_js_libs", L.NewFunction(bodyScanKnownJSLibs))
+	t.RawSetString("analyze_csp", L.NewFunction(bodyAnalyzeCSP))
+	t.RawSetString("sqli_error_new_matches", L.NewFunction(bodySQLiErrorNewMatches))
+	t.RawSetString("sqli_error_payloads", L.NewFunction(bodySQLiErrorPayloads))
 	return t
 }
 
@@ -169,4 +173,109 @@ func bodyFindSourceMapRef(L *lua.LState) int {
 func bodyLooksLikeSourceMap(L *lua.LState) int {
 	L.Push(lua.LBool(checks.LooksLikeSourceMap([]byte(requireString(L, 1)))))
 	return 1
+}
+
+// bodyScanKnownJSLibs returns the JS-library hits detected in an HTML
+// body as an array of { name, version, vulnerabilities = [...] }.
+// vulnerabilities is an empty array when the library was identified
+// but no vulnerable version row matched; the Lua port discriminates
+// info vs medium severity on `#vulnerabilities == 0`.
+func bodyScanKnownJSLibs(L *lua.LState) int {
+	body := requireString(L, 1)
+	hits := checks.ScanScriptTagsForKnownJSLibraries([]byte(body))
+	out := L.NewTable()
+	for i, h := range hits {
+		entry := L.NewTable()
+		entry.RawSetString("name", lua.LString(h.Name))
+		entry.RawSetString("version", lua.LString(h.Version))
+		vulns := L.NewTable()
+		for j, v := range h.Vulnerabilities {
+			vulns.RawSetInt(j+1, lua.LString(v))
+		}
+		entry.RawSetString("vulnerabilities", vulns)
+		out.RawSetInt(i+1, entry)
+	}
+	L.Push(out)
+	return 1
+}
+
+// bodyAnalyzeCSP runs the CSP-weak analyzer against the enforcing +
+// report-only header values and returns the deduplicated weakness
+// list. Both arg slots accept either a string (a single header value),
+// a Lua array of strings (multiple headers as http.Header.Values does),
+// or nil (header absent). The result is { is_report_only, multi_count,
+// weaknesses = [{directive, severity, id, detail}, ...] }.
+func bodyAnalyzeCSP(L *lua.LState) int {
+	enforcing := readStringList(L.Get(1))
+	reportOnly := readStringList(L.Get(2))
+	out := L.NewTable()
+	out.RawSetString("is_report_only", lua.LBool(checks.CSPIsReportOnly(enforcing, reportOnly)))
+	out.RawSetString("enforcing_count", lua.LNumber(len(enforcing)))
+	out.RawSetString("report_only_count", lua.LNumber(len(reportOnly)))
+	weaknesses := L.NewTable()
+	for i, w := range checks.AnalyzeCSP(enforcing, reportOnly) {
+		entry := L.NewTable()
+		entry.RawSetString("directive", lua.LString(w.Directive))
+		entry.RawSetString("severity", lua.LString(string(w.Severity)))
+		entry.RawSetString("id", lua.LString(w.ID))
+		entry.RawSetString("detail", lua.LString(w.Detail))
+		weaknesses.RawSetInt(i+1, entry)
+	}
+	out.RawSetString("weaknesses", weaknesses)
+	L.Push(out)
+	return 1
+}
+
+// bodySQLiErrorNewMatches returns the SQL-driver error pattern names
+// that appear in body but did not appear in baseline. Both args are
+// strings; nil/missing slots collapse to empty.
+func bodySQLiErrorNewMatches(L *lua.LState) int {
+	body := requireString(L, 1)
+	baseline := ""
+	if L.GetTop() >= 2 {
+		baseline = lvalString(L.Get(2))
+	}
+	hits := checks.SQLiErrorNewMatches([]byte(body), []byte(baseline))
+	out := L.NewTable()
+	for i, h := range hits {
+		out.RawSetInt(i+1, lua.LString(h))
+	}
+	L.Push(out)
+	return 1
+}
+
+// bodySQLiErrorPayloads exposes the curated SQLi-error payload list so
+// the Lua port iterates them in the same order PayloadsFor produces.
+func bodySQLiErrorPayloads(L *lua.LState) int {
+	out := L.NewTable()
+	for i, p := range checks.SQLiErrorPayloads() {
+		entry := L.NewTable()
+		entry.RawSetString("name", lua.LString(p.Name))
+		entry.RawSetString("template", lua.LString(p.Template))
+		out.RawSetInt(i+1, entry)
+	}
+	L.Push(out)
+	return 1
+}
+
+// readStringList accepts a Lua string, an array table of strings, or
+// nil, and returns the equivalent []string. Used by analyze_csp to
+// match http.Header.Values's shape on the Go side without forcing the
+// Lua author to pre-shape header arrays themselves.
+func readStringList(v lua.LValue) []string {
+	if v == nil || v == lua.LNil {
+		return nil
+	}
+	if s, ok := v.(lua.LString); ok {
+		return []string{string(s)}
+	}
+	if tbl, ok := v.(*lua.LTable); ok {
+		n := tbl.Len()
+		out := make([]string, 0, n)
+		for i := 1; i <= n; i++ {
+			out = append(out, lvalString(tbl.RawGetInt(i)))
+		}
+		return out
+	}
+	return nil
 }
