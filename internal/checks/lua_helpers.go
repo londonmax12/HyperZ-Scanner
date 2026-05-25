@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"golang.org/x/net/html"
+
+	"github.com/londonmax12/hyperz/internal/fingerprint"
 )
 
 // This file exposes the small set of pure helpers the Lua bridge calls
@@ -1217,6 +1219,214 @@ type OpenAPIExampleAuthMatchLua struct {
 	Raw      string
 	Redacted string
 }
+
+// ProtoPollutionIsJSONResponse wraps isJSONResponse so the Lua port
+// applies the same content-type + body-start sniffing the Go check
+// uses to decide whether the json-spaces gadget applies.
+func ProtoPollutionIsJSONResponse(ct string, body []byte) bool {
+	h := http.Header{}
+	if ct != "" {
+		h.Set("Content-Type", ct)
+	}
+	return isJSONResponse(h, body)
+}
+
+// ProtoPollutionJSONIndentWidth wraps jsonIndentWidth so the Lua port
+// reads the indent-GCD the same way the Go check does. Returns 0 when
+// no indented JSON lines are present, 1 when mixed indents collapse,
+// otherwise the GCD of every observed indent run.
+func ProtoPollutionJSONIndentWidth(body []byte) int {
+	return jsonIndentWidth(body)
+}
+
+// XXEErrorPatternsLua returns every xxe parser-error pattern present
+// in body. Lowercases body once inside the helper - matches the Go
+// check's case-insensitive substring scan. The .lua port uses this
+// for baseline + payload-stage subtraction.
+func XXEErrorPatternsLua(body []byte) []string {
+	return matchXXEErrors(body)
+}
+
+// XXEBase64MarkersLua returns every php-filter base64 marker present
+// in body. Case-sensitive (base64 alphabet) to avoid collisions with
+// prose.
+func XXEBase64MarkersLua(body []byte) []string {
+	return matchXXEBase64Markers(body)
+}
+
+// XXEFileDiscloseDocsLua exposes the file-disclosure XML payloads in
+// the order the Go check sweeps them. The .lua port iterates this
+// list verbatim so the wire shapes stay a single source of truth.
+func XXEFileDiscloseDocsLua() []string {
+	out := make([]string, len(xxeFileDiscloseDocs))
+	copy(out, xxeFileDiscloseDocs)
+	return out
+}
+
+// XXEErrorDocsLua exposes the error-based XML payloads, same shape as
+// XXEFileDiscloseDocsLua.
+func XXEErrorDocsLua() []string {
+	out := make([]string, len(xxeErrorDocs))
+	copy(out, xxeErrorDocs)
+	return out
+}
+
+// XXEBaselineDocLua returns the benign XML body the .lua port sends
+// once per candidate to gather baseline markers / errors. Keeping the
+// literal in one place ensures the byte-for-byte baseline matches
+// across Go and Lua.
+func XXEBaselineDocLua() string { return xxeBaselineDoc }
+
+// XXEExtractSystemTargetLua wraps extractSystemTarget so the .lua port
+// names the requested file in finding detail without re-implementing
+// the SYSTEM-attribute parser.
+func XXEExtractSystemTargetLua(doc string) string {
+	return extractSystemTarget(doc)
+}
+
+// XXEExtractExfilDataLua wraps extractExfilData so the DTD-exfil drain
+// path on the .lua side recovers the disclosed payload from the exfil
+// callback path.
+func XXEExtractExfilDataLua(rawPath string) string {
+	return extractExfilData(rawPath)
+}
+
+// XXEOOBExfilProbeFileLua returns the file the OOB DTD-exfil DTD reads
+// (file:///etc/hostname). The .lua port embeds it in finding text so
+// readers know what the chain attempted to disclose.
+func XXEOOBExfilProbeFileLua() string { return xxeOOBExfilProbeFile }
+
+// ContentDiscoveryEntryLua is one wordlist entry surfaced to the Lua
+// content-discovery port. Mirrors discoveryEntry verbatim - the .lua
+// port reads these fields and composes finding text from them.
+type ContentDiscoveryEntryLua struct {
+	Path                 string
+	Severity             string
+	Title                string
+	Detail               string
+	CWE                  string
+	OWASP                string
+	Remediation          string
+	Marker               string
+	ExpectedContentTypes []string
+}
+
+// ContentDiscoveryEntriesLua returns the wordlist entries the main
+// sweep should probe against hostname, filtered by aggressive level
+// and stack constraint. Host-named backup synthetics are appended in
+// the order the Go check produces. Returning a flat slice keeps the
+// .lua iteration shape simple.
+func ContentDiscoveryEntriesLua(aggressive bool, hostname string, stack *fingerprint.Stack) []ContentDiscoveryEntryLua {
+	out := make([]ContentDiscoveryEntryLua, 0, len(contentDiscoveryEntries)+8)
+	for _, e := range contentDiscoveryEntries {
+		if e.Aggressive && !aggressive {
+			continue
+		}
+		if !e.appliesTo(stack) {
+			continue
+		}
+		out = append(out, toContentDiscoveryEntryLua(e))
+	}
+	for _, e := range hostBackupEntries(hostname) {
+		out = append(out, toContentDiscoveryEntryLua(e))
+	}
+	return out
+}
+
+// ContentDiscoveryFollowUpsLua returns the second-wave entries to
+// probe given the set of paths whose first-wave probes fired and the
+// set already probed. Mirrors followUpsFor.
+func ContentDiscoveryFollowUpsLua(hits map[string]struct{}, probed map[string]struct{}, stack *fingerprint.Stack) []ContentDiscoveryEntryLua {
+	if len(hits) == 0 {
+		return nil
+	}
+	var out []ContentDiscoveryEntryLua
+	queued := map[string]struct{}{}
+	for _, g := range contentDiscoveryFollowUpGroups {
+		triggered := false
+		for _, t := range g.Triggers {
+			if _, ok := hits[t]; ok {
+				triggered = true
+				break
+			}
+		}
+		if !triggered {
+			continue
+		}
+		for _, e := range g.Entries {
+			if _, dup := probed[e.Path]; dup {
+				continue
+			}
+			if _, dup := queued[e.Path]; dup {
+				continue
+			}
+			if !e.appliesTo(stack) {
+				continue
+			}
+			queued[e.Path] = struct{}{}
+			out = append(out, toContentDiscoveryEntryLua(e))
+		}
+	}
+	return out
+}
+
+func toContentDiscoveryEntryLua(e discoveryEntry) ContentDiscoveryEntryLua {
+	cts := make([]string, len(e.ExpectedContentTypes))
+	copy(cts, e.ExpectedContentTypes)
+	return ContentDiscoveryEntryLua{
+		Path:                 e.Path,
+		Severity:             string(e.Severity),
+		Title:                e.Title,
+		Detail:               e.Detail,
+		CWE:                  e.CWE,
+		OWASP:                e.OWASP,
+		Remediation:          e.Remediation,
+		Marker:               e.Marker,
+		ExpectedContentTypes: cts,
+	}
+}
+
+// ContentDiscoveryBodyHashPrefixLua wraps bodyHashPrefix so the .lua
+// port uses the exact same SHA1[:8] prefix the Go check uses for
+// soft-404 fingerprinting.
+func ContentDiscoveryBodyHashPrefixLua(body []byte) string {
+	return bodyHashPrefix(body)
+}
+
+// ContentDiscoveryContentTypeFamilyLua exposes contentTypeFamily so
+// the soft-404 baseline match runs on the same stripped family form
+// on both sides.
+func ContentDiscoveryContentTypeFamilyLua(ct string) string {
+	return contentTypeFamily(ct)
+}
+
+// ContentDiscoveryContentTypeFamilyAllowedLua exposes
+// contentTypeFamilyAllowed so the markerless-entry filter behaves
+// identically.
+func ContentDiscoveryContentTypeFamilyAllowedLua(ct string, allowed []string) bool {
+	return contentTypeFamilyAllowed(ct, allowed)
+}
+
+// ContentDiscoveryLengthCloseToLua wraps lengthCloseTo so the soft-404
+// length-proximity rule is single-sourced.
+func ContentDiscoveryLengthCloseToLua(a, b int) bool {
+	return lengthCloseTo(a, b)
+}
+
+// ContentDiscoveryCanaryPathLua mints a fresh canary suffix the .lua
+// baseline probes. Two random twin halves + ".bad" matches the Go
+// check's NewCanary()-NewCanary().bad shape so any host-side
+// dictionary lookup behaves the same way.
+func ContentDiscoveryCanaryPathLua() string {
+	return "/" + NewCanary() + "-" + NewCanary() + ".bad"
+}
+
+// ContentDiscoveryBaselineProbes returns the canary probe count the
+// .lua baseline issues per host. Mirrors contentDiscoveryBaselineProbes.
+func ContentDiscoveryBaselineProbes() int { return contentDiscoveryBaselineProbes }
+
+// ContentDiscoveryBodyCap returns the per-probe body-read cap.
+func ContentDiscoveryBodyCap() int { return contentDiscoveryBodyCap }
 
 // OpenAPIScanExampleAuthMatches walks body for `Bearer <token>` and
 // `Basic <base64>` shapes that sit next to an OpenAPI example /

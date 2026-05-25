@@ -1,6 +1,7 @@
 package luabridge
 
 import (
+	"context"
 	"net/http"
 	"net/url"
 	"strings"
@@ -243,6 +244,7 @@ func ensureClientMT(L *lua.LState) *lua.LTable {
 	methods.RawSetString("do", L.NewFunction(clientDo))
 	methods.RawSetString("do_no_follow", L.NewFunction(clientDoNoFollow))
 	methods.RawSetString("do_timed", L.NewFunction(clientDoTimed))
+	methods.RawSetString("do_detached", L.NewFunction(clientDoDetached))
 	methods.RawSetString("new_request", L.NewFunction(clientNewRequest))
 	mt.RawSetString("__index", methods)
 	L.G.Registry.RawSetString(mtClient, mt)
@@ -309,6 +311,46 @@ func clientDoTimed(L *lua.LState) int {
 	L.Push(pushResponse(L, resp, nil, false))
 	L.Push(lua.LNumber(latency.Seconds()))
 	return 2
+}
+
+// clientDoDetached dispatches the request with a context detached
+// from the active env's ctx, optionally with its own short deadline.
+// Used by the proto-pollution port's cleanup path so a user-initiated
+// cancel mid-probe still gets a chance to overwrite the polluted
+// prototype properties on the target.
+//
+// Args: client:do_detached(request_userdata, timeout_seconds?).
+// timeout_seconds = 0 / omitted => no deadline (relies on the
+// underlying httpclient timeout). Returns (response_userdata) on
+// success or (nil, err_string) on failure.
+//
+// Errors are returned but never propagated through the Lua run-time
+// stack: the caller (cleanup arm) treats a failed detached dispatch
+// as best-effort and silently moves on.
+func clientDoDetached(L *lua.LState) int {
+	c := clientFromArg(L, 1)
+	r := requestFromArg(L, 2)
+	env := currentEnv(L)
+	if env == nil {
+		L.RaiseError("client:do_detached called outside a check run")
+	}
+	detached := context.WithoutCancel(env.ctx)
+	if L.GetTop() >= 3 {
+		if n, ok := L.Get(3).(lua.LNumber); ok && float64(n) > 0 {
+			var cancel context.CancelFunc
+			detached, cancel = context.WithTimeout(detached, time.Duration(float64(n)*float64(time.Second)))
+			defer cancel()
+		}
+	}
+	req := r.req.Clone(detached)
+	resp, err := c.c.Do(detached, req)
+	if err != nil {
+		L.Push(lua.LNil)
+		L.Push(lua.LString(err.Error()))
+		return 2
+	}
+	L.Push(pushResponse(L, resp, nil, false))
+	return 1
 }
 
 // clientDispatch is the shared implementation behind client:do and

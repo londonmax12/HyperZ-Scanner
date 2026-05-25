@@ -28,7 +28,48 @@ func buildURLTable(L *lua.LState) *lua.LTable {
 	t.RawSetString("looks_redirectish", L.NewFunction(urlLooksRedirectish))
 	t.RawSetString("is_redirect_status", L.NewFunction(urlIsRedirectStatus))
 	t.RawSetString("resolve", L.NewFunction(urlResolve))
+	t.RawSetString("encode_values", L.NewFunction(urlEncodeValues))
 	return t
+}
+
+// urlEncodeValues encodes a flat name -> string|array table into the
+// url.Values.Encode() form (RFC 3986 percent-encoding, alphabetically
+// sorted keys). Used by the proto-pollution port to build bracket-
+// notation parameter strings without re-implementing the escape rules
+// in Lua. An empty / nil table returns "".
+func urlEncodeValues(L *lua.LState) int {
+	v := L.Get(1)
+	if v == nil || v == lua.LNil {
+		L.Push(lua.LString(""))
+		return 1
+	}
+	tbl, ok := v.(*lua.LTable)
+	if !ok {
+		L.Push(lua.LString(""))
+		return 1
+	}
+	values := url.Values{}
+	tbl.ForEach(func(k, val lua.LValue) {
+		name := lvalString(k)
+		if name == "" {
+			return
+		}
+		switch t := val.(type) {
+		case lua.LString:
+			values.Add(name, string(t))
+		case lua.LNumber:
+			values.Add(name, lvalString(t))
+		case *lua.LTable:
+			n := t.Len()
+			for i := 1; i <= n; i++ {
+				values.Add(name, lvalString(t.RawGetInt(i)))
+			}
+		default:
+			values.Add(name, lvalString(val))
+		}
+	})
+	L.Push(lua.LString(values.Encode()))
+	return 1
 }
 
 // urlResolve resolves ref against base via net/url.URL.ResolveReference

@@ -99,7 +99,54 @@ func buildBodyTable(L *lua.LState) *lua.LTable {
 	t.RawSetString("is_event_stream", L.NewFunction(bodyIsEventStream))
 	t.RawSetString("find_event_source_literals", L.NewFunction(bodyFindEventSourceLiterals))
 	t.RawSetString("status_text", L.NewFunction(bodyStatusText))
+	t.RawSetString("is_json_response", L.NewFunction(bodyIsJSONResponse))
+	t.RawSetString("json_indent_width", L.NewFunction(bodyJSONIndentWidth))
+	t.RawSetString("xxe_error_patterns", L.NewFunction(bodyXXEErrorPatterns))
+	t.RawSetString("xxe_base64_markers", L.NewFunction(bodyXXEBase64Markers))
 	return t
+}
+
+// bodyIsJSONResponse mirrors checks.isJSONResponse: Content-Type wins,
+// otherwise a body that starts with `{` or `[` after whitespace
+// stripping is treated as JSON. Used by the proto-pollution port to
+// gate the json-spaces gadget.
+func bodyIsJSONResponse(L *lua.LState) int {
+	ct := optString(L, 1, "")
+	body := optString(L, 2, "")
+	L.Push(lua.LBool(checks.ProtoPollutionIsJSONResponse(ct, []byte(body))))
+	return 1
+}
+
+// bodyJSONIndentWidth wraps checks.ProtoPollutionJSONIndentWidth so
+// the .lua port reads the same GCD-of-indent-widths the Go check uses
+// to detect the json-spaces gadget firing.
+func bodyJSONIndentWidth(L *lua.LState) int {
+	L.Push(lua.LNumber(checks.ProtoPollutionJSONIndentWidth([]byte(requireString(L, 1)))))
+	return 1
+}
+
+// bodyXXEErrorPatterns returns every XML parser-error signature that
+// appears in body (case-insensitive). The .lua port subtracts the
+// baseline set itself.
+func bodyXXEErrorPatterns(L *lua.LState) int {
+	out := L.NewTable()
+	for i, h := range checks.XXEErrorPatternsLua([]byte(requireString(L, 1))) {
+		out.RawSetInt(i+1, lua.LString(h))
+	}
+	L.Push(out)
+	return 1
+}
+
+// bodyXXEBase64Markers returns every php-filter base64 marker visible
+// in body (case-sensitive). Used by the .lua xxe port's file-
+// disclosure phase as a fallback when the plaintext path doesn't hit.
+func bodyXXEBase64Markers(L *lua.LState) int {
+	out := L.NewTable()
+	for i, h := range checks.XXEBase64MarkersLua([]byte(requireString(L, 1))) {
+		out.RawSetInt(i+1, lua.LString(h))
+	}
+	L.Push(out)
+	return 1
 }
 
 // bodyStatusText wraps net/http.StatusText so Lua-authored evidence
