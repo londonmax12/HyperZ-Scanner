@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/londonmax12/hyperz/internal/checks"
+	"github.com/londonmax12/hyperz/internal/core"
 	"github.com/londonmax12/hyperz/internal/fingerprint"
 	"github.com/londonmax12/hyperz/internal/httpclient"
 	"github.com/londonmax12/hyperz/internal/page"
@@ -21,15 +21,15 @@ import (
 // stubCheck records every Run invocation and returns a configurable result.
 type stubCheck struct {
 	name     string
-	findings []checks.Finding
+	findings []core.Finding
 	err      error
 	delay    time.Duration
 	hits     atomic.Int64
 }
 
 func (s *stubCheck) Name() string        { return s.name }
-func (s *stubCheck) Level() checks.Level { return checks.LevelPassive }
-func (s *stubCheck) Run(ctx context.Context, _ *httpclient.Client, _ *scope.Scope, p page.Page) ([]checks.Finding, error) {
+func (s *stubCheck) Level() core.Level { return core.LevelPassive }
+func (s *stubCheck) Run(ctx context.Context, _ *httpclient.Client, _ *scope.Scope, p page.Page) ([]core.Finding, error) {
 	s.hits.Add(1)
 	if s.delay > 0 {
 		select {
@@ -41,7 +41,7 @@ func (s *stubCheck) Run(ctx context.Context, _ *httpclient.Client, _ *scope.Scop
 	if s.err != nil {
 		return nil, s.err
 	}
-	out := make([]checks.Finding, len(s.findings))
+	out := make([]core.Finding, len(s.findings))
 	for i, f := range s.findings {
 		f.Target = p.URL
 		out[i] = f
@@ -57,16 +57,16 @@ func newNilClient() *httpclient.Client {
 // ScanAll API, collecting findings into a slice for assertion convenience.
 // Production code uses ScanAll directly; this helper exists so tests don't
 // have to reproduce the channel boilerplate.
-func runOne(ctx context.Context, s *Scanner, target string) ([]checks.Finding, error) {
+func runOne(ctx context.Context, s *Scanner, target string) ([]core.Finding, error) {
 	pages := make(chan page.Page, 1)
 	pages <- page.FromURL(target)
 	close(pages)
 
-	out := make(chan checks.Finding, 16)
+	out := make(chan core.Finding, 16)
 	errCh := make(chan error, 1)
 	go func() { errCh <- s.ScanAll(ctx, pages, out) }()
 
-	var all []checks.Finding
+	var all []core.Finding
 	for f := range out {
 		all = append(all, f)
 	}
@@ -76,12 +76,12 @@ func runOne(ctx context.Context, s *Scanner, target string) ([]checks.Finding, e
 func TestScanSingleTargetCollectsFindings(t *testing.T) {
 	c := &stubCheck{
 		name: "stub",
-		findings: []checks.Finding{
-			{Check: "stub", Severity: checks.SeverityLow, Title: "low"},
-			{Check: "stub", Severity: checks.SeverityHigh, Title: "high"},
+		findings: []core.Finding{
+			{Check: "stub", Severity: core.SeverityLow, Title: "low"},
+			{Check: "stub", Severity: core.SeverityHigh, Title: "high"},
 		},
 	}
-	s := New(newNilClient(), []checks.Check{c})
+	s := New(newNilClient(), []core.Check{c})
 	got, err := runOne(context.Background(), s,"http://t")
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
@@ -97,19 +97,19 @@ func TestScanSingleTargetCollectsFindings(t *testing.T) {
 }
 
 func TestScanAllRunsCheckPerTarget(t *testing.T) {
-	c := &stubCheck{name: "stub", findings: []checks.Finding{{Title: "f"}}}
-	s := New(newNilClient(), []checks.Check{c}, WithConcurrency(4))
+	c := &stubCheck{name: "stub", findings: []core.Finding{{Title: "f"}}}
+	s := New(newNilClient(), []core.Check{c}, WithConcurrency(4))
 
 	pages := make(chan page.Page, 3)
 	for _, u := range []string{"http://a", "http://b", "http://c"} {
 		pages <- page.FromURL(u)
 	}
 	close(pages)
-	out := make(chan checks.Finding, 16)
+	out := make(chan core.Finding, 16)
 	if err := s.ScanAll(context.Background(), pages, out); err != nil {
 		t.Fatalf("ScanAll: %v", err)
 	}
-	var findings []checks.Finding
+	var findings []core.Finding
 	for f := range out {
 		findings = append(findings, f)
 	}
@@ -130,7 +130,7 @@ func TestScanErrorHandlerInvoked(t *testing.T) {
 		gotTgt  string
 		gotName string
 	)
-	s := New(newNilClient(), []checks.Check{c},
+	s := New(newNilClient(), []core.Check{c},
 		WithErrorHandler(func(target, check string, err error) {
 			mu.Lock()
 			defer mu.Unlock()
@@ -154,14 +154,14 @@ func TestScanErrorHandlerInvoked(t *testing.T) {
 }
 
 // TestScanSuppressesFetchAlreadyFailed pins the contract that
-// checks.ErrFetchAlreadyFailed is a quiet skip, not an error worth
+// core.ErrFetchAlreadyFailed is a quiet skip, not an error worth
 // surfacing. The crawler already reported the original network failure
 // once via its own onError; firing the scanner's per-check reporter
 // N times for the same dead URL would just be noise.
 func TestScanSuppressesFetchAlreadyFailed(t *testing.T) {
-	c := &stubCheck{name: "stub", err: checks.ErrFetchAlreadyFailed}
+	c := &stubCheck{name: "stub", err: core.ErrFetchAlreadyFailed}
 	var calls atomic.Int64
-	s := New(newNilClient(), []checks.Check{c},
+	s := New(newNilClient(), []core.Check{c},
 		WithErrorHandler(func(target, check string, err error) {
 			calls.Add(1)
 		}),
@@ -185,12 +185,12 @@ func TestScanSuppressesFetchAlreadyFailed(t *testing.T) {
 // dropped any remaining findings from that check.
 func TestScanCancellationFlushesInFlightFindings(t *testing.T) {
 	const n = 10
-	findings := make([]checks.Finding, n)
+	findings := make([]core.Finding, n)
 	for i := range findings {
-		findings[i] = checks.Finding{Check: "many", Title: fmt.Sprintf("f%d", i)}
+		findings[i] = core.Finding{Check: "many", Title: fmt.Sprintf("f%d", i)}
 	}
 	c := &stubCheck{name: "many", findings: findings}
-	s := New(newNilClient(), []checks.Check{c}, WithConcurrency(1))
+	s := New(newNilClient(), []core.Check{c}, WithConcurrency(1))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -200,12 +200,12 @@ func TestScanCancellationFlushesInFlightFindings(t *testing.T) {
 	close(pages)
 	// Unbuffered so the sender parks between each send - that's the window
 	// where the old code dropped findings on cancel.
-	out := make(chan checks.Finding)
+	out := make(chan core.Finding)
 
 	scanDone := make(chan error, 1)
 	go func() { scanDone <- s.ScanAll(ctx, pages, out) }()
 
-	var got []checks.Finding
+	var got []core.Finding
 	got = append(got, <-out)
 	got = append(got, <-out)
 	// Sender is now parked on the third send. Cancel; the contract is that
@@ -224,8 +224,8 @@ func TestScanCancellationFlushesInFlightFindings(t *testing.T) {
 
 func TestScanContextCancellationStopsWork(t *testing.T) {
 	c := &stubCheck{name: "slow", delay: 200 * time.Millisecond,
-		findings: []checks.Finding{{Title: "x"}}}
-	s := New(newNilClient(), []checks.Check{c}, WithConcurrency(2))
+		findings: []core.Finding{{Title: "x"}}}
+	s := New(newNilClient(), []core.Check{c}, WithConcurrency(2))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // pre-canceled
@@ -235,7 +235,7 @@ func TestScanContextCancellationStopsWork(t *testing.T) {
 		pages <- page.FromURL("http://t")
 	}
 	close(pages)
-	out := make(chan checks.Finding, 16)
+	out := make(chan core.Finding, 16)
 	err := s.ScanAll(ctx, pages, out)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("ScanAll err = %v, want context.Canceled", err)
@@ -249,11 +249,11 @@ func TestScanConcurrencyOptionRespected(t *testing.T) {
 	// Default concurrency=8. WithConcurrency(0) is ignored; WithConcurrency(3)
 	// should apply.
 	c := &stubCheck{name: "stub"}
-	s := New(newNilClient(), []checks.Check{c}, WithConcurrency(0))
+	s := New(newNilClient(), []core.Check{c}, WithConcurrency(0))
 	if s.concurrency != 8 {
 		t.Fatalf("default concurrency = %d, want 8", s.concurrency)
 	}
-	s = New(newNilClient(), []checks.Check{c}, WithConcurrency(3))
+	s = New(newNilClient(), []core.Check{c}, WithConcurrency(3))
 	if s.concurrency != 3 {
 		t.Fatalf("concurrency = %d, want 3", s.concurrency)
 	}
@@ -281,10 +281,10 @@ func TestScanGatedCheckRunsWhenStackMatches(t *testing.T) {
 	client := newNilClient()
 	det := fingerprint.New(client)
 	gated := &stubGatedCheck{
-		stubCheck: stubCheck{name: "wp", findings: []checks.Finding{{Title: "wp-only"}}},
+		stubCheck: stubCheck{name: "wp", findings: []core.Finding{{Title: "wp-only"}}},
 		wantValue: "wordpress",
 	}
-	s := New(client, []checks.Check{gated}, WithFingerprint(det))
+	s := New(client, []core.Check{gated}, WithFingerprint(det))
 
 	got, err := runOne(context.Background(), s,srv.URL)
 	if err != nil {
@@ -309,11 +309,11 @@ func TestScanGatedCheckSkippedWhenStackDoesNotMatch(t *testing.T) {
 	client := newNilClient()
 	det := fingerprint.New(client)
 	gated := &stubGatedCheck{
-		stubCheck: stubCheck{name: "wp", findings: []checks.Finding{{Title: "wp-only"}}},
+		stubCheck: stubCheck{name: "wp", findings: []core.Finding{{Title: "wp-only"}}},
 		wantValue: "wordpress",
 	}
 	var skips atomic.Int64
-	s := New(client, []checks.Check{gated},
+	s := New(client, []core.Check{gated},
 		WithFingerprint(det),
 		WithSkipHandler(func(target, check, reason string) { skips.Add(1) }),
 	)
@@ -335,15 +335,15 @@ func TestScanGatedCheckSkippedWhenStackDoesNotMatch(t *testing.T) {
 
 // stackObservingCheck records the *fingerprint.Stack attached to its
 // runCtx. Used to verify the scanner propagates the detected stack
-// through checks.WithStack so intra-check filters (content-discovery's
+// through core.WithStack so intra-check filters (content-discovery's
 // per-entry gating) can read it.
 type stackObservingCheck struct {
 	stubCheck
 	gotStack *fingerprint.Stack
 }
 
-func (s *stackObservingCheck) Run(ctx context.Context, c *httpclient.Client, sc *scope.Scope, p page.Page) ([]checks.Finding, error) {
-	s.gotStack = checks.StackFrom(ctx)
+func (s *stackObservingCheck) Run(ctx context.Context, c *httpclient.Client, sc *scope.Scope, p page.Page) ([]core.Finding, error) {
+	s.gotStack = core.StackFrom(ctx)
 	return s.stubCheck.Run(ctx, c, sc, p)
 }
 
@@ -357,7 +357,7 @@ func TestScanAttachesStackToCheckContext(t *testing.T) {
 	client := newNilClient()
 	det := fingerprint.New(client)
 	obs := &stackObservingCheck{stubCheck: stubCheck{name: "obs"}}
-	s := New(client, []checks.Check{obs}, WithFingerprint(det))
+	s := New(client, []core.Check{obs}, WithFingerprint(det))
 
 	if _, err := runOne(context.Background(), s, srv.URL); err != nil {
 		t.Fatalf("Scan: %v", err)
@@ -375,7 +375,7 @@ func TestScanWithoutFingerprintLeavesStackNil(t *testing.T) {
 	// WithStack, and StackFrom must return nil so intra-check filters
 	// fall back to their permissive (no fingerprint) branch.
 	obs := &stackObservingCheck{stubCheck: stubCheck{name: "obs"}}
-	s := New(newNilClient(), []checks.Check{obs})
+	s := New(newNilClient(), []core.Check{obs})
 	if _, err := runOne(context.Background(), s, "http://t"); err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
@@ -388,10 +388,10 @@ func TestScanWithoutFingerprintAlwaysRunsGatedChecks(t *testing.T) {
 	// No detector wired â†’ AppliesTo must not be consulted, so a check that
 	// would reject every stack still runs.
 	gated := &stubGatedCheck{
-		stubCheck: stubCheck{name: "wp", findings: []checks.Finding{{Title: "x"}}},
+		stubCheck: stubCheck{name: "wp", findings: []core.Finding{{Title: "x"}}},
 		wantValue: "wordpress",
 	}
-	s := New(newNilClient(), []checks.Check{gated})
+	s := New(newNilClient(), []core.Check{gated})
 	got, err := runOne(context.Background(), s,"http://example.invalid")
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
@@ -412,7 +412,7 @@ type budgetedCheck struct {
 }
 
 func (b *budgetedCheck) Budget() time.Duration { return b.budget }
-func (b *budgetedCheck) Run(ctx context.Context, c *httpclient.Client, s *scope.Scope, p page.Page) ([]checks.Finding, error) {
+func (b *budgetedCheck) Run(ctx context.Context, c *httpclient.Client, s *scope.Scope, p page.Page) ([]core.Finding, error) {
 	if dl, ok := ctx.Deadline(); ok {
 		b.gotDeadline = true
 		b.gotRemaining = time.Until(dl)
@@ -430,21 +430,21 @@ func TestScanAppliesPerCheckDeadline(t *testing.T) {
 		stubCheck: stubCheck{name: "opt"},
 		budget:    5 * time.Minute,
 	}
-	s := New(newNilClient(), []checks.Check{defObs, opt})
+	s := New(newNilClient(), []core.Check{defObs, opt})
 	if _, err := runOne(context.Background(), s, "http://t"); err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
 	if !defObs.gotDeadline {
 		t.Fatalf("default check got no deadline; scanner did not wrap runCtx")
 	}
-	if got := defObs.gotRemaining; got <= 0 || got > checks.DefaultBudget {
-		t.Fatalf("default check remaining = %v, want (0, %v]", got, checks.DefaultBudget)
+	if got := defObs.gotRemaining; got <= 0 || got > core.DefaultBudget {
+		t.Fatalf("default check remaining = %v, want (0, %v]", got, core.DefaultBudget)
 	}
 	if !opt.gotDeadline {
 		t.Fatalf("budgeted check got no deadline")
 	}
-	if got := opt.gotRemaining; got <= checks.DefaultBudget || got > opt.budget {
-		t.Fatalf("budgeted check remaining = %v, want (%v, %v]", got, checks.DefaultBudget, opt.budget)
+	if got := opt.gotRemaining; got <= core.DefaultBudget || got > opt.budget {
+		t.Fatalf("budgeted check remaining = %v, want (%v, %v]", got, core.DefaultBudget, opt.budget)
 	}
 }
 
@@ -457,7 +457,7 @@ type observingCheck struct {
 	gotRemaining time.Duration
 }
 
-func (o *observingCheck) Run(ctx context.Context, c *httpclient.Client, s *scope.Scope, p page.Page) ([]checks.Finding, error) {
+func (o *observingCheck) Run(ctx context.Context, c *httpclient.Client, s *scope.Scope, p page.Page) ([]core.Finding, error) {
 	if dl, ok := ctx.Deadline(); ok {
 		o.gotDeadline = true
 		o.gotRemaining = time.Until(dl)
@@ -480,7 +480,7 @@ type stubTwoPhase struct {
 	plantedAt  []string // URLs Plant was invoked against, in call order
 }
 
-func (s *stubTwoPhase) Plant(ctx context.Context, _ *httpclient.Client, _ *scope.Scope, p page.Page) ([]checks.Finding, error) {
+func (s *stubTwoPhase) Plant(ctx context.Context, _ *httpclient.Client, _ *scope.Scope, p page.Page) ([]core.Finding, error) {
 	s.planted.Add(1)
 	s.mu.Lock()
 	s.plantedAt = append(s.plantedAt, p.URL)
@@ -494,10 +494,10 @@ func (s *stubTwoPhase) DetectURLs() []string {
 	return out
 }
 
-func (s *stubTwoPhase) Detect(ctx context.Context, _ *httpclient.Client, _ *scope.Scope, p page.Page) ([]checks.Finding, error) {
+func (s *stubTwoPhase) Detect(ctx context.Context, _ *httpclient.Client, _ *scope.Scope, p page.Page) ([]core.Finding, error) {
 	s.detected.Add(1)
 	s.detectHits.Store(p.URL, struct{}{})
-	return []checks.Finding{{Check: s.name, Title: "stored", Target: p.URL, URL: p.URL}}, nil
+	return []core.Finding{{Check: s.name, Title: "stored", Target: p.URL, URL: p.URL}}, nil
 }
 
 // TestScanTwoPhaseRunsPlantThenDetect pins the cross-phase coordination:
@@ -516,17 +516,17 @@ func TestScanTwoPhaseRunsPlantThenDetect(t *testing.T) {
 	defer srv.Close()
 
 	tp := &stubTwoPhase{stubCheck: stubCheck{name: "stored-xss-stub"}}
-	s := New(newNilClient(), []checks.Check{tp}, WithConcurrency(2))
+	s := New(newNilClient(), []core.Check{tp}, WithConcurrency(2))
 
 	pages := make(chan page.Page, 2)
 	pages <- page.FromURL(srv.URL + "/a")
 	pages <- page.FromURL(srv.URL + "/b")
 	close(pages)
-	out := make(chan checks.Finding, 16)
+	out := make(chan core.Finding, 16)
 	if err := s.ScanAll(context.Background(), pages, out); err != nil {
 		t.Fatalf("ScanAll: %v", err)
 	}
-	var findings []checks.Finding
+	var findings []core.Finding
 	for f := range out {
 		findings = append(findings, f)
 	}
@@ -571,12 +571,12 @@ func TestScanTwoPhaseUnionsDetectURLs(t *testing.T) {
 		stubCheck: stubCheck{name: "stored-xss-stub"},
 		extraURLs: []string{srv.URL + "/discovered"},
 	}
-	s := New(newNilClient(), []checks.Check{tp})
+	s := New(newNilClient(), []core.Check{tp})
 
 	pages := make(chan page.Page, 1)
 	pages <- page.FromURL(srv.URL + "/seed")
 	close(pages)
-	out := make(chan checks.Finding, 16)
+	out := make(chan core.Finding, 16)
 	if err := s.ScanAll(context.Background(), pages, out); err != nil {
 		t.Fatalf("ScanAll: %v", err)
 	}
@@ -597,7 +597,7 @@ func TestScanTwoPhaseUnionsDetectURLs(t *testing.T) {
 // suddenly issue a fresh wave of re-fetches.
 func TestScanTwoPhaseSkipsWhenCancelled(t *testing.T) {
 	tp := &stubTwoPhase{stubCheck: stubCheck{name: "stored-xss-stub"}}
-	s := New(newNilClient(), []checks.Check{tp})
+	s := New(newNilClient(), []core.Check{tp})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // pre-cancelled so the scan workers exit immediately
@@ -605,7 +605,7 @@ func TestScanTwoPhaseSkipsWhenCancelled(t *testing.T) {
 	pages := make(chan page.Page, 1)
 	pages <- page.FromURL("http://example.invalid/seed")
 	close(pages)
-	out := make(chan checks.Finding, 16)
+	out := make(chan core.Finding, 16)
 	if err := s.ScanAll(ctx, pages, out); !errors.Is(err, context.Canceled) {
 		t.Fatalf("ScanAll err = %v, want context.Canceled", err)
 	}
@@ -617,9 +617,9 @@ func TestScanTwoPhaseSkipsWhenCancelled(t *testing.T) {
 }
 
 func TestScanMultipleChecksParallel(t *testing.T) {
-	a := &stubCheck{name: "a", findings: []checks.Finding{{Title: "fa"}}}
-	b := &stubCheck{name: "b", findings: []checks.Finding{{Title: "fb"}}}
-	s := New(newNilClient(), []checks.Check{a, b})
+	a := &stubCheck{name: "a", findings: []core.Finding{{Title: "fa"}}}
+	b := &stubCheck{name: "b", findings: []core.Finding{{Title: "fb"}}}
+	s := New(newNilClient(), []core.Check{a, b})
 	got, err := runOne(context.Background(), s,"http://t")
 	if err != nil {
 		t.Fatalf("Scan: %v", err)

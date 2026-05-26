@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/londonmax12/hyperz/internal/checks"
+	"github.com/londonmax12/hyperz/internal/core"
 	"github.com/londonmax12/hyperz/internal/fingerprint"
 	"github.com/londonmax12/hyperz/internal/httpclient"
 )
@@ -44,7 +44,7 @@ const (
 
 type pdfReporter struct{}
 
-func (pdfReporter) Write(ctx context.Context, w io.Writer, in <-chan checks.Finding, meta Metadata) error {
+func (pdfReporter) Write(ctx context.Context, w io.Writer, in <-chan core.Finding, meta Metadata) error {
 	findings := drain(ctx, in)
 	d := newPDFDoc()
 	d.renderReport(findings, meta)
@@ -144,15 +144,15 @@ func (d *pdfDoc) gap(h float64) { d.y -= h }
 
 // --- report layout ---
 
-var severityOrder = []checks.Severity{
-	checks.SeverityCritical,
-	checks.SeverityHigh,
-	checks.SeverityMedium,
-	checks.SeverityLow,
-	checks.SeverityInfo,
+var severityOrder = []core.Severity{
+	core.SeverityCritical,
+	core.SeverityHigh,
+	core.SeverityMedium,
+	core.SeverityLow,
+	core.SeverityInfo,
 }
 
-func (d *pdfDoc) renderReport(findings []checks.Finding, meta Metadata) {
+func (d *pdfDoc) renderReport(findings []core.Finding, meta Metadata) {
 	d.renderCover(findings, meta.Diff)
 	d.renderStacks(meta.Stacks)
 	d.renderBudget(meta.Budget)
@@ -166,8 +166,8 @@ func (d *pdfDoc) renderReport(findings []checks.Finding, meta Metadata) {
 	// security-headers check folding many missing-header facets into one
 	// finding, applied at report time across instances. Without this a
 	// 671-finding scan blows out to 831 PDF pages.
-	bySev := map[checks.Severity][]checkGroup{}
-	sevCounts := map[checks.Severity]int{}
+	bySev := map[core.Severity][]checkGroup{}
+	sevCounts := map[core.Severity]int{}
 	for _, g := range groupFindings(findings) {
 		bySev[g.Severity] = append(bySev[g.Severity], g)
 		sevCounts[g.Severity] += len(g.All)
@@ -195,15 +195,15 @@ func (d *pdfDoc) renderReport(findings []checks.Finding, meta Metadata) {
 // every instance in arrival order so per-URL variation - and per-instance
 // diff status - can still be listed.
 type checkGroup struct {
-	Severity checks.Severity
+	Severity core.Severity
 	Check    string
-	Rep      checks.Finding
-	All      []checks.Finding
+	Rep      core.Finding
+	All      []core.Finding
 }
 
-func groupFindings(findings []checks.Finding) []checkGroup {
+func groupFindings(findings []core.Finding) []checkGroup {
 	type key struct {
-		sev   checks.Severity
+		sev   core.Severity
 		check string
 	}
 	idx := map[key]int{}
@@ -219,7 +219,7 @@ func groupFindings(findings []checks.Finding) []checkGroup {
 			Severity: f.Severity,
 			Check:    f.Check,
 			Rep:      f,
-			All:      []checks.Finding{f},
+			All:      []core.Finding{f},
 		})
 	}
 	return out
@@ -277,7 +277,7 @@ func (d *pdfDoc) renderStacks(stacks map[string]*fingerprint.Stack) {
 	}
 }
 
-func (d *pdfDoc) renderCover(findings []checks.Finding, diff *DiffCounts) {
+func (d *pdfDoc) renderCover(findings []core.Finding, diff *DiffCounts) {
 	d.gap(24)
 	d.writeLine("hyperz scan report", fontBold, pdfSizeH1, 0.10, 0.10, 0.10)
 	d.writeLine("generated "+time.Now().UTC().Format(time.RFC3339), fontReg, pdfSizeBase, 0.45, 0.45, 0.45)
@@ -300,7 +300,7 @@ func (d *pdfDoc) renderCover(findings []checks.Finding, diff *DiffCounts) {
 		return
 	}
 
-	bySev := map[checks.Severity]int{}
+	bySev := map[core.Severity]int{}
 	for _, f := range findings {
 		bySev[f.Severity]++
 	}
@@ -324,7 +324,7 @@ func (d *pdfDoc) renderCover(findings []checks.Finding, diff *DiffCounts) {
 	}
 }
 
-func (d *pdfDoc) renderSeverityHeading(sev checks.Severity, n int) {
+func (d *pdfDoc) renderSeverityHeading(sev core.Severity, n int) {
 	d.gap(8)
 	r, g, b := severityRGB(sev)
 	barH := pdfSizeH2 * 1.2
@@ -472,22 +472,22 @@ func (d *pdfDoc) separator() {
 	d.gap(8)
 }
 
-func severityRGB(s checks.Severity) (float64, float64, float64) {
+func severityRGB(s core.Severity) (float64, float64, float64) {
 	switch s {
-	case checks.SeverityCritical:
+	case core.SeverityCritical:
 		return 0.55, 0.05, 0.10
-	case checks.SeverityHigh:
+	case core.SeverityHigh:
 		return 0.80, 0.20, 0.15
-	case checks.SeverityMedium:
+	case core.SeverityMedium:
 		return 0.85, 0.55, 0.10
-	case checks.SeverityLow:
+	case core.SeverityLow:
 		return 0.20, 0.45, 0.80
 	default:
 		return 0.45, 0.45, 0.45
 	}
 }
 
-func severityTitle(s checks.Severity) string {
+func severityTitle(s core.Severity) string {
 	str := string(s)
 	if str == "" {
 		return ""

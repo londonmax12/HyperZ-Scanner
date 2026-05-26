@@ -3,7 +3,7 @@ package report
 import (
 	"sort"
 
-	"github.com/londonmax12/hyperz/internal/checks"
+	"github.com/londonmax12/hyperz/internal/core"
 )
 
 // Tap forwards findings from in to a new channel, invoking observe on each
@@ -11,8 +11,8 @@ import (
 // findings (e.g. to compute the worst severity for the --fail-on gate)
 // without inserting a goroutine-based aggregator at every call site.
 // observe must not block - it runs inline with the forwarding loop.
-func Tap(in <-chan checks.Finding, observe func(checks.Finding)) <-chan checks.Finding {
-	out := make(chan checks.Finding, cap(in))
+func Tap(in <-chan core.Finding, observe func(core.Finding)) <-chan core.Finding {
+	out := make(chan core.Finding, cap(in))
 	go func() {
 		defer close(out)
 		for f := range in {
@@ -57,8 +57,8 @@ func (c DiffCounts) Total() int { return c.New + c.Persisting + c.Resolved }
 // Callers that need to know the diff counters during scan reporting should
 // pass in a freshly allocated *DiffCounts so the scan command can read it
 // after the reporter completes.
-func Diff(in <-chan checks.Finding, baseline *Baseline, counts *DiffCounts) <-chan checks.Finding {
-	out := make(chan checks.Finding, cap(in))
+func Diff(in <-chan core.Finding, baseline *Baseline, counts *DiffCounts) <-chan core.Finding {
+	out := make(chan core.Finding, cap(in))
 	if counts == nil {
 		counts = &DiffCounts{}
 	}
@@ -66,9 +66,9 @@ func Diff(in <-chan checks.Finding, baseline *Baseline, counts *DiffCounts) <-ch
 		defer close(out)
 		// remaining starts as a copy of baseline keys; each match removes
 		// from it so what's left at the end is the resolved set.
-		var remaining map[string]checks.Finding
+		var remaining map[string]core.Finding
 		if baseline != nil {
-			remaining = make(map[string]checks.Finding, len(baseline.Keys))
+			remaining = make(map[string]core.Finding, len(baseline.Keys))
 			for k, v := range baseline.Keys {
 				remaining[k] = v
 			}

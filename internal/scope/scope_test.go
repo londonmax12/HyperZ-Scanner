@@ -182,6 +182,60 @@ func TestMaxDepthNegativeIsUnlimited(t *testing.T) {
 	}
 }
 
+func TestHasHosts(t *testing.T) {
+	var nilScope *Scope
+	if nilScope.HasHosts() {
+		t.Error("nil scope must report HasHosts() == false")
+	}
+	open, err := New(Config{MaxDepth: -1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if open.HasHosts() {
+		t.Error("Config with no Hosts must report HasHosts() == false")
+	}
+	pinned, err := New(Config{Hosts: []string{"app.example"}, MaxDepth: -1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !pinned.HasHosts() {
+		t.Error("scope with a Host configured must report HasHosts() == true")
+	}
+}
+
+func TestSameSite(t *testing.T) {
+	cases := []struct {
+		name string
+		a, b string
+		want bool
+	}{
+		{"identical_host", "app.target.com", "app.target.com", true},
+		{"sibling_subdomain", "app.target.com", "ws.target.com", true},
+		{"three_deep_vs_apex", "a.b.target.com", "target.com", true},
+		{"case_insensitive", "APP.Target.COM", "ws.target.com", true},
+		{"whitespace_trimmed", "  app.target.com  ", "ws.target.com  ", true},
+		{"different_org", "app.target.com", "ws.other.com", false},
+		{"ccTLD_co_uk_siblings", "app.target.co.uk", "ws.target.co.uk", true},
+		{"ccTLD_target_vs_co_uk", "target.com", "target.co.uk", false},
+		{"ip_vs_domain", "127.0.0.1", "app.target.com", false},
+		{"ip_vs_same_ip", "127.0.0.1", "127.0.0.1", true},
+		{"ip_vs_other_ip", "127.0.0.1", "10.0.0.1", false},
+		{"v6_vs_v4", "::1", "127.0.0.1", false},
+		{"localhost_vs_localhost", "localhost", "localhost", true},
+		{"localhost_vs_domain", "localhost", "target.com", false},
+		{"empty_a", "", "target.com", false},
+		{"empty_b", "target.com", "", false},
+		{"both_empty", "", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := SameSite(tc.a, tc.b); got != tc.want {
+				t.Errorf("SameSite(%q,%q) = %v, want %v", tc.a, tc.b, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestAllowsRejectsURLOutOfHost(t *testing.T) {
 	s, err := New(Config{Hosts: []string{"a.example"}, MaxDepth: -1})
 	if err != nil {

@@ -15,7 +15,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/londonmax12/hyperz/internal/browser"
-	"github.com/londonmax12/hyperz/internal/checks"
+	"github.com/londonmax12/hyperz/internal/core"
 	"github.com/londonmax12/hyperz/internal/crawler"
 	"github.com/londonmax12/hyperz/internal/fingerprint"
 	"github.com/londonmax12/hyperz/internal/httpclient"
@@ -129,7 +129,7 @@ Modes:
 			if len(cfg.urls) == 0 && cfg.urlsFile == "" {
 				return fmt.Errorf("provide --url and/or --urls-file (or a URL as a positional arg)")
 			}
-			level, err := checks.ParseLevel(cfg.mode)
+			level, err := core.ParseLevel(cfg.mode)
 			if err != nil {
 				return err
 			}
@@ -159,7 +159,7 @@ Modes:
 	f.StringVar(&cfg.userAgent, "user-agent", "hyperz/0.1", "User-Agent header to send")
 	f.StringVar(&cfg.format, "format", "text",
 		"output format ("+strings.Join(report.Formats(), "|")+")")
-	f.StringVar(&cfg.mode, "mode", checks.LevelPassive.String(),
+	f.StringVar(&cfg.mode, "mode", core.LevelPassive.String(),
 		"scan level: passive (safe, observation-only) | default (low-risk crafted probes) | aggressive (heavy fuzzing). "+
 			"Higher levels include everything below; checks above the requested level are skipped.")
 	f.IntVar(&cfg.concurrency, "concurrency", 8, "number of targets scanned in parallel")
@@ -297,7 +297,7 @@ Modes:
 	return cmd
 }
 
-func runScan(ctx context.Context, cfg *scanConfig, level checks.Level) int {
+func runScan(ctx context.Context, cfg *scanConfig, level core.Level) int {
 	log, err := newLogger(cfg.logLevel, cfg.logFormat, os.Stderr)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
@@ -424,7 +424,7 @@ func runScan(ctx context.Context, cfg *scanConfig, level checks.Level) int {
 	}
 
 	all := registry(cfg.pollute)
-	enabled := checks.Filter(all, level)
+	enabled := core.Filter(all, level)
 	log.Info("scan starting",
 		"scan_level", level.String(),
 		"enabled", len(enabled),
@@ -481,7 +481,7 @@ func runScan(ctx context.Context, cfg *scanConfig, level checks.Level) int {
 	s := scanner.New(client, enabled, scannerOpts...)
 
 	pages := make(chan page.Page, cfg.concurrency)
-	findings := make(chan checks.Finding, 64)
+	findings := make(chan core.Finding, 64)
 
 	feedErr := make(chan error, 1)
 	if cfg.crawl {
@@ -529,14 +529,14 @@ func runScan(ctx context.Context, cfg *scanConfig, level checks.Level) int {
 	// only `new` findings count (the whole point of a baseline is to ignore
 	// known issues). Without a baseline, every emitted finding counts.
 	worstSev := -1
-	gated := report.Tap(reportCh, func(f checks.Finding) {
+	gated := report.Tap(reportCh, func(f core.Finding) {
 		if !gateEnabled {
 			return
 		}
 		if baseline != nil && f.DiffStatus != report.DiffStatusNew {
 			return
 		}
-		if r := checks.SeverityRank(f.Severity); r > worstSev {
+		if r := core.SeverityRank(f.Severity); r > worstSev {
 			worstSev = r
 		}
 	})
@@ -598,18 +598,18 @@ func runScan(ctx context.Context, cfg *scanConfig, level checks.Level) int {
 }
 
 // parseFailOn turns the --fail-on flag value into a severity rank (per
-// checks.SeverityRank). "none" disables the gate; any other value must be a
+// core.SeverityRank). "none" disables the gate; any other value must be a
 // canonical severity name. Returns enabled=false when the gate is off so
 // callers can short-circuit the worst-severity tracking.
 func parseFailOn(s string) (rank int, enabled bool, err error) {
 	if strings.EqualFold(s, "none") {
 		return 0, false, nil
 	}
-	sev, err := checks.ParseSeverity(s)
+	sev, err := core.ParseSeverity(s)
 	if err != nil {
 		return 0, false, err
 	}
-	return checks.SeverityRank(sev), true, nil
+	return core.SeverityRank(sev), true, nil
 }
 
 // startOOB builds and starts the out-of-band callback server when the
@@ -664,9 +664,9 @@ func startBrowser(cfg *scanConfig, log *slog.Logger) (browser.Pool, error) {
 // sitemap.xml are conventional client-discoverable resources, so they run
 // at every level; the CMS login URLs look like recon to defenders and are
 // gated to LevelDefault+.
-func fingerprintFallbackProbes(level checks.Level) []string {
+func fingerprintFallbackProbes(level core.Level) []string {
 	probes := []string{"/robots.txt", "/sitemap.xml"}
-	if level >= checks.LevelDefault {
+	if level >= core.LevelDefault {
 		probes = append(probes,
 			"/wp-login.php",
 			"/administrator/",

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/londonmax12/hyperz/internal/checks"
+	"github.com/londonmax12/hyperz/internal/core"
 	"github.com/londonmax12/hyperz/internal/httpclient"
 	"github.com/londonmax12/hyperz/internal/oob"
 	"github.com/londonmax12/hyperz/internal/page"
@@ -19,20 +19,20 @@ import (
 // elsewhere.
 type stubOOBCheck struct {
 	name      string
-	drainOut  []checks.Finding
+	drainOut  []core.Finding
 	ranOnce   bool
 	drainOnce bool
 	oobAtRun  oob.Server
 }
 
 func (s *stubOOBCheck) Name() string        { return s.name }
-func (s *stubOOBCheck) Level() checks.Level { return checks.LevelPassive }
-func (s *stubOOBCheck) Run(ctx context.Context, _ *httpclient.Client, _ *scope.Scope, _ page.Page) ([]checks.Finding, error) {
+func (s *stubOOBCheck) Level() core.Level { return core.LevelPassive }
+func (s *stubOOBCheck) Run(ctx context.Context, _ *httpclient.Client, _ *scope.Scope, _ page.Page) ([]core.Finding, error) {
 	s.ranOnce = true
-	s.oobAtRun = checks.OOBFrom(ctx)
+	s.oobAtRun = core.OOBFrom(ctx)
 	return nil, nil
 }
-func (s *stubOOBCheck) Drain(ctx context.Context) []checks.Finding {
+func (s *stubOOBCheck) Drain(ctx context.Context) []core.Finding {
 	s.drainOnce = true
 	return s.drainOut
 }
@@ -40,8 +40,8 @@ func (s *stubOOBCheck) Drain(ctx context.Context) []checks.Finding {
 func TestScannerDrainsOOBChecksWhenServerAttached(t *testing.T) {
 	stub := &stubOOBCheck{
 		name: "stub-oob",
-		drainOut: []checks.Finding{
-			{Check: "stub-oob", Severity: checks.SeverityCritical, Title: "stub OOB finding"},
+		drainOut: []core.Finding{
+			{Check: "stub-oob", Severity: core.SeverityCritical, Title: "stub OOB finding"},
 		},
 	}
 	srv := oob.NewBuiltin("127.0.0.1:0", "h")
@@ -50,7 +50,7 @@ func TestScannerDrainsOOBChecksWhenServerAttached(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = srv.Stop(context.Background()) })
 
-	s := New(newNilClient(), []checks.Check{stub},
+	s := New(newNilClient(), []core.Check{stub},
 		WithOOB(srv),
 		// Zero wait so the test doesn't pay the default 10s window.
 		WithOOBWait(1*time.Millisecond),
@@ -76,12 +76,12 @@ func TestScannerDrainsOOBChecksWhenServerAttached(t *testing.T) {
 func TestScannerSkipsDrainWhenNoServer(t *testing.T) {
 	stub := &stubOOBCheck{
 		name:     "stub-oob",
-		drainOut: []checks.Finding{{Title: "should not appear"}},
+		drainOut: []core.Finding{{Title: "should not appear"}},
 	}
 	// No WithOOB option: scanner must not call Drain even though the
 	// check implements OOBCheck. Otherwise blind findings would leak
 	// from a check whose canaries were never minted.
-	s := New(newNilClient(), []checks.Check{stub})
+	s := New(newNilClient(), []core.Check{stub})
 	got, err := runOne(context.Background(), s, "http://t")
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
@@ -97,7 +97,7 @@ func TestScannerSkipsDrainWhenNoServer(t *testing.T) {
 func TestScannerSkipsDrainOnContextCancel(t *testing.T) {
 	stub := &stubOOBCheck{
 		name:     "stub-oob",
-		drainOut: []checks.Finding{{Title: "should not appear"}},
+		drainOut: []core.Finding{{Title: "should not appear"}},
 	}
 	srv := oob.NewBuiltin("127.0.0.1:0", "h")
 	if err := srv.Start(context.Background()); err != nil {
@@ -108,7 +108,7 @@ func TestScannerSkipsDrainOnContextCancel(t *testing.T) {
 	// Long wait makes ctx-cancel observable: the scanner should bail
 	// out of the wait sleep without firing Drain. A canceled scan
 	// shouldn't produce additional OOB findings - the operator gave up.
-	s := New(newNilClient(), []checks.Check{stub},
+	s := New(newNilClient(), []core.Check{stub},
 		WithOOB(srv),
 		WithOOBWait(5*time.Second),
 	)

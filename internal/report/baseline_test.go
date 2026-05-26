@@ -8,22 +8,22 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/londonmax12/hyperz/internal/checks"
+	"github.com/londonmax12/hyperz/internal/core"
 )
 
-func baselineSample() []checks.Finding {
-	return []checks.Finding{
-		{Check: "security-headers", Target: "http://a", URL: "http://a", Severity: checks.SeverityHigh,
+func baselineSample() []core.Finding {
+	return []core.Finding{
+		{Check: "security-headers", Target: "http://a", URL: "http://a", Severity: core.SeverityHigh,
 			Title: "missing CSP", DedupeKey: "k-csp"},
-		{Check: "tls", Target: "http://a", URL: "http://a", Severity: checks.SeverityMedium,
+		{Check: "tls", Target: "http://a", URL: "http://a", Severity: core.SeverityMedium,
 			Title: "weak cipher", DedupeKey: "k-tls"},
 		// One unkeyed entry: must land in NoKey and be excluded from diff.
-		{Check: "server-leak", Target: "http://a", URL: "http://a", Severity: checks.SeverityLow,
+		{Check: "server-leak", Target: "http://a", URL: "http://a", Severity: core.SeverityLow,
 			Title: "banner leak"},
 	}
 }
 
-func writeTempReport(t *testing.T, format, name string, findings []checks.Finding) string {
+func writeTempReport(t *testing.T, format, name string, findings []core.Finding) string {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, name)
@@ -131,19 +131,19 @@ func TestLoadBaselineSARIFPreservesSeverity(t *testing.T) {
 	// SARIF maps high+critical to "error"; without the properties.severity
 	// emit, both would round-trip as "high". Verify the emitter+parser pair
 	// keeps them distinct.
-	src := []checks.Finding{
-		{Check: "x", Target: "http://t", Severity: checks.SeverityCritical, Title: "c", DedupeKey: "kc"},
-		{Check: "y", Target: "http://t", Severity: checks.SeverityHigh, Title: "h", DedupeKey: "kh"},
+	src := []core.Finding{
+		{Check: "x", Target: "http://t", Severity: core.SeverityCritical, Title: "c", DedupeKey: "kc"},
+		{Check: "y", Target: "http://t", Severity: core.SeverityHigh, Title: "h", DedupeKey: "kh"},
 	}
 	path := writeTempReport(t, "sarif", "baseline.sarif", src)
 	b, err := LoadBaseline(path, "")
 	if err != nil {
 		t.Fatalf("LoadBaseline: %v", err)
 	}
-	if b.Keys["kc"].Severity != checks.SeverityCritical {
+	if b.Keys["kc"].Severity != core.SeverityCritical {
 		t.Errorf("critical round-trip lost: %+v", b.Keys["kc"])
 	}
-	if b.Keys["kh"].Severity != checks.SeverityHigh {
+	if b.Keys["kh"].Severity != core.SeverityHigh {
 		t.Errorf("high round-trip lost: %+v", b.Keys["kh"])
 	}
 }
@@ -194,20 +194,20 @@ func TestLoadBaselineEmptyJSON(t *testing.T) {
 }
 
 func TestDiffMarksNewPersistingResolved(t *testing.T) {
-	baseline := &Baseline{Keys: map[string]checks.Finding{
-		"persists": {Check: "p", Severity: checks.SeverityMedium, Title: "still here", DedupeKey: "persists"},
-		"gone":     {Check: "g", Severity: checks.SeverityHigh, Title: "fixed in prod", DedupeKey: "gone"},
+	baseline := &Baseline{Keys: map[string]core.Finding{
+		"persists": {Check: "p", Severity: core.SeverityMedium, Title: "still here", DedupeKey: "persists"},
+		"gone":     {Check: "g", Severity: core.SeverityHigh, Title: "fixed in prod", DedupeKey: "gone"},
 	}}
-	in := make(chan checks.Finding, 3)
-	in <- checks.Finding{Check: "n", Severity: checks.SeverityHigh, Title: "new!", DedupeKey: "newkey"}
-	in <- checks.Finding{Check: "p", Severity: checks.SeverityMedium, Title: "still here", DedupeKey: "persists"}
-	in <- checks.Finding{Check: "u", Severity: checks.SeverityLow, Title: "no key"}
+	in := make(chan core.Finding, 3)
+	in <- core.Finding{Check: "n", Severity: core.SeverityHigh, Title: "new!", DedupeKey: "newkey"}
+	in <- core.Finding{Check: "p", Severity: core.SeverityMedium, Title: "still here", DedupeKey: "persists"}
+	in <- core.Finding{Check: "u", Severity: core.SeverityLow, Title: "no key"}
 	close(in)
 
 	counts := &DiffCounts{}
 	out := Diff(in, baseline, counts)
 
-	var got []checks.Finding
+	var got []core.Finding
 	for f := range out {
 		got = append(got, f)
 	}
@@ -237,12 +237,12 @@ func TestDiffMarksNewPersistingResolved(t *testing.T) {
 }
 
 func TestDiffEmptyBaselineMarksAllNew(t *testing.T) {
-	in := make(chan checks.Finding, 2)
-	in <- checks.Finding{Title: "a", DedupeKey: "k1"}
-	in <- checks.Finding{Title: "b", DedupeKey: "k2"}
+	in := make(chan core.Finding, 2)
+	in <- core.Finding{Title: "a", DedupeKey: "k1"}
+	in <- core.Finding{Title: "b", DedupeKey: "k2"}
 	close(in)
 	counts := &DiffCounts{}
-	out := Diff(in, &Baseline{Keys: map[string]checks.Finding{}}, counts)
+	out := Diff(in, &Baseline{Keys: map[string]core.Finding{}}, counts)
 	n := 0
 	for f := range out {
 		n++
@@ -256,12 +256,12 @@ func TestDiffEmptyBaselineMarksAllNew(t *testing.T) {
 }
 
 func TestDiffResolvedOrderIsStable(t *testing.T) {
-	baseline := &Baseline{Keys: map[string]checks.Finding{
+	baseline := &Baseline{Keys: map[string]core.Finding{
 		"k-c": {DedupeKey: "k-c", Title: "C"},
 		"k-a": {DedupeKey: "k-a", Title: "A"},
 		"k-b": {DedupeKey: "k-b", Title: "B"},
 	}}
-	in := make(chan checks.Finding)
+	in := make(chan core.Finding)
 	close(in)
 	out := Diff(in, baseline, &DiffCounts{})
 	var titles []string
@@ -278,14 +278,14 @@ func TestDiffResolvedOrderIsStable(t *testing.T) {
 }
 
 func TestTapObservesEveryFinding(t *testing.T) {
-	in := make(chan checks.Finding, 3)
-	in <- checks.Finding{Title: "a"}
-	in <- checks.Finding{Title: "b"}
-	in <- checks.Finding{Title: "c"}
+	in := make(chan core.Finding, 3)
+	in <- core.Finding{Title: "a"}
+	in <- core.Finding{Title: "b"}
+	in <- core.Finding{Title: "c"}
 	close(in)
 
 	var seen []string
-	out := Tap(in, func(f checks.Finding) { seen = append(seen, f.Title) })
+	out := Tap(in, func(f core.Finding) { seen = append(seen, f.Title) })
 	var got []string
 	for f := range out {
 		got = append(got, f.Title)
@@ -299,10 +299,10 @@ func TestTapObservesEveryFinding(t *testing.T) {
 }
 
 func TestReporterRendersDiffStatus(t *testing.T) {
-	findings := []checks.Finding{
-		{Check: "x", Target: "http://t", Severity: checks.SeverityHigh, Title: "new one",
+	findings := []core.Finding{
+		{Check: "x", Target: "http://t", Severity: core.SeverityHigh, Title: "new one",
 			DedupeKey: "knew", DiffStatus: DiffStatusNew},
-		{Check: "x", Target: "http://t", Severity: checks.SeverityMedium, Title: "old one",
+		{Check: "x", Target: "http://t", Severity: core.SeverityMedium, Title: "old one",
 			DedupeKey: "kold", DiffStatus: DiffStatusPersisting},
 	}
 	counts := &DiffCounts{New: 1, Persisting: 1, Resolved: 0}
@@ -379,8 +379,8 @@ func TestReporterRendersDiffStatus(t *testing.T) {
 }
 
 func TestSARIFEmitsSeverityProperty(t *testing.T) {
-	findings := []checks.Finding{{
-		Check: "x", Target: "http://t", Severity: checks.SeverityCritical, Title: "crit",
+	findings := []core.Finding{{
+		Check: "x", Target: "http://t", Severity: core.SeverityCritical, Title: "crit",
 		DedupeKey: "k1",
 	}}
 	out := writeFormat(t, "sarif", findings)

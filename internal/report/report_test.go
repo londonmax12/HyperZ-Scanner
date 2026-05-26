@@ -11,24 +11,24 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/londonmax12/hyperz/internal/checks"
+	"github.com/londonmax12/hyperz/internal/core"
 	"github.com/londonmax12/hyperz/internal/fingerprint"
 	"github.com/londonmax12/hyperz/internal/httpclient"
 )
 
-func sampleFindings() []checks.Finding {
-	return []checks.Finding{
-		{Check: "security-headers", Target: "http://a", Severity: checks.SeverityHigh,
+func sampleFindings() []core.Finding {
+	return []core.Finding{
+		{Check: "security-headers", Target: "http://a", Severity: core.SeverityHigh,
 			Title: "missing header X", Detail: "details A"},
-		{Check: "security-headers", Target: "http://b", Severity: checks.SeverityMedium,
+		{Check: "security-headers", Target: "http://b", Severity: core.SeverityMedium,
 			Title: "missing header Y"},
-		{Check: "tls", Target: "http://c", Severity: checks.SeverityLow,
+		{Check: "tls", Target: "http://c", Severity: core.SeverityLow,
 			Title: "weak cipher | pipe", Detail: ""},
 	}
 }
 
-func channelFrom(findings []checks.Finding) <-chan checks.Finding {
-	ch := make(chan checks.Finding, len(findings))
+func channelFrom(findings []core.Finding) <-chan core.Finding {
+	ch := make(chan core.Finding, len(findings))
 	for _, f := range findings {
 		ch <- f
 	}
@@ -36,12 +36,12 @@ func channelFrom(findings []checks.Finding) <-chan checks.Finding {
 	return ch
 }
 
-func writeFormat(t *testing.T, format string, findings []checks.Finding) string {
+func writeFormat(t *testing.T, format string, findings []core.Finding) string {
 	t.Helper()
 	return writeFormatWithMeta(t, format, findings, Metadata{})
 }
 
-func writeFormatWithMeta(t *testing.T, format string, findings []checks.Finding, meta Metadata) string {
+func writeFormatWithMeta(t *testing.T, format string, findings []core.Finding, meta Metadata) string {
 	t.Helper()
 	r, err := New(format)
 	if err != nil {
@@ -154,7 +154,7 @@ func TestJSONLReporterEmitsOnePerLine(t *testing.T) {
 		t.Fatalf("got %d lines, want 3:\n%s", len(lines), out)
 	}
 	for i, line := range lines {
-		var f checks.Finding
+		var f core.Finding
 		if err := json.Unmarshal([]byte(line), &f); err != nil {
 			t.Fatalf("line %d: %v\n%s", i, err, line)
 		}
@@ -244,12 +244,12 @@ func TestSARIFReporterShape(t *testing.T) {
 }
 
 func TestSARIFLevelMapping(t *testing.T) {
-	cases := map[checks.Severity]string{
-		checks.SeverityCritical: "error",
-		checks.SeverityHigh:     "error",
-		checks.SeverityMedium:   "warning",
-		checks.SeverityLow:      "note",
-		checks.SeverityInfo:     "none",
+	cases := map[core.Severity]string{
+		core.SeverityCritical: "error",
+		core.SeverityHigh:     "error",
+		core.SeverityMedium:   "warning",
+		core.SeverityLow:      "note",
+		core.SeverityInfo:     "none",
 		"weird":                 "none",
 	}
 	for sev, want := range cases {
@@ -334,10 +334,10 @@ func TestReportersDrainOnCanceledContext(t *testing.T) {
 	}
 }
 
-func findingWithDetails() []checks.Finding {
-	return []checks.Finding{{
+func findingWithDetails() []core.Finding {
+	return []core.Finding{{
 		Check: "security-headers", Target: "http://t", URL: "http://t/p",
-		Severity: checks.SeverityMedium, Title: "missing 3 security headers",
+		Severity: core.SeverityMedium, Title: "missing 3 security headers",
 		Detail: "response from http://t/p did not include the following security headers",
 		Details: []string{
 			"Content-Security-Policy: Set CSP",
@@ -351,15 +351,15 @@ func TestTextReporterGroupsRepeatedCheck(t *testing.T) {
 	// 25 instances of the same (severity, check) collapse to a single block
 	// with a truncated affected list. The fact tests this is the React-style
 	// "one bad <Link> rendered 500 times" case the grouping was added for.
-	var findings []checks.Finding
+	var findings []core.Finding
 	for i := 0; i < 25; i++ {
-		findings = append(findings, checks.Finding{
+		findings = append(findings, core.Finding{
 			Check: "tabnabbing", Target: "http://app", URL: fmt.Sprintf("http://app/page/%d", i),
-			Severity: checks.SeverityMedium,
+			Severity: core.SeverityMedium,
 			Title:    "target=_blank without noopener",
 			Detail:   "anchor opens new tab without rel=noopener",
 			CWE:      "CWE-1022",
-			Evidence: &checks.Evidence{Method: "GET", RequestURL: "http://app/page/0", Status: 200},
+			Evidence: &core.Evidence{Method: "GET", RequestURL: "http://app/page/0", Status: 200},
 		})
 	}
 	out := writeFormat(t, "text", findings)
@@ -396,10 +396,10 @@ func TestTextReporterGroupsRepeatedCheck(t *testing.T) {
 func TestTextReporterSortsGroupsBySeverity(t *testing.T) {
 	// Arrival order is low, high, medium - output must reorder to
 	// critical/high/medium/low/info so triage reads top-down.
-	findings := []checks.Finding{
-		{Check: "a", Severity: checks.SeverityLow, Target: "http://x", Title: "low one"},
-		{Check: "b", Severity: checks.SeverityHigh, Target: "http://y", Title: "high one"},
-		{Check: "c", Severity: checks.SeverityMedium, Target: "http://z", Title: "medium one"},
+	findings := []core.Finding{
+		{Check: "a", Severity: core.SeverityLow, Target: "http://x", Title: "low one"},
+		{Check: "b", Severity: core.SeverityHigh, Target: "http://y", Title: "high one"},
+		{Check: "c", Severity: core.SeverityMedium, Target: "http://z", Title: "medium one"},
 	}
 	out := writeFormat(t, "text", findings)
 	hi := strings.Index(out, "[high]")
@@ -418,10 +418,10 @@ func TestTextReporterSingleInstanceUnchanged(t *testing.T) {
 	// A group of one must degrade to the legacy single-finding layout
 	// (URL inline in heading, "evidence:" not "sample evidence:") so existing
 	// consumers and snapshots aren't disturbed.
-	findings := []checks.Finding{{
+	findings := []core.Finding{{
 		Check: "tabnabbing", Target: "http://t", URL: "http://t/p",
-		Severity: checks.SeverityMedium, Title: "target=_blank",
-		Evidence: &checks.Evidence{Method: "GET", RequestURL: "http://t/p", Status: 200},
+		Severity: core.SeverityMedium, Title: "target=_blank",
+		Evidence: &core.Evidence{Method: "GET", RequestURL: "http://t/p", Status: 200},
 	}}
 	out := writeFormat(t, "text", findings)
 	if !strings.Contains(out, "[medium] tabnabbing - http://t/p - target=_blank") {
@@ -618,12 +618,12 @@ func TestPDFWrap(t *testing.T) {
 }
 
 func TestDedupeDropsRepeats(t *testing.T) {
-	in := make(chan checks.Finding, 5)
-	in <- checks.Finding{Title: "a", DedupeKey: "k1"}
-	in <- checks.Finding{Title: "a-dup", DedupeKey: "k1"}
-	in <- checks.Finding{Title: "b", DedupeKey: "k2"}
-	in <- checks.Finding{Title: "no-key-1"} // empty key always passes through
-	in <- checks.Finding{Title: "no-key-2"}
+	in := make(chan core.Finding, 5)
+	in <- core.Finding{Title: "a", DedupeKey: "k1"}
+	in <- core.Finding{Title: "a-dup", DedupeKey: "k1"}
+	in <- core.Finding{Title: "b", DedupeKey: "k2"}
+	in <- core.Finding{Title: "no-key-1"} // empty key always passes through
+	in <- core.Finding{Title: "no-key-2"}
 	close(in)
 
 	got := []string{}
@@ -637,7 +637,7 @@ func TestDedupeDropsRepeats(t *testing.T) {
 }
 
 func TestDedupeClosesOutputWhenInputCloses(t *testing.T) {
-	in := make(chan checks.Finding)
+	in := make(chan core.Finding)
 	out := Dedupe(in)
 	close(in)
 	if _, ok := <-out; ok {
@@ -646,12 +646,12 @@ func TestDedupeClosesOutputWhenInputCloses(t *testing.T) {
 }
 
 func TestTextReporterRendersNewFields(t *testing.T) {
-	findings := []checks.Finding{{
+	findings := []core.Finding{{
 		Check: "security-headers", Target: "http://t", URL: "http://t/page",
-		Severity: checks.SeverityMedium, Title: "missing CSP",
+		Severity: core.SeverityMedium, Title: "missing CSP",
 		CWE: "CWE-693", OWASP: "A05:2021 Security Misconfiguration",
 		Remediation: "Set Content-Security-Policy",
-		Evidence: &checks.Evidence{
+		Evidence: &core.Evidence{
 			Method: "GET", RequestURL: "http://t/page", Status: 200,
 		},
 	}}
@@ -669,11 +669,11 @@ func TestTextReporterRendersNewFields(t *testing.T) {
 }
 
 func TestCSVRowIncludesEvidenceAndDedupe(t *testing.T) {
-	findings := []checks.Finding{{
+	findings := []core.Finding{{
 		Check: "security-headers", Target: "http://t", URL: "http://t/p",
-		Severity: checks.SeverityLow, Title: "x", CWE: "CWE-1021",
+		Severity: core.SeverityLow, Title: "x", CWE: "CWE-1021",
 		OWASP: "A05", Remediation: "set X-Frame-Options",
-		Evidence:  &checks.Evidence{Method: "GET", RequestURL: "http://t/p", Status: 200},
+		Evidence:  &core.Evidence{Method: "GET", RequestURL: "http://t/p", Status: 200},
 		DedupeKey: "abc123",
 	}}
 	out := writeFormat(t, "csv", findings)
@@ -710,9 +710,9 @@ func TestCSVRowIncludesEvidenceAndDedupe(t *testing.T) {
 }
 
 func TestSARIFIncludesCWEAndFingerprint(t *testing.T) {
-	findings := []checks.Finding{{
+	findings := []core.Finding{{
 		Check: "security-headers", Target: "http://t", URL: "http://t/p",
-		Severity: checks.SeverityMedium, Title: "missing CSP",
+		Severity: core.SeverityMedium, Title: "missing CSP",
 		CWE: "CWE-693", OWASP: "A05:2021", Remediation: "set it",
 		DedupeKey: "fp1",
 	}}
@@ -924,12 +924,12 @@ func TestReporterStacksOmittedWhenEmpty(t *testing.T) {
 }
 
 func TestMarkdownReporterRendersExchangeBodies(t *testing.T) {
-	findings := []checks.Finding{{
+	findings := []core.Finding{{
 		Check: "active-xss", Target: "http://t", URL: "http://t/q",
-		Severity: checks.SeverityHigh, Title: "reflected XSS",
-		Evidence: &checks.Evidence{
+		Severity: core.SeverityHigh, Title: "reflected XSS",
+		Evidence: &core.Evidence{
 			Method: "GET", RequestURL: "http://t/q?x=<script>", Status: 200,
-			Exchange: &checks.Exchange{
+			Exchange: &core.Exchange{
 				Method:                "GET",
 				URL:                   "http://t/q?x=<script>",
 				Status:                200,
@@ -958,12 +958,12 @@ func TestMarkdownReporterRendersExchangeBodies(t *testing.T) {
 }
 
 func TestPDFReporterRendersExchangeBodies(t *testing.T) {
-	findings := []checks.Finding{{
+	findings := []core.Finding{{
 		Check: "active-sqli", Target: "http://t", URL: "http://t/q",
-		Severity: checks.SeverityHigh, Title: "SQLi",
-		Evidence: &checks.Evidence{
+		Severity: core.SeverityHigh, Title: "SQLi",
+		Evidence: &core.Evidence{
 			Method: "POST", RequestURL: "http://t/q", Status: 500,
-			Exchange: &checks.Exchange{
+			Exchange: &core.Exchange{
 				RequestBody:           "id=1 OR 1=1",
 				ResponseBody:          "syntax error near OR",
 				ResponseBodyTruncated: true,
@@ -1115,11 +1115,11 @@ func TestPDFReporterRendersBudgetSection(t *testing.T) {
 
 func TestPDFReporterMultiPage(t *testing.T) {
 	// Generate enough findings to force pagination.
-	var many []checks.Finding
+	var many []core.Finding
 	for i := 0; i < 200; i++ {
-		many = append(many, checks.Finding{
+		many = append(many, core.Finding{
 			Check: "security-headers", Target: "http://example/" + strings.Repeat("x", 3),
-			Severity: checks.SeverityLow, Title: "filler row",
+			Severity: core.SeverityLow, Title: "filler row",
 		})
 	}
 	out := writeFormat(t, "pdf", many)

@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/londonmax12/hyperz/internal/checks"
+	"github.com/londonmax12/hyperz/internal/core"
 )
 
 // Baseline is a previous scan's findings, loaded for diffing against the
@@ -19,8 +19,8 @@ import (
 // findings that lacked a key in the source and are therefore excluded from
 // the diff (they can't be reliably matched).
 type Baseline struct {
-	Keys   map[string]checks.Finding
-	NoKey  []checks.Finding
+	Keys   map[string]core.Finding
+	NoKey  []core.Finding
 	Format string
 }
 
@@ -138,14 +138,14 @@ func parseBaselineJSON(data []byte) (*Baseline, error) {
 	if len(trimmed) == 0 {
 		return emptyBaseline("json"), nil
 	}
-	var findings []checks.Finding
+	var findings []core.Finding
 	if trimmed[0] == '[' {
 		if err := json.Unmarshal(trimmed, &findings); err != nil {
 			return nil, fmt.Errorf("parse baseline json array: %w", err)
 		}
 	} else {
 		var env struct {
-			Findings []checks.Finding `json:"findings"`
+			Findings []core.Finding `json:"findings"`
 		}
 		if err := json.Unmarshal(trimmed, &env); err != nil {
 			return nil, fmt.Errorf("parse baseline json envelope: %w", err)
@@ -159,7 +159,7 @@ func parseBaselineJSONL(data []byte) (*Baseline, error) {
 	scanner := bufio.NewScanner(bytes.NewReader(data))
 	// Findings can carry large evidence blobs; bump the default 64KB cap.
 	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
-	var findings []checks.Finding
+	var findings []core.Finding
 	for scanner.Scan() {
 		line := bytes.TrimSpace(scanner.Bytes())
 		if len(line) == 0 {
@@ -173,7 +173,7 @@ func parseBaselineJSONL(data []byte) (*Baseline, error) {
 		if err := json.Unmarshal(line, &probe); err == nil && probe.Type != "" {
 			continue
 		}
-		var f checks.Finding
+		var f core.Finding
 		if err := json.Unmarshal(line, &f); err != nil {
 			return nil, fmt.Errorf("parse baseline jsonl: %w", err)
 		}
@@ -213,16 +213,16 @@ func parseBaselineCSV(data []byte) (*Baseline, error) {
 		}
 		return row[i]
 	}
-	var findings []checks.Finding
+	var findings []core.Finding
 	for i, row := range rows[1:] {
 		if len(row) == 0 {
 			continue
 		}
-		f := checks.Finding{
+		f := core.Finding{
 			Check:       get(row, "check"),
 			Target:      get(row, "target"),
 			URL:         get(row, "url"),
-			Severity:    checks.Severity(get(row, "severity")),
+			Severity:    core.Severity(get(row, "severity")),
 			Title:       get(row, "title"),
 			Detail:      get(row, "detail"),
 			CWE:         get(row, "cwe"),
@@ -234,7 +234,7 @@ func parseBaselineCSV(data []byte) (*Baseline, error) {
 		eURL := get(row, "evidence_url")
 		statusStr := get(row, "evidence_status")
 		if method != "" || eURL != "" || statusStr != "" {
-			ev := &checks.Evidence{Method: method, RequestURL: eURL}
+			ev := &core.Evidence{Method: method, RequestURL: eURL}
 			if statusStr != "" {
 				if n, err := strconv.Atoi(statusStr); err == nil {
 					ev.Status = n
@@ -287,7 +287,7 @@ func parseBaselineSARIF(data []byte) (*Baseline, error) {
 	if err := json.Unmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("parse baseline sarif: %w", err)
 	}
-	var findings []checks.Finding
+	var findings []core.Finding
 	for _, run := range doc.Runs {
 		// Index rule properties so we can fall back to per-rule CWE/OWASP
 		// when a result didn't repeat them.
@@ -297,15 +297,15 @@ func parseBaselineSARIF(data []byte) (*Baseline, error) {
 		}
 		for _, r := range run.Results {
 			title, detail := splitSARIFMessage(r.Message.Text)
-			sev := checks.Severity(r.Properties["severity"])
-			if checks.SeverityRank(sev) < 0 {
+			sev := core.Severity(r.Properties["severity"])
+			if core.SeverityRank(sev) < 0 {
 				sev = severityFromSARIFLevel(r.Level)
 			}
 			uri := ""
 			if len(r.Locations) > 0 {
 				uri = r.Locations[0].PhysicalLocation.ArtifactLocation.URI
 			}
-			f := checks.Finding{
+			f := core.Finding{
 				Check:       r.RuleID,
 				URL:         uri,
 				Target:      uri,
@@ -338,16 +338,16 @@ func splitSARIFMessage(msg string) (title, detail string) {
 // properties.severity. The high<->critical and info<->note ambiguity is
 // resolved by picking the lower bound so the diff doesn't fabricate severity
 // it can't prove.
-func severityFromSARIFLevel(level string) checks.Severity {
+func severityFromSARIFLevel(level string) core.Severity {
 	switch strings.ToLower(level) {
 	case "error":
-		return checks.SeverityHigh
+		return core.SeverityHigh
 	case "warning":
-		return checks.SeverityMedium
+		return core.SeverityMedium
 	case "note":
-		return checks.SeverityLow
+		return core.SeverityLow
 	default:
-		return checks.SeverityInfo
+		return core.SeverityInfo
 	}
 }
 
@@ -358,9 +358,9 @@ func pickProp(primary, fallback map[string]string, key string) string {
 	return fallback[key]
 }
 
-func indexFindings(findings []checks.Finding, format string) *Baseline {
+func indexFindings(findings []core.Finding, format string) *Baseline {
 	b := &Baseline{
-		Keys:   make(map[string]checks.Finding, len(findings)),
+		Keys:   make(map[string]core.Finding, len(findings)),
 		Format: format,
 	}
 	for _, f := range findings {
@@ -383,7 +383,7 @@ func indexFindings(findings []checks.Finding, format string) *Baseline {
 }
 
 func emptyBaseline(format string) *Baseline {
-	return &Baseline{Keys: map[string]checks.Finding{}, Format: format}
+	return &Baseline{Keys: map[string]core.Finding{}, Format: format}
 }
 
 // BaselineFormats returns the list of formats LoadBaseline accepts. Useful

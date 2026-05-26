@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/londonmax12/hyperz/internal/browser"
-	"github.com/londonmax12/hyperz/internal/checks"
+	"github.com/londonmax12/hyperz/internal/core"
 	"github.com/londonmax12/hyperz/internal/fingerprint"
 	"github.com/londonmax12/hyperz/internal/httpclient"
 	"github.com/londonmax12/hyperz/internal/oob"
@@ -26,12 +26,12 @@ const phase2BodyCap = 512 << 10
 
 type Scanner struct {
 	client           *httpclient.Client
-	checks           []checks.Check
+	checks           []core.Check
 	scope            *scope.Scope
 	detector         *fingerprint.Detector
 	concurrency      int
 	checkConcurrency int
-	level            checks.Level
+	level            core.Level
 	oobServer        oob.Server
 	oobWait          time.Duration
 	browserPool      browser.Pool
@@ -93,16 +93,16 @@ func WithSkipHandler(fn func(target, check, reason string)) Option {
 }
 
 // WithLevel records the scan level the caller filtered checks for, so the
-// scanner can attach it to each check's ctx via checks.WithLevel. Checks that
+// scanner can attach it to each check's ctx via core.WithLevel. Checks that
 // want to scale their behavior (e.g. fewer probes at default, full sweep at
-// aggressive) read it via checks.LevelFrom. The default (LevelDefault) is the
+// aggressive) read it via core.LevelFrom. The default (LevelDefault) is the
 // conservative choice when the option isn't set.
-func WithLevel(lvl checks.Level) Option {
+func WithLevel(lvl core.Level) Option {
 	return func(s *Scanner) { s.level = lvl }
 }
 
 // WithOOB attaches an OOB callback server. Checks that implement
-// checks.OOBCheck read it via checks.OOBFrom to mint canaries during
+// core.OOBCheck read it via core.OOBFrom to mint canaries during
 // the active phase; after phase 1 (and phase 2, when present) drains,
 // the scanner waits WithOOBWait and then calls Drain on each OOBCheck.
 // Nil server (the default) disables the OOB pipeline entirely - blind
@@ -127,7 +127,7 @@ func WithOOBWait(d time.Duration) Option {
 
 // WithBrowser attaches a headless-browser pool. Checks that need runtime
 // JS execution (dom-xss, future client-side prototype-pollution chains)
-// read it via checks.BrowserFrom. Nil pool (the default) disables the
+// read it via core.BrowserFrom. Nil pool (the default) disables the
 // JS pipeline entirely - runtime-execution paths in the catalog become
 // no-ops, matching the contract those checks expose. The scanner does
 // not Close the pool; lifetime belongs to the caller that built it.
@@ -143,8 +143,8 @@ func WithBrowser(pool browser.Pool) Option {
 // the long tail against keeping scan wall-clock low.
 const defaultOOBWait = 10 * time.Second
 
-func New(client *httpclient.Client, c []checks.Check, opts ...Option) *Scanner {
-	s := &Scanner{client: client, checks: c, concurrency: 8, level: checks.LevelDefault, oobWait: defaultOOBWait}
+func New(client *httpclient.Client, c []core.Check, opts ...Option) *Scanner {
+	s := &Scanner{client: client, checks: c, concurrency: 8, level: core.LevelDefault, oobWait: defaultOOBWait}
 	for _, o := range opts {
 		o(s)
 	}
@@ -167,7 +167,7 @@ func New(client *httpclient.Client, c []checks.Check, opts ...Option) *Scanner {
 // skipped if ctx is already canceled, but is otherwise unconditional - a
 // caller that wants the legacy single-pass behavior should simply register
 // no TwoPhaseCheck implementations.
-func (s *Scanner) ScanAll(ctx context.Context, pages <-chan page.Page, out chan<- checks.Finding) error {
+func (s *Scanner) ScanAll(ctx context.Context, pages <-chan page.Page, out chan<- core.Finding) error {
 	defer close(out)
 
 	twoPhase := s.twoPhaseChecks()
@@ -221,10 +221,10 @@ func (s *Scanner) ScanAll(ctx context.Context, pages <-chan page.Page, out chan<
 // oobChecks returns the subset of registered checks that implement
 // OOBCheck. Computed once per ScanAll to keep the drain dispatch
 // branch-free.
-func (s *Scanner) oobChecks() []checks.OOBCheck {
-	var out []checks.OOBCheck
+func (s *Scanner) oobChecks() []core.OOBCheck {
+	var out []core.OOBCheck
 	for _, c := range s.checks {
-		if oc, ok := c.(checks.OOBCheck); ok {
+		if oc, ok := c.(core.OOBCheck); ok {
 			out = append(out, oc)
 		}
 	}
@@ -238,7 +238,7 @@ func (s *Scanner) oobChecks() []checks.OOBCheck {
 //
 // The wait is interruptible: ctx cancel skips both the sleep and the
 // drain, since a canceled scan should not produce additional findings.
-func (s *Scanner) runOOBDrain(ctx context.Context, out chan<- checks.Finding) {
+func (s *Scanner) runOOBDrain(ctx context.Context, out chan<- core.Finding) {
 	oobChecks := s.oobChecks()
 	if len(oobChecks) == 0 {
 		return
@@ -256,10 +256,10 @@ func (s *Scanner) runOOBDrain(ctx context.Context, out chan<- checks.Finding) {
 		if ctx.Err() != nil {
 			return
 		}
-		drainCtx := checks.WithLevel(ctx, s.level)
-		drainCtx = checks.WithOOB(drainCtx, s.oobServer)
+		drainCtx := core.WithLevel(ctx, s.level)
+		drainCtx = core.WithOOB(drainCtx, s.oobServer)
 		if s.onError != nil {
-			drainCtx = checks.WithReporter(drainCtx, func(err error) {
+			drainCtx = core.WithReporter(drainCtx, func(err error) {
 				s.onError("oob-drain", c.Name(), err)
 			})
 		}
@@ -272,10 +272,10 @@ func (s *Scanner) runOOBDrain(ctx context.Context, out chan<- checks.Finding) {
 // twoPhaseChecks returns the subset of registered checks that implement
 // TwoPhaseCheck. Computed once per ScanAll so the per-page hot path doesn't
 // re-interface-assert N times.
-func (s *Scanner) twoPhaseChecks() []checks.TwoPhaseCheck {
-	var out []checks.TwoPhaseCheck
+func (s *Scanner) twoPhaseChecks() []core.TwoPhaseCheck {
+	var out []core.TwoPhaseCheck
 	for _, c := range s.checks {
-		if tp, ok := c.(checks.TwoPhaseCheck); ok {
+		if tp, ok := c.(core.TwoPhaseCheck); ok {
 			out = append(out, tp)
 		}
 	}
@@ -293,7 +293,7 @@ func (s *Scanner) twoPhaseChecks() []checks.TwoPhaseCheck {
 // visited set after the crawler already cleared it. Scope is mandatory
 // because DetectURLs can surface same-origin pages the operator never
 // authorized (an off-path link discovered in a plant response).
-func (s *Scanner) runPhase2(ctx context.Context, twoPhase []checks.TwoPhaseCheck, visited map[string]struct{}, out chan<- checks.Finding) {
+func (s *Scanner) runPhase2(ctx context.Context, twoPhase []core.TwoPhaseCheck, visited map[string]struct{}, out chan<- core.Finding) {
 	detectSet := make(map[string]struct{}, len(visited))
 	for u := range visited {
 		detectSet[u] = struct{}{}
@@ -367,7 +367,7 @@ func (s *Scanner) runPhase2(ctx context.Context, twoPhase []checks.TwoPhaseCheck
 // budget, level/stack/reporter context, ErrFetchAlreadyFailed suppression,
 // flush-on-cancel send loop) so phase 2 inherits the same operator-visible
 // contract as phase 1.
-func (s *Scanner) detectOne(ctx context.Context, twoPhase []checks.TwoPhaseCheck, p page.Page, out chan<- checks.Finding) {
+func (s *Scanner) detectOne(ctx context.Context, twoPhase []core.TwoPhaseCheck, p page.Page, out chan<- core.Finding) {
 	stack := s.fingerprint(ctx, p)
 	target := p.URL
 
@@ -394,25 +394,25 @@ func (s *Scanner) detectOne(ctx context.Context, twoPhase []checks.TwoPhaseCheck
 			}
 		}
 		wg.Add(1)
-		go func(c checks.TwoPhaseCheck) {
+		go func(c core.TwoPhaseCheck) {
 			defer wg.Done()
 			if sem != nil {
 				defer func() { <-sem }()
 			}
 			runCtx, cancel := context.WithTimeout(ctx, checkBudget(c))
 			defer cancel()
-			runCtx = checks.WithLevel(runCtx, s.level)
-			runCtx = checks.WithStack(runCtx, stack)
-			runCtx = checks.WithOOB(runCtx, s.oobServer)
-			runCtx = checks.WithBrowser(runCtx, s.browserPool)
+			runCtx = core.WithLevel(runCtx, s.level)
+			runCtx = core.WithStack(runCtx, stack)
+			runCtx = core.WithOOB(runCtx, s.oobServer)
+			runCtx = core.WithBrowser(runCtx, s.browserPool)
 			if s.onError != nil {
-				runCtx = checks.WithReporter(runCtx, func(err error) {
+				runCtx = core.WithReporter(runCtx, func(err error) {
 					s.onError(target, c.Name(), err)
 				})
 			}
 			found, err := c.Detect(runCtx, s.client, s.scope, p)
 			if err != nil {
-				if errors.Is(err, checks.ErrFetchAlreadyFailed) {
+				if errors.Is(err, core.ErrFetchAlreadyFailed) {
 					return
 				}
 				if s.onError != nil {
@@ -473,7 +473,7 @@ func visitedKey(rawurl string) string {
 // scopeAllowsURL is a string-input wrapper around scope.Allows so the
 // phase-2 pipeline can filter without each callsite re-parsing rawurl.
 // A nil scope (the unconstrained default) permits everything, matching
-// the contract in checks.Check.Run.
+// the contract in core.Check.Run.
 func (s *Scanner) scopeAllowsURL(rawurl string) bool {
 	if s.scope == nil {
 		return true
@@ -497,7 +497,7 @@ func (s *Scanner) scopeAllowsURL(rawurl string) bool {
 // in place of Run - the scanner reserves Run for the legacy single-phase
 // contract and uses Plant during phase 1 so the check can carry private
 // state into Detect.
-func (s *Scanner) scanOne(ctx context.Context, p page.Page, out chan<- checks.Finding) {
+func (s *Scanner) scanOne(ctx context.Context, p page.Page, out chan<- core.Finding) {
 	stack := s.fingerprint(ctx, p)
 	target := p.URL
 
@@ -525,7 +525,7 @@ func (s *Scanner) scanOne(ctx context.Context, p page.Page, out chan<- checks.Fi
 			}
 		}
 		wg.Add(1)
-		go func(c checks.Check) {
+		go func(c core.Check) {
 			defer wg.Done()
 			if sem != nil {
 				defer func() { <-sem }()
@@ -539,12 +539,12 @@ func (s *Scanner) scanOne(ctx context.Context, p page.Page, out chan<- checks.Fi
 			// Sub-probe errors that the check chooses to swallow are still
 			// surfaced through this reporter, so a flaky host leaves one
 			// onError event per failure even when the check returns findings.
-			runCtx = checks.WithLevel(runCtx, s.level)
-			runCtx = checks.WithStack(runCtx, stack)
-			runCtx = checks.WithOOB(runCtx, s.oobServer)
-			runCtx = checks.WithBrowser(runCtx, s.browserPool)
+			runCtx = core.WithLevel(runCtx, s.level)
+			runCtx = core.WithStack(runCtx, stack)
+			runCtx = core.WithOOB(runCtx, s.oobServer)
+			runCtx = core.WithBrowser(runCtx, s.browserPool)
 			if s.onError != nil {
-				runCtx = checks.WithReporter(runCtx, func(err error) {
+				runCtx = core.WithReporter(runCtx, func(err error) {
 					s.onError(target, c.Name(), err)
 				})
 			}
@@ -553,7 +553,7 @@ func (s *Scanner) scanOne(ctx context.Context, p page.Page, out chan<- checks.Fi
 			// single-phase (e.g. dry runs without phase-2 wiring) and
 			// would otherwise double-fire findings here.
 			runFn := c.Run
-			if tp, ok := c.(checks.TwoPhaseCheck); ok {
+			if tp, ok := c.(core.TwoPhaseCheck); ok {
 				runFn = tp.Plant
 			}
 			found, err := runFn(runCtx, s.client, s.scope, p)
@@ -562,7 +562,7 @@ func (s *Scanner) scanOne(ctx context.Context, p page.Page, out chan<- checks.Fi
 				// and got nothing - it already reported the failure once
 				// via its own onError. Re-reporting per check would turn
 				// one dead host into N noisy events with no new signal.
-				if errors.Is(err, checks.ErrFetchAlreadyFailed) {
+				if errors.Is(err, core.ErrFetchAlreadyFailed) {
 					return
 				}
 				if s.onError != nil {
@@ -579,16 +579,16 @@ func (s *Scanner) scanOne(ctx context.Context, p page.Page, out chan<- checks.Fi
 }
 
 // checkBudget returns the per-check deadline to apply. A check that
-// implements checks.Budgeted may opt up to a longer deadline; non-positive
+// implements core.Budgeted may opt up to a longer deadline; non-positive
 // returns from Budget reuse DefaultBudget so a misconfigured opt-in can't
 // silently disable the deadline.
-func checkBudget(c checks.Check) time.Duration {
-	if b, ok := c.(checks.Budgeted); ok {
+func checkBudget(c core.Check) time.Duration {
+	if b, ok := c.(core.Budgeted); ok {
 		if d := b.Budget(); d > 0 {
 			return d
 		}
 	}
-	return checks.DefaultBudget
+	return core.DefaultBudget
 }
 
 // fingerprint resolves the stack for p's host, or returns nil when
@@ -612,7 +612,7 @@ func (s *Scanner) fingerprint(ctx context.Context, p page.Page) *fingerprint.Sta
 // applies returns true if c should run against target given the detected
 // stack. When stack is nil (fingerprinting disabled or failed), every
 // check runs. Checks that don't implement StackGated always run.
-func (s *Scanner) applies(c checks.Check, stack *fingerprint.Stack, target string) bool {
+func (s *Scanner) applies(c core.Check, stack *fingerprint.Stack, target string) bool {
 	if stack == nil {
 		return true
 	}

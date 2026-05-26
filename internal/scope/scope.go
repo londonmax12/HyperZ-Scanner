@@ -11,10 +11,13 @@ package scope
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"golang.org/x/net/publicsuffix"
 )
 
 type Scope struct {
@@ -152,6 +155,19 @@ func (s *Scope) MaxDepth() int {
 	return s.maxDepth
 }
 
+// HasHosts reports whether the scope has any host allowlist configured.
+// A nil Scope, or a Scope built with no Hosts, returns false - both
+// represent the "open scope" mode where every host passes Allows.
+// Active checks use this to distinguish operator-vetted scope (trust
+// any same-scope host) from open scope (need a heuristic to avoid
+// probing third-party endpoints referenced in body content).
+func (s *Scope) HasHosts() bool {
+	if s == nil {
+		return false
+	}
+	return len(s.hosts) > 0
+}
+
 // Hosts returns a snapshot of the allowed-host set as a sorted slice, for
 // logging and tests. Returns nil for an open scope (no host restriction).
 func (s *Scope) Hosts() []string {
@@ -168,6 +184,47 @@ func (s *Scope) Hosts() []string {
 		}
 	}
 	return out
+}
+
+// SameSite reports whether two hostnames belong to the same registrable
+// domain (eTLD+1 in Public Suffix List terms). app.target.com and
+// ws.target.com share target.com and return true; app.target.com and
+// target.co.uk share nothing and return false. Comparison is case-
+// insensitive. Active probes use this as the "same organization"
+// gate when the operator has not pinned a host allowlist - the
+// hostname-equality alternative misses the very common pattern of
+// offloading WebSockets / SSE to dedicated subdomains.
+//
+// Inputs that do not have a meaningful registrable domain (IP literals,
+// bare hostnames without a public suffix like "localhost", or empty
+// strings) fall back to case-insensitive exact equality. Two
+// 127.0.0.1's are still the same target; an IP and a domain never are.
+func SameSite(a, b string) bool {
+	a = strings.ToLower(strings.TrimSpace(a))
+	b = strings.ToLower(strings.TrimSpace(b))
+	if a == "" || b == "" {
+		return false
+	}
+	if a == b {
+		return true
+	}
+	// IP literals never have a registrable domain. Two different IPs
+	// are not "same site" even when they're on the same /24 - the
+	// caller is asking about logical site identity, not network
+	// adjacency. Falling back to exact match was already handled above.
+	if net.ParseIP(a) != nil || net.ParseIP(b) != nil {
+		return false
+	}
+	siteA, errA := publicsuffix.EffectiveTLDPlusOne(a)
+	siteB, errB := publicsuffix.EffectiveTLDPlusOne(b)
+	if errA != nil || errB != nil {
+		// Either hostname is below the public suffix line (e.g.
+		// "localhost", or a private TLD not in the PSL). We have no
+		// principled way to call them same-site; only exact equality
+		// counts, which was already checked above.
+		return false
+	}
+	return siteA == siteB
 }
 
 func effectivePort(u *url.URL) int {

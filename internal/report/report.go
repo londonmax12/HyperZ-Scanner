@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/londonmax12/hyperz/internal/checks"
+	"github.com/londonmax12/hyperz/internal/core"
 	"github.com/londonmax12/hyperz/internal/fingerprint"
 	"github.com/londonmax12/hyperz/internal/httpclient"
 )
@@ -122,7 +122,7 @@ func budgetSummary(b *httpclient.Budget) string {
 // to keep populating the underlying maps while the scan is in flight - every
 // in-tree reporter touches meta only at the end.
 type Reporter interface {
-	Write(ctx context.Context, w io.Writer, in <-chan checks.Finding, meta Metadata) error
+	Write(ctx context.Context, w io.Writer, in <-chan core.Finding, meta Metadata) error
 }
 
 // Formats returns the names of all supported output formats.
@@ -155,8 +155,8 @@ func New(format string) (Reporter, error) {
 // DedupeKey has already been seen. Findings without a DedupeKey are always
 // forwarded - checks opt into dedupe by setting a key. The returned channel
 // is closed when in is closed, preserving the stream contract.
-func Dedupe(in <-chan checks.Finding) <-chan checks.Finding {
-	out := make(chan checks.Finding, cap(in))
+func Dedupe(in <-chan core.Finding) <-chan core.Finding {
+	out := make(chan core.Finding, cap(in))
 	go func() {
 		defer close(out)
 		seen := map[string]struct{}{}
@@ -184,7 +184,7 @@ const textGroupURLLimit = 10
 
 type textReporter struct{}
 
-func (textReporter) Write(ctx context.Context, w io.Writer, in <-chan checks.Finding, meta Metadata) error {
+func (textReporter) Write(ctx context.Context, w io.Writer, in <-chan core.Finding, meta Metadata) error {
 	findings := drain(ctx, in)
 	if len(findings) == 0 {
 		if _, err := fmt.Fprintln(w, "no findings"); err != nil {
@@ -217,7 +217,7 @@ func (textReporter) Write(ctx context.Context, w io.Writer, in <-chan checks.Fin
 // info last), tie-breaking on check name so the layout is stable across
 // runs with the same finding set.
 func sortedGroupsBySeverity(groups []checkGroup) []checkGroup {
-	rank := func(s checks.Severity) int {
+	rank := func(s core.Severity) int {
 		for i, sev := range severityOrder {
 			if sev == s {
 				return i
@@ -329,7 +329,7 @@ func writeTextCheckGroup(w io.Writer, g checkGroup) error {
 	return nil
 }
 
-func writeTextFinding(w io.Writer, f checks.Finding) error {
+func writeTextFinding(w io.Writer, f core.Finding) error {
 	loc := f.URL
 	if loc == "" {
 		loc = f.Target
@@ -374,7 +374,7 @@ func writeTextFinding(w io.Writer, f checks.Finding) error {
 
 type jsonlReporter struct{}
 
-func (jsonlReporter) Write(_ context.Context, w io.Writer, in <-chan checks.Finding, meta Metadata) error {
+func (jsonlReporter) Write(_ context.Context, w io.Writer, in <-chan core.Finding, meta Metadata) error {
 	enc := json.NewEncoder(w)
 	var writeErr error
 	for f := range in {
@@ -436,7 +436,7 @@ var csvHeader = []string{
 // without breaking the row contract. Use jsonl/json/markdown if you need
 // both. The diff_status column is appended only when meta.Diff is non-nil
 // so existing tooling that locks the header order keeps working.
-func (csvReporter) Write(_ context.Context, w io.Writer, in <-chan checks.Finding, meta Metadata) error {
+func (csvReporter) Write(_ context.Context, w io.Writer, in <-chan core.Finding, meta Metadata) error {
 	cw := csv.NewWriter(w)
 	header := csvHeader
 	withDiff := meta.Diff != nil
@@ -488,16 +488,16 @@ type jsonReporter struct{}
 // scan metadata (detected stacks today, scan time/target list tomorrow)
 // without piggybacking on individual finding records.
 type jsonEnvelope struct {
-	Findings []checks.Finding              `json:"findings"`
+	Findings []core.Finding              `json:"findings"`
 	Stacks   map[string]*fingerprint.Stack `json:"detected_stacks,omitempty"`
 	Budget   *httpclient.BudgetStats       `json:"request_budget,omitempty"`
 	Diff     *DiffCounts                   `json:"diff_summary,omitempty"`
 }
 
-func (jsonReporter) Write(ctx context.Context, w io.Writer, in <-chan checks.Finding, meta Metadata) error {
+func (jsonReporter) Write(ctx context.Context, w io.Writer, in <-chan core.Finding, meta Metadata) error {
 	findings := drain(ctx, in)
 	if findings == nil {
-		findings = []checks.Finding{}
+		findings = []core.Finding{}
 	}
 	env := jsonEnvelope{Findings: findings, Stacks: meta.Stacks, Diff: meta.Diff}
 	if meta.Budget != nil {
@@ -515,7 +515,7 @@ func (jsonReporter) Write(ctx context.Context, w io.Writer, in <-chan checks.Fin
 
 type sarifReporter struct{}
 
-func (sarifReporter) Write(ctx context.Context, w io.Writer, in <-chan checks.Finding, meta Metadata) error {
+func (sarifReporter) Write(ctx context.Context, w io.Writer, in <-chan core.Finding, meta Metadata) error {
 	findings := drain(ctx, in)
 
 	type sarifMessage struct {
@@ -653,13 +653,13 @@ func (sarifReporter) Write(ctx context.Context, w io.Writer, in <-chan checks.Fi
 	return enc.Encode(doc)
 }
 
-func sarifLevel(s checks.Severity) string {
+func sarifLevel(s core.Severity) string {
 	switch s {
-	case checks.SeverityCritical, checks.SeverityHigh:
+	case core.SeverityCritical, core.SeverityHigh:
 		return "error"
-	case checks.SeverityMedium:
+	case core.SeverityMedium:
 		return "warning"
-	case checks.SeverityLow:
+	case core.SeverityLow:
 		return "note"
 	default:
 		return "none"
@@ -705,19 +705,19 @@ func cweURL(cwe string) string {
 
 type markdownReporter struct{}
 
-func (markdownReporter) Write(ctx context.Context, w io.Writer, in <-chan checks.Finding, meta Metadata) error {
+func (markdownReporter) Write(ctx context.Context, w io.Writer, in <-chan core.Finding, meta Metadata) error {
 	findings := drain(ctx, in)
 
-	bySev := map[checks.Severity]int{}
+	bySev := map[core.Severity]int{}
 	for _, f := range findings {
 		bySev[f.Severity]++
 	}
-	order := []checks.Severity{
-		checks.SeverityCritical,
-		checks.SeverityHigh,
-		checks.SeverityMedium,
-		checks.SeverityLow,
-		checks.SeverityInfo,
+	order := []core.Severity{
+		core.SeverityCritical,
+		core.SeverityHigh,
+		core.SeverityMedium,
+		core.SeverityLow,
+		core.SeverityInfo,
 	}
 
 	fmt.Fprintf(w, "# hyperz scan report\n\n")
@@ -906,8 +906,8 @@ func withVersion(id, ver string) string {
 // in-flight checks have flushed (including post-cancel ones), and dropping
 // findings here would defeat that guarantee. ctx is kept on the signature
 // for symmetry with the Reporter interface and future cancellation needs.
-func drain(_ context.Context, in <-chan checks.Finding) []checks.Finding {
-	var findings []checks.Finding
+func drain(_ context.Context, in <-chan core.Finding) []core.Finding {
+	var findings []core.Finding
 	for f := range in {
 		findings = append(findings, f)
 	}
@@ -941,12 +941,12 @@ func sortedHosts(stacks map[string]*fingerprint.Stack) []string {
 }
 
 // Write is a one-shot helper kept for the single-target slice path.
-func Write(w io.Writer, format string, findings []checks.Finding) error {
+func Write(w io.Writer, format string, findings []core.Finding) error {
 	r, err := New(format)
 	if err != nil {
 		return err
 	}
-	in := make(chan checks.Finding, len(findings))
+	in := make(chan core.Finding, len(findings))
 	for _, f := range findings {
 		in <- f
 	}

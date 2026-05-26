@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/londonmax12/hyperz/internal/checks"
+	"github.com/londonmax12/hyperz/internal/core"
 )
 
 func TestParseFailOnSeverityNames(t *testing.T) {
@@ -13,11 +13,11 @@ func TestParseFailOnSeverityNames(t *testing.T) {
 		wantOn    bool
 		wantError bool
 	}{
-		{"info", checks.SeverityRank(checks.SeverityInfo), true, false},
-		{"low", checks.SeverityRank(checks.SeverityLow), true, false},
-		{"medium", checks.SeverityRank(checks.SeverityMedium), true, false},
-		{"high", checks.SeverityRank(checks.SeverityHigh), true, false},
-		{"critical", checks.SeverityRank(checks.SeverityCritical), true, false},
+		{"info", core.SeverityRank(core.SeverityInfo), true, false},
+		{"low", core.SeverityRank(core.SeverityLow), true, false},
+		{"medium", core.SeverityRank(core.SeverityMedium), true, false},
+		{"high", core.SeverityRank(core.SeverityHigh), true, false},
+		{"critical", core.SeverityRank(core.SeverityCritical), true, false},
 		{"NONE", 0, false, false},
 		{"none", 0, false, false},
 		{"warning", 0, false, true},
