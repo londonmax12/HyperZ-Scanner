@@ -172,17 +172,6 @@ func (c *RaceCondition) probeFact(ctx context.Context, _ string, t raceTarget) (
 	return out, nil
 }
 
-// RaceParallel exposes the per-target parallel probe count so the
-// Lua port can stamp the same value into evidence text the Go check
-// uses. Lua reads the constant rather than hard-coding it so a
-// future tuning lands once.
-func RaceParallel() int { return raceParallel }
-
-// RaceTargetsPerPage exposes the per-page target cap. The Lua bridge
-// already enforces it inside ScanFacts; this accessor lets the .lua
-// finding text reference the same cap value the gate uses.
-func RaceTargetsPerPage() int { return raceTargetsPerPage }
-
 // SetRaceTimeoutsForTest dials the production dial / read / barrier
 // timeouts down to the supplied values so parity tests in another
 // package (checks_lua) can exercise the single-packet probe path

@@ -23,8 +23,6 @@ import (
 func buildRaceTable(L *lua.LState) *lua.LTable {
 	t := L.NewTable()
 	t.RawSetString("scan", L.NewFunction(raceScan))
-	t.RawSetString("parallel", L.NewFunction(raceParallelFn))
-	t.RawSetString("targets_per_page", L.NewFunction(raceTargetsPerPageFn))
 	return t
 }
 
@@ -48,16 +46,6 @@ func raceScan(L *lua.LState) int {
 		return 2
 	}
 	L.Push(raceFactsToLua(L, facts))
-	return 1
-}
-
-func raceParallelFn(L *lua.LState) int {
-	L.Push(lua.LNumber(RaceParallel()))
-	return 1
-}
-
-func raceTargetsPerPageFn(L *lua.LState) int {
-	L.Push(lua.LNumber(RaceTargetsPerPage()))
 	return 1
 }
 
