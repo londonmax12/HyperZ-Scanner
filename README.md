@@ -6,7 +6,7 @@
 
 [![Go Version](https://img.shields.io/badge/go-1.26-00ADD8?logo=go&logoColor=white)](go.mod)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![Checks](https://img.shields.io/badge/checks-45+-success)](#-checks)
+[![Checks](https://img.shields.io/badge/checks-50-success)](#-checks)
 [![Modes](https://img.shields.io/badge/modes-passive%20%7C%20default%20%7C%20aggressive-orange)](#scan-modes)
 
 `security-headers` · `tls-audit` · `sqli` · `xss` · `ssrf` · `xxe` · `graphql-audit` · `jwt-vulns` · `request-smuggling` · `race-condition` · …
@@ -40,7 +40,11 @@
   ceiling, request budget, retry-with-`Retry-After`, and a session sentinel
   that halts on session loss. Proxy pool with epsilon-greedy ranking on
   per-proxy success rate, plus optional auto-scraping.
-- **Eight report formats.** Text, JSON, JSONL, CSV, SARIF, Markdown, PDF.
+- **Lua-defined checks.** Detection logic lives in `internal/checks/*.lua`,
+  one file per check, executed by an embedded Lua VM against typed Go
+  bridges for HTTP, cookies, OOB, browser, scope, and the rest. Editing a
+  finding's prose, severity, or dedupe shape doesn't require rebuilding Go.
+- **Seven report formats.** Text, JSON, JSONL, CSV, SARIF, Markdown, PDF.
 
 ---
 
@@ -127,6 +131,7 @@ mirrors `--mode`: each level is a superset of the cheaper ones.
 | `server-leak` | banner disclosure via `Server` / `X-Powered-By` |
 | `secrets-in-body` | API keys, tokens, private keys, and other secrets leaking in response bodies |
 | `oauth-discovery` | OAuth/OIDC metadata exposure and misconfiguration on well-known discovery endpoints |
+| `openapi-audit` | OpenAPI / Swagger documents at well-known paths audited for embedded credentials, example auth headers, and auth-less operations |
 | `tls-audit` | TLS version, cipher, OCSP stapling, SCT, cert chain expiry, hostname mismatch |
 | `mixed-content` | passive mixed content referenced from HTTPS pages |
 | `js-libs-known-vuln` | bundled JS libraries detected at known-vulnerable versions |
@@ -159,6 +164,7 @@ mirrors `--mode`: each level is a superset of the cheaper ones.
 | `path-traversal` | `../` traversal probes against path-bearing parameters |
 | `cmd-injection` | in-band OS command injection probes |
 | `cmd-injection-blind` | out-of-band / time-based command injection probes (OOB-aware) |
+| `ssti` | server-side template injection probes (expression-eval, error-based, and OOB) across major template engines |
 | `insecure-deserialization` | language-specific gadget probes for unsafe deserialization sinks |
 | `xxe` | XML external entity probes, including OOB DTD exfil and `php://filter` base64 paths |
 | `graphql-audit` | introspection exposure, suggestion leakage, alg-confusion / batched-query abuse on GraphQL endpoints |
@@ -390,6 +396,14 @@ Exit codes:
 ```
 cmd/hyperz/           CLI entrypoint, flag wiring, check catalog, auth wiring
 internal/scanner/     orchestrator that runs checks against a target
+internal/core/        Check interface, Finding / Evidence / Exchange types,
+                      severity / level / scope, context plumbing for OOB,
+                      browser pool, fingerprint, per-check budget
+internal/checks/      one .lua file per check, embedded into the binary at
+                      build time; detection logic lives here
+internal/lua_engine/  embedded Lua VM, Go-side helper bridges (HTTP, cookies,
+                      OOB, browser, scope, payloads, ...) and per-check Go
+                      shims for operations Lua can't do directly
 internal/crawler/     crawler, HTML link extractor, robots.txt, sitemap,
                       OpenAPI/Swagger discovery
 internal/httpclient/  shared HTTP client, host limiter, budget, session
@@ -398,7 +412,6 @@ internal/proxy/       proxy loader, scraper, epsilon-greedy pool, transport
 internal/oob/         out-of-band HTTP listener, canary URL minting,
                       registered-asset serving
 internal/browser/     headless Chrome/Chromium pool for DOM-driven checks
-internal/checks/      Check interface + Finding type, one check per file
 internal/fingerprint/ stack detection rules and per-host cache
 internal/scope/       host/port/path/depth scope rules
 internal/page/        crawler -> check page artifact
@@ -409,19 +422,41 @@ internal/report/      text / JSON / JSONL / CSV / SARIF / Markdown / PDF
 ## 🛠️ Adding a check
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the full guide. The short version:
-implement the `checks.Check` interface and register it in the catalog at
-[cmd/hyperz/checks.go](cmd/hyperz/checks.go):
+drop a new `internal/checks/<name>.lua` file. The Lua VM picks it up via
+[internal/checks/embed.go](internal/checks/embed.go) on the next build and
+the catalog command (`hyperz checks list`) reflects it automatically.
 
-```go
-type MyCheck struct{}
-
-func (MyCheck) Name() string        { return "my-check" }
-func (MyCheck) Level() checks.Level { return checks.LevelPassive } // or LevelDefault / LevelAggressive
-
-func (MyCheck) Run(ctx context.Context, client *httpclient.Client, scope *scope.Scope, p page.Page) ([]checks.Finding, error) {
-    // ...
+```lua
+local check = {
+  name  = "my-check",
+  level = "passive",     -- or "default" / "aggressive"
+  scope = "host",        -- or "page" / "param"
+  owasp = "A05:2021 Security Misconfiguration",
 }
+
+function check.run(ctx)
+  local snap, err = ctx:ensure_response()
+  if err or not snap then return end
+
+  if snap.headers["X-Sloppy"] then
+    ctx:emit({
+      severity    = ctx.severity.medium,
+      title       = "X-Sloppy header exposed",
+      detail      = "Response carried X-Sloppy at " .. ctx.page.url,
+      cwe         = "CWE-200",
+      remediation = "Drop the X-Sloppy header at the edge.",
+    })
+  end
+end
+
+return check
 ```
+
+If a check needs an operation Lua can't reach directly (raw sockets, the
+headless browser, the OOB listener, parsing nuance you'd rather keep in
+Go), add a typed bridge under [internal/lua_engine/](internal/lua_engine/)
+and call it from the Lua side. The bridge is the seam: detection logic
+stays in `.lua`, Go-only primitives live in `internal/lua_engine/api_*.go`.
 
 ---
 
