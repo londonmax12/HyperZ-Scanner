@@ -3,6 +3,8 @@ package httpclient
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"io"
 	"net/http"
@@ -126,6 +128,45 @@ func TestClientCustomTransportOverrides(t *testing.T) {
 	}
 	if resp.StatusCode != 418 {
 		t.Fatalf("status = %d, want 418", resp.StatusCode)
+	}
+}
+
+// TestClientTLSClientConfigTrustsCustomCA exercises the --ca-file plumbing:
+// when Config.TLSClientConfig carries a RootCAs pool that contains the
+// httptest TLS server's cert, the default-built http.Transport must use it
+// and the GET succeeds. Without the pool the same handshake would fail with
+// "x509: certificate signed by unknown authority" - the negative leg below
+// pins that baseline so a future change can't silently disable verification
+// by, say, defaulting InsecureSkipVerify=true on the constructed transport.
+func TestClientTLSClientConfigTrustsCustomCA(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	pool := x509.NewCertPool()
+	pool.AddCert(srv.Certificate())
+
+	c := New(Config{
+		Timeout:         5 * time.Second,
+		UserAgent:       "tls-test",
+		TLSClientConfig: &tls.Config{RootCAs: pool},
+	})
+	resp, err := c.Get(context.Background(), srv.URL)
+	if err != nil {
+		t.Fatalf("Get with trusted CA: %v", err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	// Same server, no TLS config: handshake must fail. Confirms the trust
+	// gain above wasn't an accident of httptest sharing a default pool.
+	c2 := New(Config{Timeout: 5 * time.Second, UserAgent: "tls-test"})
+	if _, err := c2.Get(context.Background(), srv.URL); err == nil {
+		t.Fatalf("Get without trusted CA: expected handshake failure, got nil")
 	}
 }
 

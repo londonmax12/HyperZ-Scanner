@@ -3,6 +3,7 @@ package httpclient
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"io"
 	"net"
 	"net/http"
@@ -81,6 +82,14 @@ type Config struct {
 	// RequestMiddleware for the contract; SessionSentinel and CSRFTokenSource
 	// are the in-tree implementations.
 	Middlewares []RequestMiddleware
+	// TLSClientConfig, when set, is cloned onto the default http.Transport
+	// New constructs (the cfg.Transport == nil path). Used by the CLI's
+	// --ca-file flag to install a custom CA bundle so HTTPS targets with
+	// self-signed certs verify cleanly without falling back to
+	// InsecureSkipVerify. Ignored when cfg.Transport is non-nil because the
+	// caller-supplied transport owns its own TLS settings (e.g. the proxy
+	// pool's NewTransport).
+	TLSClientConfig *tls.Config
 }
 
 func New(cfg Config) *Client {
@@ -96,7 +105,7 @@ func New(cfg Config) *Client {
 		if proxy == nil {
 			proxy = http.ProxyFromEnvironment
 		}
-		transport = &http.Transport{
+		t := &http.Transport{
 			Proxy: proxy,
 			DialContext: (&net.Dialer{
 				Timeout:   5 * time.Second,
@@ -110,6 +119,10 @@ func New(cfg Config) *Client {
 			TLSHandshakeTimeout:   5 * time.Second,
 			ExpectContinueTimeout: 1 * time.Second,
 		}
+		if cfg.TLSClientConfig != nil {
+			t.TLSClientConfig = cfg.TLSClientConfig.Clone()
+		}
+		transport = t
 	}
 	maxWait := cfg.MaxRetryWait
 	if maxWait <= 0 {
@@ -161,7 +174,15 @@ func (c *Client) Jar() http.CookieJar { return c.http.Jar }
 func ProbeClient(cfg Config) *http.Client {
 	transport := cfg.Transport
 	if transport == nil {
-		transport = http.DefaultTransport
+		if cfg.TLSClientConfig != nil {
+			// Clone DefaultTransport so the custom TLS config doesn't leak
+			// into other callers that share http.DefaultTransport.
+			base := http.DefaultTransport.(*http.Transport).Clone()
+			base.TLSClientConfig = cfg.TLSClientConfig.Clone()
+			transport = base
+		} else {
+			transport = http.DefaultTransport
+		}
 	}
 	return &http.Client{
 		Timeout:   cfg.Timeout,

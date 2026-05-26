@@ -288,17 +288,18 @@ type finding struct {
 	Target   string `json:"target"`
 }
 
-// scanOpts overrides the subprocess environment runScan uses. Set
-// SSLCertFile to make the hyperz process trust a custom CA bundle
-// when scanning HTTPS targets with self-signed certs (the standard
-// SSL_CERT_FILE Go env var; see crypto/x509/root_unix.go).
+// scanOpts overrides the subprocess invocation runScan uses. Set CAFile
+// to make the hyperz process trust a custom CA bundle when scanning
+// HTTPS targets with self-signed certs - threaded into the scanner as
+// --ca-file so the trust is wired into the actual http.Transport
+// (SSL_CERT_FILE is honored only on Unix; the flag works everywhere).
 type scanOpts struct {
-	SSLCertFile string
+	CAFile string
 }
 
 // extractCAFromContainer reads a CA cert out of a running container
 // at the given path and writes it to a fresh temp file. Returns the
-// path, suitable for SSL_CERT_FILE on the hyperz subprocess.
+// path, suitable for the hyperz --ca-file flag.
 func extractCAFromContainer(t *testing.T, c testcontainers.Container, srcPath string) string {
 	t.Helper()
 	rc, err := c.CopyFileFromContainer(context.Background(), srcPath)
@@ -348,15 +349,15 @@ func runScanImpl(t *testing.T, opts scanOpts, url string, extra ...string) []fin
 		"--rate", "20",
 		"--burst", "20",
 	}
+	if opts.CAFile != "" {
+		args = append(args, "--ca-file", opts.CAFile)
+	}
 	args = append(args, extra...)
 
 	var stdout, stderr bytes.Buffer
 	cmd := exec.Command(bin, args...)
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	if opts.SSLCertFile != "" {
-		cmd.Env = append(os.Environ(), "SSL_CERT_FILE="+opts.SSLCertFile)
-	}
 	t.Logf("running hyperz scan: %s", strings.Join(args, " "))
 	scanStart := time.Now()
 	err := cmd.Run()

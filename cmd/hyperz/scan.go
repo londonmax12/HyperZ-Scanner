@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -95,6 +97,8 @@ type scanConfig struct {
 	baselinePath   string
 	baselineFormat string
 	failOn         string
+
+	caFile string
 }
 
 func newScanCmd() *cobra.Command {
@@ -294,6 +298,11 @@ Modes:
 		"exit 1 when any finding's severity is at or above this level "+
 			"(info|low|medium|high|critical|none). With --baseline, only NEW findings count toward the threshold")
 
+	f.StringVar(&cfg.caFile, "ca-file", "",
+		"path to a PEM bundle of extra trusted CAs to layer on top of the system roots "+
+			"for HTTPS targets. Use when scanning internal services that serve a self-signed "+
+			"or private-CA certificate so probes verify cleanly instead of failing the TLS handshake")
+
 	return cmd
 }
 
@@ -367,6 +376,15 @@ func runScan(ctx context.Context, cfg *scanConfig, level core.Level) int {
 		Budget:       budget,
 		MaxRetries:   cfg.maxRetries,
 		MaxRetryWait: cfg.maxRetryWait,
+	}
+	if cfg.caFile != "" {
+		tlsCfg, err := loadCABundle(cfg.caFile)
+		if err != nil {
+			log.Error("ca-file load failed", "path", cfg.caFile, "err", err)
+			return exitScanError
+		}
+		clientCfg.TLSClientConfig = tlsCfg
+		log.Info("custom CA bundle loaded", "path", cfg.caFile)
 	}
 	if err := applyAuthConfig(&clientCfg, cfg, seeds, log); err != nil {
 		log.Error("auth config failed", "err", err)
@@ -753,6 +771,31 @@ func loadProxies(ctx context.Context, log *slog.Logger, cfg *scanConfig) ([]*url
 		out = append(out, u)
 	}
 	return out, nil
+}
+
+// loadCABundle reads a PEM file off disk and returns a *tls.Config whose
+// RootCAs layer the file's certs on top of the system pool. Used by
+// --ca-file so HTTPS targets fronted by an internal or self-signed CA
+// verify cleanly. Layering (clone-then-AppendCertsFromPEM) preserves the
+// host's existing trust, so a typo'd or unreachable --ca-file path never
+// silently disables verification of public targets.
+func loadCABundle(path string) (*tls.Config, error) {
+	pemBytes, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read ca file: %w", err)
+	}
+	pool, err := x509.SystemCertPool()
+	if err != nil || pool == nil {
+		// Windows pre-Go 1.18 returned an error here; the fallback empty pool
+		// keeps the custom CA usable even on platforms that can't surface
+		// system roots. We log nothing here because the scan logger isn't in
+		// scope; the caller already log.Info's the load.
+		pool = x509.NewCertPool()
+	}
+	if !pool.AppendCertsFromPEM(pemBytes) {
+		return nil, fmt.Errorf("no PEM certificates found in %s", path)
+	}
+	return &tls.Config{RootCAs: pool}, nil
 }
 
 func logProxyStats(log *slog.Logger, pool *proxy.SmartPool, topN int) {

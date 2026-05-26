@@ -39,7 +39,7 @@ func TestVulnStatic(t *testing.T) {
 	// the scanner doesn't ship.
 	caPath := extractCAFromContainer(t, tgt.container, "/export/ca.crt")
 
-	got := runScanWith(t, scanOpts{SSLCertFile: caPath}, httpsURL,
+	got := runScanWith(t, scanOpts{CAFile: caPath}, httpsURL,
 		"--url", tgt.URL("/openapi.json"),
 		"--url", tgt.URL("/.well-known/oauth-authorization-server"),
 		"--url", tgt.URL("/api/profile"),
