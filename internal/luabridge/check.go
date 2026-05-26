@@ -28,6 +28,12 @@ import (
 // in their own table. Per-Run, only `check.run(ctx)` is invoked, with
 // `ctx` carrying the page artifact and a façade over the engine's
 // helpers (HTTP client, scope, OOB server, payload library, ...).
+//
+// isTwoPhase reports whether the module declared `phase = "two-phase"`
+// (and accordingly carries a `plant` function). Set at Load time; the
+// loader wraps two-phase checks in luaTwoPhase before handing them to
+// the scanner so type assertion to checks.TwoPhaseCheck only succeeds
+// for modules that actually opted in.
 type LuaCheck struct {
 	name        string
 	level       checks.Level
@@ -36,6 +42,7 @@ type LuaCheck struct {
 	owasp       string
 	remediation string
 	budget      time.Duration
+	isTwoPhase  bool
 
 	proto *lua.FunctionProto
 	source string
@@ -108,6 +115,7 @@ func Load(name string, src []byte) (*LuaCheck, error) {
 		owasp:        meta.owasp,
 		remediation:  meta.remediation,
 		budget:       meta.budget,
+		isTwoPhase:   meta.twoPhase,
 		proto:        proto,
 		source:       name,
 	}
@@ -141,6 +149,7 @@ type checkMeta struct {
 	owasp       string
 	remediation string
 	budget      time.Duration
+	twoPhase    bool
 }
 
 func readCheckMeta(t *lua.LTable) (checkMeta, error) {
@@ -175,6 +184,19 @@ func readCheckMeta(t *lua.LTable) (checkMeta, error) {
 
 	if b, ok := t.RawGetString("budget_seconds").(lua.LNumber); ok && b > 0 {
 		m.budget = time.Duration(float64(b) * float64(time.Second))
+	}
+	// phase opts a module into the TwoPhaseCheck wrapper. Two-phase
+	// is opt-in because the scanner re-fetches the visited URL set
+	// during phase 2 the moment any TwoPhaseCheck is registered;
+	// silently promoting every module would burn the request budget.
+	phase := lvalString(t.RawGetString("phase"))
+	switch phase {
+	case "", "single":
+		m.twoPhase = false
+	case "two-phase":
+		m.twoPhase = true
+	default:
+		return m, fmt.Errorf("%s: invalid phase %q (want \"single\" or \"two-phase\")", m.name, phase)
 	}
 	return m, nil
 }

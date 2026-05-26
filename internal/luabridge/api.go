@@ -40,6 +40,9 @@ func bindHyperzAPI(L *lua.LState) {
 		browser:   buildBrowserTable(L),
 		tls:       buildTLSTable(L),
 		ws:        buildWSTable(L),
+		idor:      buildIDORTable(L),
+		storedXSS: buildStoredXSSTable(L),
+		jwt:       buildJWTTable(L),
 	}
 	storeStaticHelpers(L, h)
 }

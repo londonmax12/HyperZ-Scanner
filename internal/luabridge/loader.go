@@ -64,13 +64,21 @@ func LoadDir(fsys fs.FS, root string) ([]*LuaCheck, error) {
 }
 
 // AsChecks unwraps a LuaCheck slice into the checks.Check interface
-// slice the catalog registry expects. Kept as a tiny helper so call
-// sites stay readable - the alternative is forcing every caller to
-// manually convert via `make([]checks.Check, ...)`.
+// slice the catalog registry expects. Two-phase modules (those whose
+// metadata declared `phase = "two-phase"`) are wrapped in luaTwoPhase
+// so type assertion to checks.TwoPhaseCheck succeeds only for the
+// opted-in subset; single-phase modules pass through bare. This gates
+// scanner phase-2 fanout to the checks that actually need it, since
+// the scanner re-fetches the visited URL set the moment any
+// TwoPhaseCheck is registered.
 func AsChecks(in []*LuaCheck) []checks.Check {
 	out := make([]checks.Check, 0, len(in))
 	for _, c := range in {
-		out = append(out, c)
+		if c.isTwoPhase {
+			out = append(out, &luaTwoPhase{LuaCheck: c})
+		} else {
+			out = append(out, c)
+		}
 	}
 	return out
 }

@@ -68,6 +68,9 @@ func buildCtxUserdata(L *lua.LState, env *runEnv) *lua.LTable {
 		t.RawSetString("browser", helpers.browser)
 		t.RawSetString("tls", helpers.tls)
 		t.RawSetString("ws", helpers.ws)
+		t.RawSetString("idor", helpers.idor)
+		t.RawSetString("stored_xss", helpers.storedXSS)
+		t.RawSetString("jwt", helpers.jwt)
 	}
 	t.RawSetString("oob", pushOOBServer(L, env))
 
