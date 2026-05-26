@@ -1655,12 +1655,20 @@ type ContentDiscoveryEntryLua struct {
 
 // ContentDiscoveryEntriesLua returns the wordlist entries the main
 // sweep should probe against hostname, filtered by aggressive level
-// and stack constraint. Host-named backup synthetics are appended in
-// the order the Go check produces. Returning a flat slice keeps the
-// .lua iteration shape simple.
-func ContentDiscoveryEntriesLua(aggressive bool, hostname string, stack *fingerprint.Stack) []ContentDiscoveryEntryLua {
-	out := make([]ContentDiscoveryEntryLua, 0, len(contentDiscoveryEntries)+8)
-	for _, e := range contentDiscoveryEntries {
+// and stack constraint. Host-named backup synthetics (when the
+// catalogue defines a generator) are appended in the order the Go
+// check produces. Returning a flat slice keeps the .lua iteration
+// shape simple.
+//
+// catalogue selects which registered wordlist to walk; pass "default"
+// for the canonical content-discovery list, or any name a future
+// sibling catalogue is registered under. Unknown / empty names fall
+// back to "default" so a Lua-side typo doesn't silently turn into a
+// no-op sweep.
+func ContentDiscoveryEntriesLua(catalogue string, aggressive bool, hostname string, stack *fingerprint.Stack) []ContentDiscoveryEntryLua {
+	cat := resolveDiscoveryCatalogue(catalogue)
+	out := make([]ContentDiscoveryEntryLua, 0, len(cat.entries)+8)
+	for _, e := range cat.entries {
 		if e.Aggressive && !aggressive {
 			continue
 		}
@@ -1669,22 +1677,27 @@ func ContentDiscoveryEntriesLua(aggressive bool, hostname string, stack *fingerp
 		}
 		out = append(out, toContentDiscoveryEntryLua(e))
 	}
-	for _, e := range hostBackupEntries(hostname) {
-		out = append(out, toContentDiscoveryEntryLua(e))
+	if cat.hostBackup != nil {
+		for _, e := range cat.hostBackup(hostname) {
+			out = append(out, toContentDiscoveryEntryLua(e))
+		}
 	}
 	return out
 }
 
 // ContentDiscoveryFollowUpsLua returns the second-wave entries to
 // probe given the set of paths whose first-wave probes fired and the
-// set already probed. Mirrors followUpsFor.
-func ContentDiscoveryFollowUpsLua(hits map[string]struct{}, probed map[string]struct{}, stack *fingerprint.Stack) []ContentDiscoveryEntryLua {
+// set already probed. catalogue picks which registered follow-up
+// group set to evaluate, mirroring ContentDiscoveryEntriesLua's
+// resolution rule.
+func ContentDiscoveryFollowUpsLua(catalogue string, hits map[string]struct{}, probed map[string]struct{}, stack *fingerprint.Stack) []ContentDiscoveryEntryLua {
 	if len(hits) == 0 {
 		return nil
 	}
+	cat := resolveDiscoveryCatalogue(catalogue)
 	var out []ContentDiscoveryEntryLua
 	queued := map[string]struct{}{}
-	for _, g := range contentDiscoveryFollowUpGroups {
+	for _, g := range cat.followUps {
 		triggered := false
 		for _, t := range g.Triggers {
 			if _, ok := hits[t]; ok {

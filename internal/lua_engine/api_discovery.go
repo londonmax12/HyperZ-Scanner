@@ -9,16 +9,20 @@ import (
 // buildDiscoveryTable returns the ctx.discovery helper namespace.
 // Surface for the content-discovery Lua port:
 //
-//	ctx.discovery.entries(aggressive_bool, hostname)
-//	  Returns the wordlist for hostname filtered by level + the
+//	ctx.discovery.entries(catalogue, aggressive_bool, hostname)
+//	  Returns the named wordlist for hostname filtered by level + the
 //	  active scan's fingerprint.Stack. Host-named backup synthetics
-//	  are appended in the order the Go check produces.
+//	  (when the catalogue defines them) are appended in the order the
+//	  Go check produces. catalogue picks the registered wordlist
+//	  ("default" for content-discovery; future siblings can register
+//	  their own under a different name).
 //
-//	ctx.discovery.follow_ups(hostname, hits_set, probed_set)
+//	ctx.discovery.follow_ups(catalogue, hostname, hits_set, probed_set)
 //	  Returns the second-wave entries to probe given the set of paths
 //	  whose first-wave probes fired (hits_set) and the set already
 //	  probed (probed_set). Both sets are flat tables keyed by path
-//	  (any non-nil value means "present").
+//	  (any non-nil value means "present"). catalogue selects which
+//	  registered follow-up rule set to evaluate, mirroring entries().
 //
 //	ctx.discovery.body_hash_prefix(body) -> string
 //	  16-hex-char SHA1 prefix of body. Used by the Lua baseline path
@@ -81,40 +85,43 @@ type discoveryClaims struct {
 	set map[string]struct{}
 }
 
-// discoveryEntries reads aggressive + hostname from Lua and returns
-// the filtered + host-augmented entry list as a Lua array. The
-// fingerprint.Stack used for stack-restriction filtering comes from
-// the active env's context (set by the scanner via WithStack).
+// discoveryEntries reads catalogue + aggressive + hostname from Lua
+// and returns the filtered + host-augmented entry list as a Lua array.
+// The fingerprint.Stack used for stack-restriction filtering comes
+// from the active env's context (set by the scanner via WithStack).
 func discoveryEntries(L *lua.LState) int {
 	env := currentEnv(L)
 	if env == nil {
 		L.RaiseError("ctx.discovery.entries called outside a check run")
 	}
-	aggressive := lvalBool(L.Get(1))
-	hostname := optString(L, 2, "")
+	catalogue := requireString(L, 1)
+	aggressive := lvalBool(L.Get(2))
+	hostname := optString(L, 3, "")
 	stack := StackFrom(env.ctx)
 	out := L.NewTable()
-	for i, e := range ContentDiscoveryEntriesLua(aggressive, hostname, stack) {
+	for i, e := range ContentDiscoveryEntriesLua(catalogue, aggressive, hostname, stack) {
 		out.RawSetInt(i+1, pushDiscoveryEntry(L, e))
 	}
 	L.Push(out)
 	return 1
 }
 
-// discoveryFollowUps walks the configured groups and returns every
-// follow-up entry whose trigger appears in hits and whose path is not
-// in probed and whose stack constraint matches.
+// discoveryFollowUps walks the configured groups for the named
+// catalogue and returns every follow-up entry whose trigger appears
+// in hits and whose path is not in probed and whose stack constraint
+// matches.
 func discoveryFollowUps(L *lua.LState) int {
 	env := currentEnv(L)
 	if env == nil {
 		L.RaiseError("ctx.discovery.follow_ups called outside a check run")
 	}
-	_ = optString(L, 1, "")
-	hits := readPathSet(L.Get(2))
-	probed := readPathSet(L.Get(3))
+	catalogue := requireString(L, 1)
+	_ = optString(L, 2, "")
+	hits := readPathSet(L.Get(3))
+	probed := readPathSet(L.Get(4))
 	stack := StackFrom(env.ctx)
 	out := L.NewTable()
-	for i, e := range ContentDiscoveryFollowUpsLua(hits, probed, stack) {
+	for i, e := range ContentDiscoveryFollowUpsLua(catalogue, hits, probed, stack) {
 		out.RawSetInt(i+1, pushDiscoveryEntry(L, e))
 	}
 	L.Push(out)

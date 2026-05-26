@@ -90,6 +90,47 @@ func (e discoveryEntry) appliesTo(s *fingerprint.Stack) bool {
 		check(s.CMS, e.CMSes)
 }
 
+// discoveryCatalogue groups a wordlist + its follow-up rules + an
+// optional host-named synthetic generator. The Lua bridge looks one up
+// by name (`ctx.discovery.entries("default", ...)`) so a future check
+// (API-path discovery, JS-endpoint enumeration, vhost discovery) can
+// register its own catalogue under a different name and reuse the
+// shared sweep / baseline / classify machinery without touching the
+// existing content-discovery surface.
+//
+// hostBackup may be nil; the bridge calls it (when set) to append
+// host-named synthetic entries (e.g. /<host>.zip) after the static
+// wordlist.
+type discoveryCatalogue struct {
+	entries    []discoveryEntry
+	followUps  []discoveryFollowUpGroup
+	hostBackup func(hostname string) []discoveryEntry
+}
+
+// discoveryCatalogues is the named-catalogue registry. New catalogues
+// are added here; the Lua bridge surfaces every registered name to
+// .lua check authors. "default" is the canonical content-discovery
+// wordlist this package has always shipped.
+var discoveryCatalogues = map[string]discoveryCatalogue{
+	"default": {
+		entries:    contentDiscoveryEntries,
+		followUps:  contentDiscoveryFollowUpGroups,
+		hostBackup: hostBackupEntries,
+	},
+}
+
+// resolveDiscoveryCatalogue returns the named catalogue, falling back
+// to "default" when name is empty or unknown. Centralised so the two
+// bridge entry points (entries, follow_ups) apply the same fallback
+// rule and a Lua-side typo lands on the documented wordlist rather
+// than silently returning an empty list.
+func resolveDiscoveryCatalogue(name string) discoveryCatalogue {
+	if cat, ok := discoveryCatalogues[name]; ok {
+		return cat
+	}
+	return discoveryCatalogues["default"]
+}
+
 // contentDiscoveryEntries is the curated probe catalog. New entries
 // should justify their probe cost: every addition is one more request
 // per scanned host, and false-positive defense relies on each path
