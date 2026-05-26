@@ -1,0 +1,9 @@
+{
+  "name": "vuln-node",
+  "version": "0.0.0",
+  "private": true,
+  "dependencies": {
+    "express": "4.19.2",
+    "body-parser": "1.20.2"
+  }
+}

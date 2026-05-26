@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>vuln-static</title>
+
+  <!-- mixed-content: HTTPS page references plain-http resources. -->
+  <link rel="stylesheet" href="http://vuln-static/style.css">
+  <img src="http://vuln-static/pixel.png" alt="">
+
+  <!-- sri-missing: cross-origin script tag with no integrity attr. -->
+  <script src="https://cdn.example.invalid/library.min.js"></script>
+
+  <!-- js-libs-known-vuln: jQuery 1.7.1 has multiple known CVEs. -->
+  <script src="/static/jquery-1.7.1.min.js"></script>
+
+  <!-- source-map-exposure: inline sourceMappingURL comment AND a
+       served .map (see nginx config). -->
+  <script src="/app.js"></script>
+</head>
+<body>
+  <h1>vuln-static</h1>
+
+  <!-- secrets-in-body: AWS-style access key embedded in the page so
+       the passive scanner's body scan fires. -->
+  <pre id="diag">deploy notes: AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+                  GITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123456789</pre>
+
+  <!-- target-blank-noopener: anchor opens new window without rel=noopener. -->
+  <p><a href="https://example.com" target="_blank">external link</a></p>
+
+  <!-- form-action-insecure: HTTPS page posts to plain http://. -->
+  <!-- form-autocomplete: password input with no autocomplete=off. -->
+  <form action="http://vuln-static/login" method="post">
+    <input type="text" name="user">
+    <input type="password" name="pw">
+    <button type="submit">login</button>
+  </form>
+
+  <!-- ws-audit / sse-audit pick up these references from the body so
+       the active probes know which endpoint to target. -->
+  <script>
+    /* eslint-disable */
+    new EventSource("/sse-events");
+    var ws = new WebSocket("ws://vuln-ws:8081/echo");
+  </script>
+</body>
+</html>
