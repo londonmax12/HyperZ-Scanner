@@ -426,22 +426,12 @@ func storedXSSStateDetectFireOnce(L *lua.LState) int {
 func storedXSSStateFindCanaries(L *lua.LState) int {
 	_ = storedXSSStateFromArg(L, 1)
 	body := requireString(L, 2)
-	matches := canaryRe.FindAllString(body, -1)
-	out := L.NewTable()
-	for i, m := range matches {
-		out.RawSetInt(i+1, lua.LString(m))
-	}
-	L.Push(out)
+	L.Push(pushStringList(L, canaryRe.FindAllString(body, -1)))
 	return 1
 }
 
 func storedXSSStateDetectURLs(L *lua.LState) int {
 	s := storedXSSStateFromArg(L, 1)
-	urls := s.DetectURLsSnapshot()
-	out := L.NewTable()
-	for i, u := range urls {
-		out.RawSetInt(i+1, lua.LString(u))
-	}
-	L.Push(out)
+	L.Push(pushStringList(L, s.DetectURLsSnapshot()))
 	return 1
 }

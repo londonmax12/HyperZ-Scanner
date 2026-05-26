@@ -106,6 +106,19 @@ func stringList(t *lua.LTable, name string) []string {
 	return out
 }
 
+// pushStringList returns a 1-indexed Lua array table built from strs.
+// Bridge surfaces that hand a Go []string back to a .lua port call
+// this so the per-bridge file does not open-code the
+// `RawSetInt(i+1, lua.LString(s))` loop. Returns an empty table when
+// strs is nil or zero-length, matching what the inline loops produced.
+func pushStringList(L *lua.LState, strs []string) *lua.LTable {
+	t := L.NewTable()
+	for i, s := range strs {
+		t.RawSetInt(i+1, lua.LString(s))
+	}
+	return t
+}
+
 // tableKeys returns the string keys of t in sorted order. Used by
 // the header-flattening path in evidence builders: Lua-side authors
 // may emit headers in any order, but evidence snippets need a

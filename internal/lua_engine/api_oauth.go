@@ -59,27 +59,14 @@ func oauthDiscover(L *lua.LState) int {
 	out.RawSetString("jwks_uri", lua.LString(facts.JwksURI))
 	out.RawSetString("introspection_endpoint", lua.LString(facts.IntrospectionEndpoint))
 	out.RawSetString("revocation_endpoint", lua.LString(facts.RevocationEndpoint))
-	out.RawSetString("response_types_supported", stringArrayToLua(L, facts.ResponseTypesSupported))
-	out.RawSetString("id_token_signing_alg_values_supported", stringArrayToLua(L, facts.IDTokenSigningAlgValuesSupported))
-	out.RawSetString("token_endpoint_auth_methods_supported", stringArrayToLua(L, facts.TokenEndpointAuthMethodsSupported))
-	out.RawSetString("code_challenge_methods_supported", stringArrayToLua(L, facts.CodeChallengeMethodsSupported))
+	out.RawSetString("response_types_supported", pushStringList(L, facts.ResponseTypesSupported))
+	out.RawSetString("id_token_signing_alg_values_supported", pushStringList(L, facts.IDTokenSigningAlgValuesSupported))
+	out.RawSetString("token_endpoint_auth_methods_supported", pushStringList(L, facts.TokenEndpointAuthMethodsSupported))
+	out.RawSetString("code_challenge_methods_supported", pushStringList(L, facts.CodeChallengeMethodsSupported))
 	out.RawSetString("probe_url", lua.LString(facts.ProbeURL))
 	out.RawSetString("status", lua.LNumber(facts.Status))
 	out.RawSetString("body", lua.LString(string(facts.Body)))
 
 	L.Push(out)
 	return 1
-}
-
-// stringArrayToLua converts a Go []string into a Lua array (1-indexed
-// table). Used so advertised-value arrays (response_types_supported,
-// id_token_signing_alg_values_supported, ...) reach Lua in their
-// natural shape rather than as a comma-joined string the .lua port
-// would have to re-split.
-func stringArrayToLua(L *lua.LState, in []string) *lua.LTable {
-	t := L.NewTable()
-	for i, s := range in {
-		t.RawSetInt(i+1, lua.LString(s))
-	}
-	return t
 }

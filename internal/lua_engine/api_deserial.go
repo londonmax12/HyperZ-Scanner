@@ -49,11 +49,7 @@ func deserialFormats(L *lua.LState) int {
 		entry.RawSetString("name", lua.LString(f.Name))
 		entry.RawSetString("label", lua.LString(f.Label))
 		entry.RawSetString("probe_payload", lua.LString(f.ProbePayload))
-		pats := L.NewTable()
-		for j, p := range f.ErrorPats {
-			pats.RawSetInt(j+1, lua.LString(p))
-		}
-		entry.RawSetString("error_pats", pats)
+		entry.RawSetString("error_pats", pushStringList(L, f.ErrorPats))
 		out.RawSetInt(i+1, entry)
 	}
 	L.Push(out)
@@ -68,24 +64,14 @@ func deserialClassify(L *lua.LState) int {
 }
 
 func deserialMatchAll(L *lua.LState) int {
-	hits := DeserialMatchAllLua([]byte(requireString(L, 1)))
-	out := L.NewTable()
-	for i, h := range hits {
-		out.RawSetInt(i+1, lua.LString(h))
-	}
-	L.Push(out)
+	L.Push(pushStringList(L, DeserialMatchAllLua([]byte(requireString(L, 1)))))
 	return 1
 }
 
 func deserialMatchFormat(L *lua.LState) int {
 	body := requireString(L, 1)
 	name := requireString(L, 2)
-	hits := DeserialMatchFormatLua([]byte(body), name)
-	out := L.NewTable()
-	for i, h := range hits {
-		out.RawSetInt(i+1, lua.LString(h))
-	}
-	L.Push(out)
+	L.Push(pushStringList(L, DeserialMatchFormatLua([]byte(body), name)))
 	return 1
 }
 

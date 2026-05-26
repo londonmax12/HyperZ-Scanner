@@ -78,12 +78,7 @@ func headersGet(L *lua.LState) int {
 func headersValues(L *lua.LState) int {
 	h := headersFromArg(L).h
 	name := requireString(L, 2)
-	vs := h.Values(name)
-	tbl := L.NewTable()
-	for i, v := range vs {
-		tbl.RawSetInt(i+1, lua.LString(v))
-	}
-	L.Push(tbl)
+	L.Push(pushStringList(L, h.Values(name)))
 	return 1
 }
 

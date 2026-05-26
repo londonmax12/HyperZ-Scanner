@@ -99,20 +99,12 @@ func payloadsSSRFBodyCap(L *lua.LState) int {
 }
 
 func payloadsSSRFSpecificParams(L *lua.LState) int {
-	out := L.NewTable()
-	for i, name := range SSRFSpecificParamNamesLua() {
-		out.RawSetInt(i+1, lua.LString(name))
-	}
-	L.Push(out)
+	L.Push(pushStringList(L, SSRFSpecificParamNamesLua()))
 	return 1
 }
 
 func payloadsSSRFGenericParams(L *lua.LState) int {
-	out := L.NewTable()
-	for i, name := range SSRFGenericParamNamesLua() {
-		out.RawSetInt(i+1, lua.LString(name))
-	}
-	L.Push(out)
+	L.Push(pushStringList(L, SSRFGenericParamNamesLua()))
 	return 1
 }
 
@@ -231,11 +223,7 @@ func payloadsLDAPiCanaryPlaceholder(L *lua.LState) int {
 }
 
 func payloadsLDAPiErrorPayloads(L *lua.LState) int {
-	out := L.NewTable()
-	for i, p := range LDAPiErrorPayloadsLua() {
-		out.RawSetInt(i+1, lua.LString(p))
-	}
-	L.Push(out)
+	L.Push(pushStringList(L, LDAPiErrorPayloadsLua()))
 	return 1
 }
 
@@ -253,11 +241,7 @@ func payloadsNoSQLiBooleanOps(L *lua.LState) int {
 }
 
 func payloadsNoSQLiErrorPayloads(L *lua.LState) int {
-	out := L.NewTable()
-	for i, p := range NoSQLiErrorPayloadsLua() {
-		out.RawSetInt(i+1, lua.LString(p))
-	}
-	L.Push(out)
+	L.Push(pushStringList(L, NoSQLiErrorPayloadsLua()))
 	return 1
 }
 
@@ -285,11 +269,7 @@ func payloadsSSTIConfirmProbe(L *lua.LState) int {
 }
 
 func payloadsSSTIErrorPayloads(L *lua.LState) int {
-	out := L.NewTable()
-	for i, p := range SSTIErrorPayloadsLua() {
-		out.RawSetInt(i+1, lua.LString(p))
-	}
-	L.Push(out)
+	L.Push(pushStringList(L, SSTIErrorPayloadsLua()))
 	return 1
 }
 

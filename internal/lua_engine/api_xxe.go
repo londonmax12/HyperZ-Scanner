@@ -41,20 +41,12 @@ func buildXXETable(L *lua.LState) *lua.LTable {
 }
 
 func xxeFileDiscloseDocsFn(L *lua.LState) int {
-	out := L.NewTable()
-	for i, d := range XXEFileDiscloseDocsLua() {
-		out.RawSetInt(i+1, lua.LString(d))
-	}
-	L.Push(out)
+	L.Push(pushStringList(L, XXEFileDiscloseDocsLua()))
 	return 1
 }
 
 func xxeErrorDocsFn(L *lua.LState) int {
-	out := L.NewTable()
-	for i, d := range XXEErrorDocsLua() {
-		out.RawSetInt(i+1, lua.LString(d))
-	}
-	L.Push(out)
+	L.Push(pushStringList(L, XXEErrorDocsLua()))
 	return 1
 }
 

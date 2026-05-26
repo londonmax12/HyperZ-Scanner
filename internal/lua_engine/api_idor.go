@@ -154,12 +154,7 @@ func corpusGenerate(L *lua.LState) int {
 		L.Push(L.NewTable())
 		return 1
 	}
-	cands := pat.Generate(seed, c.c, want)
-	out := L.NewTable()
-	for i, v := range cands {
-		out.RawSetInt(i+1, lua.LString(v))
-	}
-	L.Push(out)
+	L.Push(pushStringList(L, pat.Generate(seed, c.c, want)))
 	return 1
 }
 
@@ -199,11 +194,7 @@ func idorJudgeFn(L *lua.LState) int {
 	out.RawSetString("tampered_sim", lua.LNumber(v.TamperedSim))
 	out.RawSetString("control_sim", lua.LNumber(v.ControlSim))
 	out.RawSetString("tampered_control_sim", lua.LNumber(v.TamperedControlSim))
-	hints := L.NewTable()
-	for i, h := range v.PIIHints {
-		hints.RawSetInt(i+1, lua.LString(h))
-	}
-	out.RawSetString("pii_hints", hints)
+	out.RawSetString("pii_hints", pushStringList(L, v.PIIHints))
 	L.Push(out)
 	return 1
 }

@@ -221,15 +221,11 @@ func tlsCertNotAfter(L *lua.LState) int {
 
 func tlsCertDNSNames(L *lua.LState) int {
 	c := tlsCertFromArg(L).c
-	out := L.NewTable()
 	if c == nil {
-		L.Push(out)
+		L.Push(L.NewTable())
 		return 1
 	}
-	for i, n := range c.DNSNames {
-		out.RawSetInt(i+1, lua.LString(n))
-	}
-	L.Push(out)
+	L.Push(pushStringList(L, c.DNSNames))
 	return 1
 }
 

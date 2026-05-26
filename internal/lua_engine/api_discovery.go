@@ -156,11 +156,7 @@ func pushDiscoveryEntry(L *lua.LState, e ContentDiscoveryEntryLua) *lua.LTable {
 	t.RawSetString("owasp", lua.LString(e.OWASP))
 	t.RawSetString("remediation", lua.LString(e.Remediation))
 	t.RawSetString("marker", lua.LString(e.Marker))
-	cts := L.NewTable()
-	for i, c := range e.ExpectedContentTypes {
-		cts.RawSetInt(i+1, lua.LString(c))
-	}
-	t.RawSetString("expected_content_types", cts)
+	t.RawSetString("expected_content_types", pushStringList(L, e.ExpectedContentTypes))
 	return t
 }
 

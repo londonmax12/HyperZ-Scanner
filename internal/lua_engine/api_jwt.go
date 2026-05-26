@@ -1,8 +1,6 @@
 package lua_engine
 
 import (
-	"context"
-
 	lua "github.com/yuin/gopher-lua"
 )
 
@@ -81,16 +79,10 @@ func jwtDrain(L *lua.LState) int {
 	}
 	// Drain inspects OOBFrom(ctx); pass through the env ctx the
 	// scanner already wired with the active OOB server.
-	facts := jwt.DrainFacts(passDrainCtx(env.ctx))
+	facts := jwt.DrainFacts(env.ctx)
 	L.Push(jwtFactsToLua(L, facts))
 	return 1
 }
-
-// passDrainCtx is a no-op pass-through today; kept as a seam so we
-// can decorate Drain's context (e.g. cap a per-check timeout) without
-// touching every call site later. Drain itself reads OOBFrom(ctx)
-// and is otherwise stateless on context.
-func passDrainCtx(ctx context.Context) context.Context { return ctx }
 
 func jwtFactsToLua(L *lua.LState, facts []JWTFact) *lua.LTable {
 	out := L.NewTable()
@@ -110,11 +102,7 @@ func jwtFactsToLua(L *lua.LState, facts []JWTFact) *lua.LTable {
 			case bool:
 				params.RawSetString(k, lua.LBool(tv))
 			case []string:
-				arr := L.NewTable()
-				for j, s := range tv {
-					arr.RawSetInt(j+1, lua.LString(s))
-				}
-				params.RawSetString(k, arr)
+				params.RawSetString(k, pushStringList(L, tv))
 			default:
 				// Coerce anything else to its Go fmt; the Lua side
 				// reads it as a string and a typo at the consumer
