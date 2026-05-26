@@ -68,6 +68,16 @@ func buildBodyTable(L *lua.LState) *lua.LTable {
 	t.RawSetString("looks_like_source_map", L.NewFunction(bodyLooksLikeSourceMap))
 	t.RawSetString("scan_known_js_libs", L.NewFunction(bodyScanKnownJSLibs))
 	t.RawSetString("analyze_csp", L.NewFunction(bodyAnalyzeCSP))
+	t.RawSetString("csp_parse_directives", L.NewFunction(bodyCSPParseDirectives))
+	t.RawSetString("csp_nonce_values", L.NewFunction(bodyCSPNonceValues))
+	t.RawSetString("csp_base_uri_hijackable", L.NewFunction(bodyCSPBaseURIHijackable))
+	t.RawSetString("csp_script_src_allows_host", L.NewFunction(bodyCSPScriptSrcAllowsHost))
+	t.RawSetString("csp_confirms_jsonp", L.NewFunction(bodyCSPConfirmsJSONP))
+	t.RawSetString("csp_relative_script_srcs", L.NewFunction(bodyCSPRelativeScriptSrcs))
+	t.RawSetString("csp_bypass_jsonp_probes", L.NewFunction(bodyCSPBypassJSONPProbes))
+	t.RawSetString("csp_bypass_callback_canary", L.NewFunction(bodyCSPBypassCallbackCanary))
+	t.RawSetString("csp_bypass_body_cap", L.NewFunction(bodyCSPBypassBodyCap))
+	t.RawSetString("csp_bypass_jsonp_snippet", L.NewFunction(bodyCSPBypassJSONPSnippet))
 	t.RawSetString("sqli_error_new_matches", L.NewFunction(bodySQLiErrorNewMatches))
 	t.RawSetString("sqli_error_payloads", L.NewFunction(bodySQLiErrorPayloads))
 	t.RawSetString("traversal_new_markers", L.NewFunction(bodyTraversalNewMarkers))
@@ -363,6 +373,154 @@ func bodyAnalyzeCSP(L *lua.LState) int {
 	}
 	out.RawSetString("weaknesses", weaknesses)
 	L.Push(out)
+	return 1
+}
+
+// bodyCSPParseDirectives wraps checks.CSPParseDirectivesLua. Returns
+// a Lua table mapping directive name (lowercased) -> array of source
+// tokens (case preserved). Authors call this to read script-src /
+// style-src / base-uri off a raw CSP header value the same way the
+// csp-bypass Go check does internally.
+func bodyCSPParseDirectives(L *lua.LState) int {
+	dirs := checks.CSPParseDirectivesLua(requireString(L, 1))
+	out := L.NewTable()
+	for name, sources := range dirs {
+		arr := L.NewTable()
+		for i, s := range sources {
+			arr.RawSetInt(i+1, lua.LString(s))
+		}
+		out.RawSetString(name, arr)
+	}
+	L.Push(out)
+	return 1
+}
+
+// readDirectivesArg pulls a {directive = [sources]} Lua table back into
+// the map shape checks.CSPParseDirectivesLua produces. Used by the
+// nonce-reuse / base-uri / script-src-allowlist helpers below so the
+// Lua port hands directives back to Go for analysis without each
+// helper re-parsing the raw header.
+func readDirectivesArg(v lua.LValue) map[string][]string {
+	tbl, ok := v.(*lua.LTable)
+	if !ok {
+		return nil
+	}
+	out := map[string][]string{}
+	tbl.ForEach(func(k, val lua.LValue) {
+		name := lvalString(k)
+		if name == "" {
+			return
+		}
+		if arr, ok := val.(*lua.LTable); ok {
+			n := arr.Len()
+			srcs := make([]string, 0, n)
+			for i := 1; i <= n; i++ {
+				srcs = append(srcs, lvalString(arr.RawGetInt(i)))
+			}
+			out[name] = srcs
+			return
+		}
+		if s, ok := val.(lua.LString); ok {
+			out[name] = []string{string(s)}
+		}
+	})
+	return out
+}
+
+// bodyCSPNonceValues returns the unique nonce values in script-src /
+// style-src as a flat array, matching nonceValues in Go.
+func bodyCSPNonceValues(L *lua.LState) int {
+	dirs := readDirectivesArg(L.Get(1))
+	out := L.NewTable()
+	for i, n := range checks.CSPNonceValuesLua(dirs) {
+		out.RawSetInt(i+1, lua.LString(n))
+	}
+	L.Push(out)
+	return 1
+}
+
+// bodyCSPBaseURIHijackable reports whether base-uri is missing or
+// permissive enough that a <base href> hijack precondition holds.
+func bodyCSPBaseURIHijackable(L *lua.LState) int {
+	dirs := readDirectivesArg(L.Get(1))
+	L.Push(lua.LBool(checks.CSPBaseURIHijackableLua(dirs)))
+	return 1
+}
+
+// bodyCSPScriptSrcAllowsHost takes a sources array and a candidate
+// host; returns (matched_raw_string, ok_bool). Same multi-return shape
+// as the Go signature so Lua authors can `local raw, ok = ...` and
+// quote the matched token in finding detail.
+func bodyCSPScriptSrcAllowsHost(L *lua.LState) int {
+	srcs := readStringList(L.Get(1))
+	host := requireString(L, 2)
+	matched, ok := checks.CSPScriptSrcAllowsHostLua(srcs, host)
+	L.Push(lua.LString(matched))
+	L.Push(lua.LBool(ok))
+	return 2
+}
+
+// bodyCSPConfirmsJSONP reports whether (content_type, body) constitutes
+// a confirmed JSONP echo of canary. The Go-side rule (JS content type +
+// canary-followed-by-paren) lives in one place so this remains a thin
+// forwarder.
+func bodyCSPConfirmsJSONP(L *lua.LState) int {
+	ct := requireString(L, 1)
+	body := requireString(L, 2)
+	canary := requireString(L, 3)
+	L.Push(lua.LBool(checks.CSPConfirmsJSONPLua(ct, []byte(body), canary)))
+	return 1
+}
+
+// bodyCSPRelativeScriptSrcs returns the unique relative <script src>
+// values found in body, in sorted order. Skips absolute (scheme:) and
+// protocol-relative (//) srcs - those are not affected by base-uri.
+func bodyCSPRelativeScriptSrcs(L *lua.LState) int {
+	body := requireString(L, 1)
+	out := L.NewTable()
+	for i, s := range checks.CSPBypassRelativeScriptSrcsLua([]byte(body)) {
+		out.RawSetInt(i+1, lua.LString(s))
+	}
+	L.Push(out)
+	return 1
+}
+
+// bodyCSPBypassJSONPProbes returns the live JSONP-CDN probe catalogue.
+// Reads on every call so a test-time table swap (overrideJSONPProbes)
+// is observed by the Lua port immediately - the same way Go-side tests
+// rely on the swap.
+func bodyCSPBypassJSONPProbes(L *lua.LState) int {
+	out := L.NewTable()
+	for i, p := range checks.CSPBypassJSONPProbesLua() {
+		entry := L.NewTable()
+		entry.RawSetString("host", lua.LString(p.Host))
+		entry.RawSetString("url_tmpl", lua.LString(p.URLTmpl))
+		out.RawSetInt(i+1, entry)
+	}
+	L.Push(out)
+	return 1
+}
+
+// bodyCSPBypassCallbackCanary / bodyCSPBypassBodyCap expose the JSONP
+// canary name and per-probe body cap so the Lua port stamps the same
+// values onto wire requests / evidence the Go check uses.
+func bodyCSPBypassCallbackCanary(L *lua.LState) int {
+	L.Push(lua.LString(checks.CSPBypassCallbackCanaryLua()))
+	return 1
+}
+
+func bodyCSPBypassBodyCap(L *lua.LState) int {
+	L.Push(lua.LNumber(checks.CSPBypassBodyCapLua()))
+	return 1
+}
+
+// bodyCSPBypassJSONPSnippet builds the per-finding evidence snippet
+// (200-byte truncation + cap-reached suffix). Centralised so Go and
+// Lua produce byte-identical Evidence.Snippet on the same probe body.
+func bodyCSPBypassJSONPSnippet(L *lua.LState) int {
+	body := requireString(L, 1)
+	truncated := lvalBool(L.Get(2))
+	L.Push(lua.LString(checks.JSONPEvidenceSnippetLua([]byte(body), truncated)))
 	return 1
 }
 

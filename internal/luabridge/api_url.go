@@ -29,7 +29,34 @@ func buildURLTable(L *lua.LState) *lua.LTable {
 	t.RawSetString("is_redirect_status", L.NewFunction(urlIsRedirectStatus))
 	t.RawSetString("resolve", L.NewFunction(urlResolve))
 	t.RawSetString("encode_values", L.NewFunction(urlEncodeValues))
+	t.RawSetString("append_query_param", L.NewFunction(urlAppendQueryParam))
+	t.RawSetString("is_absolute_or_protocol_relative", L.NewFunction(urlIsAbsoluteOrProtocolRelative))
 	return t
+}
+
+// urlAppendQueryParam wraps checks.CSPBypassAppendQueryParamLua so the
+// csp-bypass nonce-reuse probe builds the same cache-busting URL the
+// Go check does. Returns (resolved_string, err_string).
+func urlAppendQueryParam(L *lua.LState) int {
+	rawurl := requireString(L, 1)
+	key := requireString(L, 2)
+	val := requireString(L, 3)
+	out, err := checks.CSPBypassAppendQueryParamLua(rawurl, key, val)
+	if err != nil {
+		L.Push(lua.LString(""))
+		L.Push(lua.LString(err.Error()))
+		return 2
+	}
+	L.Push(lua.LString(out))
+	return 1
+}
+
+// urlIsAbsoluteOrProtocolRelative wraps checks.CSPIsAbsoluteOrProtocolRelativeLua.
+// Lua-side scanners that walk script src attrs gate on this to drop
+// hijack-immune entries (absolute or "//host/...") from candidate lists.
+func urlIsAbsoluteOrProtocolRelative(L *lua.LState) int {
+	L.Push(lua.LBool(checks.CSPIsAbsoluteOrProtocolRelativeLua(requireString(L, 1))))
+	return 1
 }
 
 // urlEncodeValues encodes a flat name -> string|array table into the

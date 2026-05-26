@@ -3,6 +3,8 @@ package checks
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -13,6 +15,7 @@ import (
 	"golang.org/x/net/html"
 
 	"github.com/londonmax12/hyperz/internal/fingerprint"
+	"github.com/londonmax12/hyperz/internal/page"
 )
 
 // This file exposes the small set of pure helpers the Lua bridge calls
@@ -416,6 +419,331 @@ func AnalyzeCSP(enforcing, reportOnly []string) []CSPWeakness {
 // Go check makes inside Run.
 func CSPIsReportOnly(enforcing, reportOnly []string) bool {
 	return len(enforcing) == 0 && len(reportOnly) > 0
+}
+
+// CSPParseDirectivesLua exposes the package-private parseCSP so the
+// csp-bypass Lua port consumes the same first-occurrence-wins splitter
+// the active probes use to read script-src / style-src / base-uri.
+// Returns directive -> source-list. Directive names are lower-cased;
+// source tokens preserve their case so nonce / hash byte-equality
+// checks downstream stay exact.
+func CSPParseDirectivesLua(header string) map[string][]string {
+	return parseCSP(header)
+}
+
+// CSPNonceValuesLua exposes nonceValues so the csp-bypass Lua port
+// finds the same nonce VALUES (the bit after "nonce-") in script-src
+// and style-src that the Go probe compares across two responses.
+func CSPNonceValuesLua(dirs map[string][]string) []string {
+	return nonceValues(dirs)
+}
+
+// CSPBaseURIHijackableLua exposes baseURIIsHijackable so the Lua port
+// decides "missing or permissive base-uri" the same way the Go probe
+// does. true means the precondition for the <base href> hijack holds
+// and the body sweep is worth running.
+func CSPBaseURIHijackableLua(dirs map[string][]string) bool {
+	return baseURIIsHijackable(dirs)
+}
+
+// CSPScriptSrcAllowsHostLua exposes cspScriptSrcAllowsHost so the JSONP
+// probe arm gates on the same host-matching rules (bare *, scheme-only,
+// wildcard subdomain incl. apex, host[:port], scheme://host[:port][/path],
+// keywords ignored). Returns the original source token that matched and
+// a bool, mirroring the Go signature so the Lua port can quote the exact
+// CSP token responsible in finding detail.
+func CSPScriptSrcAllowsHostLua(sources []string, candidateHost string) (string, bool) {
+	return cspScriptSrcAllowsHost(sources, candidateHost)
+}
+
+// CSPConfirmsJSONPLua exposes confirmsJSONP so the JSONP probe arm
+// applies the same JS-content-type + canary-followed-by-paren rule to
+// decide a JSONP echo is conclusive. canary is the per-probe callback
+// name embedded in the request.
+func CSPConfirmsJSONPLua(contentType string, body []byte, canary string) bool {
+	return confirmsJSONP(contentType, body, canary)
+}
+
+// CSPBypassRelativeScriptSrcsLua extracts unique relative <script src>
+// values from body in sorted order. Skips absolute (scheme:) and
+// protocol-relative (//) srcs - those are not affected by a <base href>
+// hijack and were never the bug. The Lua port reads this list to gate
+// the base-uri-hijack finding on whether the page actually depends on
+// relative loads.
+func CSPBypassRelativeScriptSrcsLua(body []byte) []string {
+	if len(body) == 0 {
+		return nil
+	}
+	matches := cspScriptSrcRelativeRegex.FindAllSubmatch(body, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	var out []string
+	for _, m := range matches {
+		src := strings.TrimSpace(string(m[1]))
+		if src == "" {
+			continue
+		}
+		if isAbsoluteOrProtocolRelative(src) {
+			continue
+		}
+		if _, ok := seen[src]; ok {
+			continue
+		}
+		seen[src] = struct{}{}
+		out = append(out, src)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// CSPIsAbsoluteOrProtocolRelativeLua exposes isAbsoluteOrProtocolRelative
+// so authors of additional CSP-related Lua checks can use the same
+// scheme-or-//-detection without re-implementing it.
+func CSPIsAbsoluteOrProtocolRelativeLua(src string) bool {
+	return isAbsoluteOrProtocolRelative(src)
+}
+
+// CSPBypassAppendQueryParamLua exposes appendQueryParam so the Lua
+// nonce-reuse probe builds the same cache-busting URL the Go check
+// uses. The Lua side already has url.Parse + url:string assembly via
+// the bridge, but using the Go-side helper here guarantees byte-for-
+// byte identical re-fetch URLs across implementations.
+func CSPBypassAppendQueryParamLua(rawurl, key, val string) (string, error) {
+	return appendQueryParam(rawurl, key, val)
+}
+
+// CSPBypassJSONPProbeLua is one entry from the JSONP-CDN catalogue the
+// active csp-bypass JSONP arm walks. The .lua port reads the current
+// snapshot of jsonpProbes via CSPBypassJSONPProbesLua so a test that
+// swaps the table (overrideJSONPProbes) flips both implementations to
+// the test endpoint in lockstep.
+type CSPBypassJSONPProbeLua struct {
+	Host    string
+	URLTmpl string
+}
+
+// CSPBypassJSONPProbesLua returns the live jsonpProbes table as a
+// flat slice. Reading on every call (rather than caching) means a
+// test-time table swap is observed immediately by the Lua port.
+func CSPBypassJSONPProbesLua() []CSPBypassJSONPProbeLua {
+	out := make([]CSPBypassJSONPProbeLua, 0, len(jsonpProbes))
+	for _, p := range jsonpProbes {
+		out = append(out, CSPBypassJSONPProbeLua{Host: p.host, URLTmpl: p.urlTmpl})
+	}
+	return out
+}
+
+// CSPBypassCallbackCanaryLua / CSPBypassBodyCapLua expose the JSONP
+// canary callback name and the per-probe body cap so the Lua port
+// stamps the same values the Go check uses. Constants only - no
+// authoring surface for changing them, which is the point.
+func CSPBypassCallbackCanaryLua() string { return cspBypassCallbackCanary }
+func CSPBypassBodyCapLua() int           { return cspBypassBodyCap }
+
+// JSONPEvidenceSnippetLua exposes jsonpEvidenceSnippet so the Lua port
+// builds an identical evidence snippet (200-byte truncation + cap-
+// reached suffix). Keeping it in Go means a future tweak to the
+// snippet length / shape lands once.
+func JSONPEvidenceSnippetLua(body []byte, truncated bool) string {
+	return jsonpEvidenceSnippet(body, truncated)
+}
+
+// SetTLSAuditNowForTest swaps the package-level tlsAuditNow indirection
+// so the checks_lua parity tests can freeze "now" for both
+// implementations from outside the checks package. Mirrors the
+// withFrozenNow helper used inside the package's own tests.
+func SetTLSAuditNowForTest(now time.Time) (restore func()) {
+	prev := tlsAuditNow
+	tlsAuditNow = func() time.Time { return now }
+	return func() { tlsAuditNow = prev }
+}
+
+// SetTLSAuditDialForTest swaps the package-level tlsAuditDial
+// indirection so the bridge surface can route through a synthetic
+// dialer in tests that need a mocked ConnectionState (none today, but
+// the seam is here for the same reason as the now setter - parity
+// tests should not need to reach into private state).
+func SetTLSAuditDialForTest(dial func(ctx context.Context, addr string, cfg *tls.Config) (*tls.Conn, error)) (restore func()) {
+	prev := tlsAuditDial
+	tlsAuditDial = dial
+	return func() { tlsAuditDial = prev }
+}
+
+// TLSAuditExpiryUrgentWindowSeconds / TLSAuditExpirySoonWindowSeconds /
+// TLSAuditDialTimeoutSeconds expose the per-check timing knobs so the
+// Lua port computes the same "within 14 days" / "within 30 days" bands
+// the Go check uses. Constants only - changing them is a Go-side
+// decision the Lua port follows.
+func TLSAuditExpiryUrgentWindowSeconds() int { return int(tlsExpiryUrgentWindow / time.Second) }
+func TLSAuditExpirySoonWindowSeconds() int   { return int(tlsExpirySoonWindow / time.Second) }
+func TLSAuditDialTimeoutSeconds() int        { return int(tlsDialTimeout / time.Second) }
+
+// TLSAuditNowUnix returns the current time (post-injection) as Unix
+// seconds. Bridge surfaces ctx.tls.now() on top of this so a frozen-
+// now test on the Go side flips the Lua port's clock in lockstep.
+func TLSAuditNowUnix() int64 { return tlsAuditNow().Unix() }
+
+// TLSAuditVersionLabel returns the human-readable name of a negotiated
+// TLS / SSL protocol version. Empty for modern (TLS 1.2 / 1.3) so the
+// Lua port can decide "modern, emit nothing" with a single empty
+// check. Names match the Go check's switch cases byte-for-byte.
+func TLSAuditVersionLabel(version uint16) string {
+	switch version {
+	case tls.VersionSSL30:
+		return "SSL 3.0"
+	case tls.VersionTLS10:
+		return "TLS 1.0"
+	case tls.VersionTLS11:
+		return "TLS 1.1"
+	case tls.VersionTLS12:
+		return "TLS 1.2"
+	case tls.VersionTLS13:
+		return "TLS 1.3"
+	}
+	return ""
+}
+
+// TLSAuditCipherSuiteName wraps tls.CipherSuiteName so the Lua port
+// reads the same canonical name strings the Go check stamps onto
+// findings. Empty for unknown suite ids.
+func TLSAuditCipherSuiteName(id uint16) string { return tls.CipherSuiteName(id) }
+
+// TLSAuditIsInsecureCipher exposes the cipher-classification rule the
+// Go check uses (name-substring scan over RC4 / 3DES / DES / NULL /
+// EXPORT / ANON / _CBC_ / TLS_RSA_WITH_). The Lua port decides
+// severity above this (HIGH for RC4/3DES/NULL/EXPORT/ANON, MEDIUM for
+// CBC / static-RSA) using the same name string.
+func TLSAuditIsInsecureCipher(id uint16) bool { return isInsecureCipher(id) }
+
+// TLSAuditHandshakeResultLua is the per-handshake snapshot the Lua tls
+// bridge hands back to the .lua port. Mirrors the load-bearing fields
+// of tls.ConnectionState plus the SCT-extension flag for each peer
+// cert; everything finding-shape (severity bands, dedupe-key parts,
+// remediation text) is composed Lua-side.
+type TLSAuditHandshakeResultLua struct {
+	Version              uint16
+	VersionLabel         string
+	CipherSuite          uint16
+	CipherSuiteName      string
+	IsInsecureCipher     bool
+	OCSPResponsePresent  bool
+	HandshakeSCTNonEmpty bool
+	PeerCertificates     []*x509.Certificate
+}
+
+// TLSAuditHandshakeLua performs the same single passive TLS handshake
+// TLSAudit.Run does and returns the per-cert + per-connection fields
+// the Lua port needs. Goes through the same tlsAuditDial indirection
+// so tests can intercept; honors the host's SNI server name unless an
+// override is passed.
+func TLSAuditHandshakeLua(ctx context.Context, addr, serverName string) (*TLSAuditHandshakeResultLua, error) {
+	cfg := &tls.Config{
+		ServerName:         serverName,
+		InsecureSkipVerify: true,
+		MinVersion:         tls.VersionTLS10,
+	}
+	conn, err := tlsAuditDial(ctx, addr, cfg)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	state := conn.ConnectionState()
+	out := &TLSAuditHandshakeResultLua{
+		Version:              state.Version,
+		VersionLabel:         TLSAuditVersionLabel(state.Version),
+		CipherSuite:          state.CipherSuite,
+		CipherSuiteName:      TLSAuditCipherSuiteName(state.CipherSuite),
+		IsInsecureCipher:     TLSAuditIsInsecureCipher(state.CipherSuite),
+		OCSPResponsePresent:  len(state.OCSPResponse) > 0,
+		HandshakeSCTNonEmpty: hasNonEmptySCT(state.SignedCertificateTimestamps),
+		PeerCertificates:     state.PeerCertificates,
+	}
+	return out, nil
+}
+
+// TLSAuditCertEmbedsSCT exposes leafEmbedsSCT. The Lua port falls back
+// on this when the handshake delivered no SCTs - a publicly-trusted
+// cert that embeds SCTs in the X509v3 extension still satisfies CT
+// compliance.
+func TLSAuditCertEmbedsSCT(cert *x509.Certificate) bool { return leafEmbedsSCT(cert) }
+
+// TLSAuditCertVerifyHostname mirrors *x509.Certificate.VerifyHostname
+// returning true when the cert covers host. Wrapped so the .lua port
+// produces an ok-bool without each call site marshalling an error
+// shape Lua would just throw away.
+func TLSAuditCertVerifyHostname(cert *x509.Certificate, host string) bool {
+	if cert == nil {
+		return false
+	}
+	return cert.VerifyHostname(host) == nil
+}
+
+// WSAuditDiscoverEndpointsLua wraps discoverWSEndpoints so the ws-audit
+// Lua port pulls ws:// / wss:// URL literals out of a body using the
+// exact same regex + dedupe + sort the Go check does. Returns the
+// sorted, deduped slice of absolute endpoint URLs.
+func WSAuditDiscoverEndpointsLua(body []byte) []string {
+	return discoverWSEndpoints(page.Page{Body: body})
+}
+
+// WSAuditHandshakeResultLua is the per-handshake outcome the ws bridge
+// hands back to the .lua port. Mirrors wsHandshake's four-return shape
+// in a single struct so the bridge surface is one helper, not four
+// loose values to thread through Lua.
+type WSAuditHandshakeResultLua struct {
+	Accepted bool
+	Snippet  string
+	Status   int
+}
+
+// WSAuditHandshakeLua wraps wsHandshake. Returns Accepted=true only
+// when the server returned 101 Switching Protocols and the
+// Sec-WebSocket-Accept derived correctly from the bridge's
+// per-handshake key - the same two-gate rule the Go check uses to
+// distinguish a real WS server from a coincidentally-101 proxy.
+//
+// origin is the Origin header the handshake carries. Pass
+// WSAuditForeignOriginLua() to mirror the Go CSWSH probe; an empty
+// string drops the Origin header entirely.
+func WSAuditHandshakeLua(ctx context.Context, target, origin string) (*WSAuditHandshakeResultLua, error) {
+	accepted, snippet, status, err := wsHandshake(ctx, target, origin)
+	if err != nil {
+		return nil, err
+	}
+	return &WSAuditHandshakeResultLua{
+		Accepted: accepted,
+		Snippet:  snippet,
+		Status:   status,
+	}, nil
+}
+
+// WSAuditForeignOriginLua exposes wsOrigin so the .lua port stamps
+// the same foreign-Origin string into detail / wire as the Go check.
+// Constant - the value is well-known (example-domain hostname) so
+// findings on this never collide with a real allowlist.
+func WSAuditForeignOriginLua() string { return wsOrigin }
+
+// WSAuditMaxEndpointsPerPageLua exposes wsMaxEndpointsPerPage so the
+// .lua port caps the per-page probe fan-out at the same number the Go
+// check does. A test that tightens the cap (mass-endpoint stress) only
+// needs to change the Go constant.
+func WSAuditMaxEndpointsPerPageLua() int { return wsMaxEndpointsPerPage }
+
+// OverrideCSPBypassJSONPProbesForTest swaps the package-private
+// jsonpProbes table for the duration of a parity test and returns a
+// restore func. The checks_lua tests use this to point both the Go
+// check and (transitively through CSPBypassJSONPProbesLua) the Lua
+// port at a httptest endpoint without each test reaching into the
+// private slice directly.
+func OverrideCSPBypassJSONPProbesForTest(probes []CSPBypassJSONPProbeLua) (restore func()) {
+	prev := jsonpProbes
+	jsonpProbes = make([]jsonpProbe, len(probes))
+	for i, p := range probes {
+		jsonpProbes[i] = jsonpProbe{host: p.Host, urlTmpl: p.URLTmpl}
+	}
+	return func() { jsonpProbes = prev }
 }
 
 // SQLiErrorNewMatches returns the SQL-driver error patterns that

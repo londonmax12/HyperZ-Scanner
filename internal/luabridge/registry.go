@@ -90,6 +90,8 @@ type staticHelpers struct {
 	discovery *lua.LTable
 	xxe       *lua.LTable
 	browser   *lua.LTable
+	tls       *lua.LTable
+	ws        *lua.LTable
 }
 
 func storeStaticHelpers(L *lua.LState, h *staticHelpers) {
