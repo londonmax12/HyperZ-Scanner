@@ -1464,13 +1464,18 @@ type DeserialFormatLua struct {
 	ErrorPats    []string
 }
 
-// DeserialFormatListLua returns the format catalogue (Java, .NET,
-// Python pickle, Ruby Marshal, PHP, node-serialize, YAML) the Go
-// check iterates. The .lua port reads it once per Run and uses Name
-// to route between the per-format probe / match helpers.
-func DeserialFormatListLua() []DeserialFormatLua {
-	out := make([]DeserialFormatLua, 0, len(deserialFormatList))
-	for _, f := range deserialFormatList {
+// DeserialFormatListLua returns the named catalogue's format list
+// translated into the Lua-bridge shape. "http_body" covers the seven
+// HTTP-body deserialization formats this package has always shipped
+// (Java, .NET, pickle, Ruby Marshal, PHP, node-serialize, YAML);
+// unknown / empty catalogue names fall back to "http_body" via
+// resolveDeserialCatalogue. The .lua port reads the list once per
+// Run and uses Name to route between the per-format probe / match
+// helpers.
+func DeserialFormatListLua(catalogue string) []DeserialFormatLua {
+	cat := resolveDeserialCatalogue(catalogue)
+	out := make([]DeserialFormatLua, 0, len(cat.formats))
+	for _, f := range cat.formats {
 		pats := make([]string, len(f.errorPats))
 		copy(pats, f.errorPats)
 		out = append(out, DeserialFormatLua{
@@ -1484,12 +1489,12 @@ func DeserialFormatListLua() []DeserialFormatLua {
 }
 
 // DeserialClassifyValueLua returns the (name, label) of the first
-// format whose fingerprint matches s, or ("", "") when no format
-// matched. Wraps the Go check's classifyDeserial so the passive arm
-// of the .lua port runs the same detection over cookie / query /
-// form-input values.
-func DeserialClassifyValueLua(s string) (string, string) {
-	fp := classifyDeserial(s)
+// format in the named catalogue whose fingerprint matches s, or
+// ("", "") when no format matched. Wraps the Go check's
+// classifyDeserial so the passive arm of the .lua port runs the same
+// detection over cookie / query / form-input values.
+func DeserialClassifyValueLua(catalogue, s string) (string, string) {
+	fp := classifyDeserial(s, resolveDeserialCatalogue(catalogue))
 	if fp == nil {
 		return "", ""
 	}
@@ -1497,18 +1502,20 @@ func DeserialClassifyValueLua(s string) (string, string) {
 }
 
 // DeserialMatchAllLua returns the union of error patterns across
-// every known format that appear in body. The .lua port uses this to
-// build the baseline pattern set so per-format probes can subtract
-// what was already present.
-func DeserialMatchAllLua(body []byte) []string {
-	return matchDeserialAll(body)
+// every format in the named catalogue that appear in body. The .lua
+// port uses this to build the baseline pattern set so per-format
+// probes can subtract what was already present.
+func DeserialMatchAllLua(catalogue string, body []byte) []string {
+	return matchDeserialAll(body, resolveDeserialCatalogue(catalogue))
 }
 
 // DeserialMatchFormatLua returns the subset of formatName's error
-// patterns present in body. formatName is the name slug exposed by
-// DeserialFormatListLua (e.g. "java", "dotnet").
-func DeserialMatchFormatLua(body []byte, formatName string) []string {
-	for _, f := range deserialFormatList {
+// patterns present in body. catalogue selects the format set
+// formatName is looked up in (e.g. "http_body"); formatName is the
+// name slug exposed by DeserialFormatListLua (e.g. "java", "dotnet").
+func DeserialMatchFormatLua(catalogue string, body []byte, formatName string) []string {
+	cat := resolveDeserialCatalogue(catalogue)
+	for _, f := range cat.formats {
 		if f.name == formatName {
 			return matchDeserialFormat(body, f)
 		}
@@ -1518,6 +1525,9 @@ func DeserialMatchFormatLua(body []byte, formatName string) []string {
 
 // DeserialBodyMarkerLua returns the human-readable label of the first
 // deserialization fingerprint visible in body, or "" when none.
+// Catalogue-independent: the marker set is a fixed list of base64 /
+// text prefixes hardcoded in bodyDeserialMarker rather than read from
+// the format catalogue.
 func DeserialBodyMarkerLua(body []byte) string {
 	return bodyDeserialMarker(body)
 }
@@ -1660,10 +1670,10 @@ type ContentDiscoveryEntryLua struct {
 // check produces. Returning a flat slice keeps the .lua iteration
 // shape simple.
 //
-// catalogue selects which registered wordlist to walk; pass "default"
+// catalogue selects which registered wordlist to walk; pass "common"
 // for the canonical content-discovery list, or any name a future
 // sibling catalogue is registered under. Unknown / empty names fall
-// back to "default" so a Lua-side typo doesn't silently turn into a
+// back to "common" so a Lua-side typo doesn't silently turn into a
 // no-op sweep.
 func ContentDiscoveryEntriesLua(catalogue string, aggressive bool, hostname string, stack *fingerprint.Stack) []ContentDiscoveryEntryLua {
 	cat := resolveDiscoveryCatalogue(catalogue)

@@ -5,12 +5,14 @@ import (
 )
 
 // buildTakeoverTable returns the ctx.takeover helper namespace. The
-// single entry point - evaluate(page_url) - runs the two-path probe
-// (CNAME-confirmed and fingerprint-only) and returns the raw scan
-// FACTS, not a finding shape: provider name + per-provider guidance
-// string, detection path, CNAME (when applicable), probe URL, probe
-// status, body preview, and the provider-identifying response headers
-// that matched.
+// single entry point - evaluate(catalogue, page_url) - runs the two-
+// path probe (CNAME-confirmed and fingerprint-only) against the named
+// provider catalogue ("saas" covers the canonical SaaS-edge providers
+// this package ships with) and returns the raw scan FACTS, not a
+// finding shape: provider name + per-provider guidance string,
+// detection path, CNAME (when applicable), probe URL, probe status,
+// body preview, and the provider-identifying response headers that
+// matched.
 //
 // All operator-visible catalog metadata (title, severity, detail,
 // details, CWE, OWASP, remediation, dedupe key, evidence) is composed
@@ -30,7 +32,7 @@ func buildTakeoverTable(L *lua.LState) *lua.LTable {
 // key equality and so the value goes through type assertion cleanly.
 type takeoverEvaluatorKey struct{}
 
-// takeoverEvaluate implements ctx.takeover.evaluate(page_url).
+// takeoverEvaluate implements ctx.takeover.evaluate(catalogue, page_url).
 //
 // Returns nil when the host is clean (and no error to report); returns
 // a table of raw scan facts when a takeover signal is detected. On a
@@ -61,11 +63,12 @@ func takeoverEvaluate(L *lua.LState) int {
 	if env == nil {
 		L.RaiseError("ctx.takeover.evaluate called outside a check run")
 	}
-	pageURL := requireString(L, 1)
+	catalogue := requireString(L, 1)
+	pageURL := requireString(L, 2)
 	eval := env.check.AuxOrCreate(takeoverEvaluatorKey{}, func() any {
 		return &SubdomainTakeover{}
 	}).(*SubdomainTakeover)
-	facts, err := eval.FactsFor(env.ctx, env.client, env.scope, pageURL)
+	facts, err := eval.FactsFor(env.ctx, env.client, env.scope, pageURL, catalogue)
 	if err != nil {
 		L.Push(lua.LNil)
 		L.Push(lua.LString(err.Error()))

@@ -7,7 +7,7 @@ import (
 // buildSmugglingTable returns the ctx.smuggling helper namespace.
 // The single scan(catalogue) entry point bundles baseline measurement
 // + per-variant probing + the per-host cache into one Go-side pass.
-// catalogue selects the registered family bundle ("default" covers
+// catalogue selects the registered family bundle ("framing" covers
 // today's HTTP/1.1 framing pairs + H2.CL downgrade; future sibling
 // catalogues like "h2c" register additional protocol families).
 // The Lua composer reads the raw timings and variant labels, decides

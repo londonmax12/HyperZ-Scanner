@@ -251,7 +251,7 @@ function check.run(ctx)
 
   local aggressive = ctx:level_at_least("aggressive")
   local hostname = u.hostname or ""
-  local main_entries = ctx.discovery.entries("default", aggressive, hostname)
+  local main_entries = ctx.discovery.entries("common", aggressive, hostname)
 
   local probed = {}
   local findings = run_probes(ctx, host_root, baseline, main_entries, probed)
@@ -262,7 +262,7 @@ function check.run(ctx)
   if #findings > 0 then
     local hits = hit_paths(findings)
     if next(hits) ~= nil then
-      local follow_ups = ctx.discovery.follow_ups("default", hostname, hits, probed)
+      local follow_ups = ctx.discovery.follow_ups("common", hostname, hits, probed)
       if #follow_ups > 0 then
         local extra = run_probes(ctx, host_root, baseline, follow_ups, probed)
         local seen = {}

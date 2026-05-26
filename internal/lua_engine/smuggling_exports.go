@@ -53,9 +53,9 @@ type SmugglingHostFact struct {
 // host has more than one.
 //
 // catalogue selects which registered family bundle to sweep; pass
-// "default" for the canonical request-smuggling probe set, or any
+// "framing" for the canonical request-smuggling probe set, or any
 // future-registered name. Unknown / empty names fall back to
-// "default" via resolveSmugglingCatalogue, matching the discovery
+// "framing" via resolveSmugglingCatalogue, matching the discovery
 // bridge's typo-tolerance rule.
 //
 // Per-host caching keeps cross-page Run calls cheap: a host that

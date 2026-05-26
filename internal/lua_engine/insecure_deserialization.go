@@ -94,10 +94,11 @@ type deserialFormat struct {
 // stray "O:" inside JSON or prose.
 var phpSerializeRe = regexp.MustCompile(`^(?:O:\d+:"[^"]+":\d+:\{|a:\d+:\{|s:\d+:")`)
 
-// deserialFormatList is the curated format list. Package-scope so it is
-// constructed once at init rather than allocated on every classifyDeserial /
-// probeSink / matchDeserialAll call (those run in the hot per-page loop).
-// Callers must treat it as read-only - no slot is filtered or reordered
+// deserialFormatList is the curated format list backing the canonical
+// "http_body" catalogue. Package-scope so it is constructed once at init
+// rather than allocated on every classifyDeserial / probeSink /
+// matchDeserialAll call (those run in the hot per-page loop). Callers
+// must treat it as read-only - no slot is filtered or reordered
 // today, and adding a per-call mutation would race across goroutines.
 var deserialFormatList = []deserialFormat{
 	{
@@ -272,16 +273,49 @@ var deserialFormatList = []deserialFormat{
 	},
 }
 
-// classifyDeserial reports the first deserialization format whose
-// fingerprint matches s, or nil if none does. s is interpreted under
-// three views: the raw string, the URL-decoded string, and the
+// deserialCatalogue groups a named subset of deserialization formats
+// the bridge surfaces to .lua check authors. The Lua bridge takes
+// the name as ctx.deserial.{formats,classify,match_all,match_format}
+// first argument and resolves it through resolveDeserialCatalogue.
+// A future check that wants to extend the catalogue with a vendor-
+// specific format (e.g. msgpack, protobuf RPC envelopes) registers
+// its own catalogue here rather than mutating the canonical list -
+// per-check format isolation prevents one check's new entries from
+// leaking into another check's classify / match sweep.
+type deserialCatalogue struct {
+	formats []deserialFormat
+}
+
+// deserialCatalogues is the named-catalogue registry. "http_body"
+// covers the seven HTTP-body deserialization formats this package
+// has always shipped (Java, .NET, pickle, Ruby Marshal, PHP, node-
+// serialize, YAML); sibling catalogues (e.g. "rpc_envelopes" for
+// RMI / protobuf-RPC) add themselves to this map and the Lua bridge
+// surfaces them automatically.
+var deserialCatalogues = map[string]deserialCatalogue{
+	"http_body": {formats: deserialFormatList},
+}
+
+// resolveDeserialCatalogue returns the named catalogue, falling back
+// to "http_body" when name is empty or unknown. Same typo-tolerance
+// rule the other bridge catalogue resolvers use.
+func resolveDeserialCatalogue(name string) deserialCatalogue {
+	if cat, ok := deserialCatalogues[name]; ok {
+		return cat
+	}
+	return deserialCatalogues["http_body"]
+}
+
+// classifyDeserial reports the first deserialization format in cat
+// whose fingerprint matches s, or nil if none does. s is interpreted
+// under three views: the raw string, the URL-decoded string, and the
 // base64-decoded bytes (tried under standard, raw-standard, URL-safe,
 // and raw-URL-safe alphabets). Binary formats compare on the
 // base64-decoded view; text formats compare on the URL-decoded string.
 //
 // A minimum decoded length of 4 bytes keeps random short b64-decodable
 // strings from triggering false matches against the longer raw headers.
-func classifyDeserial(s string) *deserialFormat {
+func classifyDeserial(s string, cat deserialCatalogue) *deserialFormat {
 	if s == "" {
 		return nil
 	}
@@ -302,8 +336,8 @@ func classifyDeserial(s string) *deserialFormat {
 			break
 		}
 	}
-	for i := range deserialFormatList {
-		format := &deserialFormatList[i]
+	for i := range cat.formats {
+		format := &cat.formats[i]
 		if format.detectText != nil && format.detectText(text) {
 			return format
 		}
@@ -329,7 +363,7 @@ func (c InsecureDeserialization) scanFingerprints(ctx context.Context, p page.Pa
 	// request and are typically read by the same code path that issued them.
 	resp := &http.Response{Header: base.Headers}
 	for _, cookie := range resp.Cookies() {
-		if fp := classifyDeserial(cookie.Value); fp != nil {
+		if fp := classifyDeserial(cookie.Value, deserialCatalogues["http_body"]); fp != nil {
 			add(c.fingerprintFinding(p.URL, "Set-Cookie "+cookie.Name, fp, cookie.Value, SeverityHigh))
 		}
 	}
@@ -337,7 +371,7 @@ func (c InsecureDeserialization) scanFingerprints(ctx context.Context, p page.Pa
 	// URL query parameters present at crawl time.
 	for k, vs := range u.Query() {
 		for _, v := range vs {
-			if fp := classifyDeserial(v); fp != nil {
+			if fp := classifyDeserial(v, deserialCatalogues["http_body"]); fp != nil {
 				add(c.fingerprintFinding(p.URL, "query parameter "+k, fp, v, SeverityHigh))
 			}
 		}
@@ -351,7 +385,7 @@ func (c InsecureDeserialization) scanFingerprints(ctx context.Context, p page.Pa
 			if in.Value == "" {
 				continue
 			}
-			if fp := classifyDeserial(in.Value); fp != nil {
+			if fp := classifyDeserial(in.Value, deserialCatalogues["http_body"]); fp != nil {
 				add(c.fingerprintFinding(p.URL, "form input "+in.Name, fp, in.Value, SeverityHigh))
 			}
 		}
@@ -435,9 +469,10 @@ func (c InsecureDeserialization) probeSink(ctx context.Context, client *httpclie
 	if err != nil {
 		return nil, err
 	}
-	baselineHits := matchDeserialAll(baselineBody)
+	cat := deserialCatalogues["http_body"]
+	baselineHits := matchDeserialAll(baselineBody, cat)
 
-	for _, format := range deserialFormatList {
+	for _, format := range cat.formats {
 		if ctx.Err() != nil {
 			break
 		}
@@ -514,14 +549,15 @@ func (c InsecureDeserialization) send(ctx context.Context, client *httpclient.Cl
 // matchDeserialAll returns every error pattern across every known format
 // that appears in body. Used to build the baseline pattern set so the
 // per-format probe can compare what the payload added versus what was
-// already there.
-func matchDeserialAll(body []byte) []string {
+// already there. cat is the format set to walk; "http_body" covers
+// the canonical seven this package ships with.
+func matchDeserialAll(body []byte, cat deserialCatalogue) []string {
 	if len(body) == 0 {
 		return nil
 	}
 	lower := bytes.ToLower(body)
 	var hits []string
-	for _, format := range deserialFormatList {
+	for _, format := range cat.formats {
 		for _, pattern := range format.errorPats {
 			if bytes.Contains(lower, []byte(pattern)) {
 				hits = append(hits, pattern)

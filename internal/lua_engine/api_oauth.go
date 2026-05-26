@@ -5,12 +5,14 @@ import (
 )
 
 // buildOAuthTable returns the ctx.oauth helper namespace. The single
-// entry point - discover(page_url) - resolves the issuer host implied
-// by page_url, fetches the OIDC / RFC 8414 discovery document at the
-// well-known paths, and returns the raw scan facts (parsed doc fields
-// plus probe URL / status / body) so the .lua port can run the audit
-// policy itself. Per-host caching lives on the receiver via
-// AuxOrCreate so a 50-page crawl probes the well-known endpoint once.
+// entry point - discover(catalogue, page_url) - resolves the issuer
+// host implied by page_url, fetches the discovery document at every
+// well-known path in the named catalogue ("oidc" covers RFC 8414
+// + OIDC discovery 1.0), and returns the raw scan facts (parsed doc
+// fields plus probe URL / status / body) so the .lua port can run
+// the audit policy itself. Per-host caching lives on the receiver
+// via AuxOrCreate so a 50-page crawl probes the well-known endpoint
+// once.
 //
 // All operator-visible catalog metadata (title / severity / detail /
 // CWE / OWASP / remediation / dedupe key / evidence) is composed in
@@ -27,20 +29,21 @@ func buildOAuthTable(L *lua.LState) *lua.LTable {
 // two helpers cannot collide on AuxOrCreate key equality.
 type oauthEvaluatorKey struct{}
 
-// oauthDiscover implements ctx.oauth.discover(page_url). Returns nil
-// when the host has no parseable discovery document (the clean path -
-// not an error). On transport failure returns (nil, err_string) so
-// the .lua port can surface it via ctx:report.
+// oauthDiscover implements ctx.oauth.discover(catalogue, page_url).
+// Returns nil when the host has no parseable discovery document
+// (the clean path - not an error). On transport failure returns
+// (nil, err_string) so the .lua port can surface it via ctx:report.
 func oauthDiscover(L *lua.LState) int {
 	env := currentEnv(L)
 	if env == nil {
 		L.RaiseError("ctx.oauth.discover called outside a check run")
 	}
-	pageURL := requireString(L, 1)
+	catalogue := requireString(L, 1)
+	pageURL := requireString(L, 2)
 	eval := env.check.AuxOrCreate(oauthEvaluatorKey{}, func() any {
 		return &OAuthDiscovery{}
 	}).(*OAuthDiscovery)
-	facts, err := eval.DiscoverFacts(env.ctx, env.client, env.scope, pageURL)
+	facts, err := eval.DiscoverFacts(env.ctx, env.client, env.scope, pageURL, catalogue)
 	if err != nil {
 		L.Push(lua.LNil)
 		L.Push(lua.LString(err.Error()))

@@ -14,7 +14,7 @@ import (
 //	  active scan's fingerprint.Stack. Host-named backup synthetics
 //	  (when the catalogue defines them) are appended in the order the
 //	  Go check produces. catalogue picks the registered wordlist
-//	  ("default" for content-discovery; future siblings can register
+//	  ("common" for content-discovery; future siblings can register
 //	  their own under a different name).
 //
 //	ctx.discovery.follow_ups(catalogue, hostname, hits_set, probed_set)

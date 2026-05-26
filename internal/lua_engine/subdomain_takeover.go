@@ -138,13 +138,14 @@ type headerFingerprint struct {
 	value string
 }
 
-// Curated provider list. Each entry pairs a CNAME suffix (or family of
-// suffixes) with the unmistakable "unclaimed" response that provider's
-// edge serves. The list is deliberately conservative: every entry's
-// fingerprint is one a working deployment cannot produce, so the
-// false-positive rate stays near zero. Add new providers by following
-// the same shape - CNAME suffix(es) + a fingerprint that only the
-// edge's claim-this page emits.
+// Curated provider list backing the canonical "saas" catalogue. Each
+// entry pairs a CNAME suffix (or family of suffixes) with the
+// unmistakable "unclaimed" response that provider's edge serves. The
+// list is deliberately conservative: every entry's fingerprint is one
+// a working deployment cannot produce, so the false-positive rate
+// stays near zero. Add new providers by following the same shape -
+// CNAME suffix(es) + a fingerprint that only the edge's claim-this
+// page emits.
 var subdomainTakeoverProviders = []takeoverProvider{
 	{
 		name:          "GitHub Pages",
@@ -352,6 +353,37 @@ var subdomainTakeoverProviders = []takeoverProvider{
 	},
 }
 
+// takeoverCatalogue is a named bundle of providers an .lua takeover
+// check sweeps per host. The Lua bridge takes the name as
+// ctx.takeover.evaluate's first argument and resolves it through
+// resolveTakeoverCatalogue. A future check that needs to extend
+// detection to a different shape (registrar-level domain hijack,
+// dangling-NS / MX takeover, bucket-style takeover with a separate
+// fingerprint family) registers its own catalogue here rather than
+// mutating the canonical SaaS-edge list.
+type takeoverCatalogue struct {
+	providers []takeoverProvider
+}
+
+// takeoverCatalogues is the named-catalogue registry. "saas" covers
+// the curated SaaS-edge provider list this package has always shipped
+// (GitHub Pages, S3, Heroku, Azure, Fastly, ...); sibling catalogues
+// add themselves to this map and the Lua bridge surfaces them
+// automatically.
+var takeoverCatalogues = map[string]takeoverCatalogue{
+	"saas": {providers: subdomainTakeoverProviders},
+}
+
+// resolveTakeoverCatalogue returns the named catalogue, falling back
+// to "saas" when name is empty or unknown. Same typo-tolerance rule
+// the other bridge catalogue resolvers use.
+func resolveTakeoverCatalogue(name string) takeoverCatalogue {
+	if cat, ok := takeoverCatalogues[name]; ok {
+		return cat
+	}
+	return takeoverCatalogues["saas"]
+}
+
 const (
 	// subdomainTakeoverBodyCap bounds the body the check reads from the
 	// provider edge. Every fingerprint we look for is a short, fixed
@@ -388,10 +420,14 @@ var subdomainTakeoverLookupHost = func(ctx context.Context, host string) ([]stri
 // pageURL's host. nil with nil error means "checked and clean"; a
 // non-nil facts means a takeover signal was confirmed and the caller
 // can compose a finding from it. A non-nil error is a transient probe
-// failure that the caller decides how to surface (Run wraps it in a
-// non-fatal Report; the Lua bridge propagates it so the .lua port can
-// emit a ctx:report breadcrumb without double-reporting).
-func (c *SubdomainTakeover) FactsFor(ctx context.Context, client *httpclient.Client, sc *scope.Scope, pageURL string) (*SubdomainTakeoverFacts, error) {
+// failure that the caller decides how to surface (the Lua bridge
+// propagates it so the .lua port can emit a ctx:report breadcrumb
+// without double-reporting).
+//
+// catalogue selects which registered provider bundle to sweep ("saas"
+// for the canonical SaaS-edge providers); unknown names fall back to
+// "saas" via resolveTakeoverCatalogue.
+func (c *SubdomainTakeover) FactsFor(ctx context.Context, client *httpclient.Client, sc *scope.Scope, pageURL, catalogue string) (*SubdomainTakeoverFacts, error) {
 	c.once.Do(func() {
 		c.cache = map[string]*SubdomainTakeoverFacts{}
 	})
@@ -404,10 +440,11 @@ func (c *SubdomainTakeover) FactsFor(ctx context.Context, client *httpclient.Cli
 	if host == "" {
 		return nil, nil
 	}
+	cat := resolveTakeoverCatalogue(catalogue)
 	// A scan targeted directly at the provider's canonical address has
 	// no dangling CNAME to inspect - the host IS the provider domain.
 	// Skip without probing so we do not noise-flag legitimate hosting.
-	if matchProviderByHost(host) != nil {
+	if matchProviderByHost(host, cat.providers) != nil {
 		return nil, nil
 	}
 
@@ -423,7 +460,7 @@ func (c *SubdomainTakeover) FactsFor(ctx context.Context, client *httpclient.Cli
 	// whole report by re-failing on every page that shares the host.
 	// The error is still surfaced to the first caller for this host so
 	// the scanner gets exactly one breadcrumb per failing host per scan.
-	facts, err := c.evaluateHost(ctx, client, sc, u, host)
+	facts, err := c.evaluateHost(ctx, client, sc, u, host, cat)
 	c.mu.Lock()
 	c.cache[host] = facts
 	c.mu.Unlock()
@@ -440,21 +477,21 @@ func (c *SubdomainTakeover) FactsFor(ctx context.Context, client *httpclient.Cli
 // third-party DNS that hides the chain), the fingerprint-only path
 // fires off one probe and looks for a provider's body+header pair in
 // the response. A nil facts return means "not vulnerable".
-func (c *SubdomainTakeover) evaluateHost(ctx context.Context, client *httpclient.Client, sc *scope.Scope, u *url.URL, host string) (*SubdomainTakeoverFacts, error) {
-	facts, err := c.evaluateViaDNS(ctx, client, sc, u, host)
+func (c *SubdomainTakeover) evaluateHost(ctx context.Context, client *httpclient.Client, sc *scope.Scope, u *url.URL, host string, cat takeoverCatalogue) (*SubdomainTakeoverFacts, error) {
+	facts, err := c.evaluateViaDNS(ctx, client, sc, u, host, cat)
 	if err != nil {
 		return nil, err
 	}
 	if facts != nil {
 		return facts, nil
 	}
-	return c.evaluateViaFingerprint(ctx, client, sc, u)
+	return c.evaluateViaFingerprint(ctx, client, sc, u, cat)
 }
 
 // evaluateViaDNS is the original two-signal check: CNAME match + body
 // fingerprint. Returns nil/nil when DNS does not point at a known
 // provider so the caller can fall back to the fingerprint-only path.
-func (c *SubdomainTakeover) evaluateViaDNS(ctx context.Context, client *httpclient.Client, sc *scope.Scope, u *url.URL, host string) (*SubdomainTakeoverFacts, error) {
+func (c *SubdomainTakeover) evaluateViaDNS(ctx context.Context, client *httpclient.Client, sc *scope.Scope, u *url.URL, host string, cat takeoverCatalogue) (*SubdomainTakeoverFacts, error) {
 	cname, err := subdomainTakeoverLookupCNAME(ctx, host)
 	if err != nil {
 		// A LookupCNAME failure is not by itself a takeover signal: many
@@ -467,7 +504,7 @@ func (c *SubdomainTakeover) evaluateViaDNS(ctx context.Context, client *httpclie
 	if cnameNormalized == "" || cnameNormalized == host {
 		return nil, nil
 	}
-	provider := matchProvider(cnameNormalized)
+	provider := matchProvider(cnameNormalized, cat.providers)
 	if provider == nil {
 		return nil, nil
 	}
@@ -526,7 +563,7 @@ func (c *SubdomainTakeover) evaluateViaDNS(ctx context.Context, client *httpclie
 // a proxy / CDN that limits trivial claimability, so the operator
 // should verify the DNS configuration before treating this as a
 // guaranteed takeover.
-func (c *SubdomainTakeover) evaluateViaFingerprint(ctx context.Context, client *httpclient.Client, sc *scope.Scope, u *url.URL) (*SubdomainTakeoverFacts, error) {
+func (c *SubdomainTakeover) evaluateViaFingerprint(ctx context.Context, client *httpclient.Client, sc *scope.Scope, u *url.URL, cat takeoverCatalogue) (*SubdomainTakeoverFacts, error) {
 	probeURL, ok := c.buildProbeURL(sc, u)
 	if !ok {
 		return nil, nil
@@ -538,8 +575,8 @@ func (c *SubdomainTakeover) evaluateViaFingerprint(ctx context.Context, client *
 	if status == 0 {
 		return nil, nil
 	}
-	for i := range subdomainTakeoverProviders {
-		p := &subdomainTakeoverProviders[i]
+	for i := range cat.providers {
+		p := &cat.providers[i]
 		if matchesProviderEdge(status, headers, body, p) {
 			return &SubdomainTakeoverFacts{
 				Provider:         p.name,
@@ -570,14 +607,15 @@ func (c *SubdomainTakeover) buildProbeURL(sc *scope.Scope, u *url.URL) (string, 
 	return probeURL, true
 }
 
-// matchProvider returns the provider whose CNAME suffix list contains
-// cname, or nil if none match. Matching is case-insensitive and treats
-// each suffix as a trailing-domain match so e.g. ".github.io" matches
-// "user.github.io" but not "imitatorgithub.io".
-func matchProvider(cname string) *takeoverProvider {
+// matchProvider returns the provider in providers whose CNAME suffix
+// list contains cname, or nil if none match. Matching is case-
+// insensitive and treats each suffix as a trailing-domain match so
+// e.g. ".github.io" matches "user.github.io" but not
+// "imitatorgithub.io".
+func matchProvider(cname string, providers []takeoverProvider) *takeoverProvider {
 	cname = strings.ToLower(cname)
-	for i := range subdomainTakeoverProviders {
-		p := &subdomainTakeoverProviders[i]
+	for i := range providers {
+		p := &providers[i]
 		for _, suf := range p.cnameSuffixes {
 			s := strings.ToLower(suf)
 			if strings.HasPrefix(s, ".") {
@@ -603,8 +641,8 @@ func matchProvider(cname string) *takeoverProvider {
 // so we can skip hosts that ARE the provider canonical name (e.g.
 // `username.github.io` directly). The same suffix table feeds both
 // matchers to keep the two views consistent.
-func matchProviderByHost(host string) *takeoverProvider {
-	return matchProvider(host)
+func matchProviderByHost(host string, providers []takeoverProvider) *takeoverProvider {
+	return matchProvider(host, providers)
 }
 
 // fetchProbe issues one GET against the provider edge and returns the

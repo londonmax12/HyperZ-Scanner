@@ -147,7 +147,7 @@ local function scan_fingerprints(ctx, target, snap, seen, findings)
   if snap.headers ~= nil then
     for _, cookie in ipairs(ctx.cookies.from_headers(snap.headers)) do
       if cookie.value ~= "" then
-        local fmt_name, fmt_label = ctx.deserial.classify(cookie.value)
+        local fmt_name, fmt_label = ctx.deserial.classify("http_body", cookie.value)
         if fmt_name ~= "" then
           local f = fingerprint_finding(ctx, target, "Set-Cookie " .. cookie.name,
             fmt_name, fmt_label, cookie.value, "high")
@@ -162,7 +162,7 @@ local function scan_fingerprints(ctx, target, snap, seen, findings)
 
   -- URL query parameters present at crawl time.
   for _, pair in ipairs(url_query_pairs(ctx, target)) do
-    local fmt_name, fmt_label = ctx.deserial.classify(pair.value)
+    local fmt_name, fmt_label = ctx.deserial.classify("http_body", pair.value)
     if fmt_name ~= "" then
       local f = fingerprint_finding(ctx, target, "query parameter " .. pair.name,
         fmt_name, fmt_label, pair.value, "high")
@@ -178,7 +178,7 @@ local function scan_fingerprints(ctx, target, snap, seen, findings)
   for _, form in ipairs(ctx.page.forms or {}) do
     for _, input in ipairs(form.inputs or {}) do
       if input.value ~= nil and input.value ~= "" then
-        local fmt_name, fmt_label = ctx.deserial.classify(input.value)
+        local fmt_name, fmt_label = ctx.deserial.classify("http_body", input.value)
         if fmt_name ~= "" then
           local f = fingerprint_finding(ctx, target, "form input " .. input.name,
             fmt_name, fmt_label, input.value, "high")
@@ -233,9 +233,9 @@ local function probe_sink(ctx, target, sink)
   local base_body, _, base_rerr = base_resp:read_body_capped(32 * 1024)
   if base_rerr then return nil, base_rerr end
 
-  local baseline_hits = ctx.deserial.match_all(base_body)
+  local baseline_hits = ctx.deserial.match_all("http_body", base_body)
 
-  for _, fmt in ipairs(ctx.deserial.formats()) do
+  for _, fmt in ipairs(ctx.deserial.formats("http_body")) do
     local req, mut_err = sink:mutate_request(fmt.probe_payload)
     if mut_err then return nil, mut_err end
     local resp, do_err = ctx.client:do_no_follow(req)
@@ -243,7 +243,7 @@ local function probe_sink(ctx, target, sink)
     local body, truncated, rerr = resp:read_body_capped(32 * 1024)
     if rerr then return nil, rerr end
 
-    local hits = ctx.deserial.match_format(body, fmt.name)
+    local hits = ctx.deserial.match_format("http_body", body, fmt.name)
     local new_hits = subtract_patterns(hits, baseline_hits)
     if #new_hits > 0 then
       local probe_url = req:url()

@@ -107,14 +107,46 @@ const (
 	oauthDiscoveryBodyCap = 64 << 10
 )
 
-// oauthDiscoveryPaths are the well-known suffixes the check probes on
-// the issuer host. The two specs share a path convention; both are
-// tried because some servers expose one and not the other (Okta
-// publishes OIDC discovery only, certain plain-OAuth-only deployments
-// publish RFC 8414 only).
+// oauthDiscoveryPaths are the well-known suffixes the canonical
+// "oidc" catalogue probes on the issuer host. The two specs share
+// a path convention; both are tried because some servers expose one
+// and not the other (Okta publishes OIDC discovery only, certain
+// plain-OAuth-only deployments publish RFC 8414 only). Kept as a
+// package-level slice so the "oidc" catalogue refers to it by
+// name rather than re-defining the strings inline.
 var oauthDiscoveryPaths = []string{
 	"/.well-known/openid-configuration",
 	"/.well-known/oauth-authorization-server",
+}
+
+// oauthDiscoveryCatalogue is a named bundle of well-known paths an
+// OAuth-discovery-shaped check probes per host. The Lua bridge takes
+// the name as ctx.oauth.discover's first argument and resolves it
+// through resolveOAuthDiscoveryCatalogue. A future check that needs
+// to probe a non-standard discovery surface (a vendor-specific
+// well-known suffix, an RFC-9728 OAuth-protected-resource document)
+// registers its own catalogue here instead of editing the canonical
+// probe path list.
+type oauthDiscoveryCatalogue struct {
+	paths []string
+}
+
+// oauthDiscoveryCatalogues is the named-catalogue registry. "oidc"
+// covers the canonical RFC 8414 + OIDC discovery 1.0 well-known
+// paths; sibling catalogues add themselves to this map and the Lua
+// bridge surfaces them automatically.
+var oauthDiscoveryCatalogues = map[string]oauthDiscoveryCatalogue{
+	"oidc": {paths: oauthDiscoveryPaths},
+}
+
+// resolveOAuthDiscoveryCatalogue returns the named catalogue, falling
+// back to "oidc" when name is empty or unknown. Same typo-tolerance
+// rule resolveDiscoveryCatalogue and resolveSmugglingCatalogue use.
+func resolveOAuthDiscoveryCatalogue(name string) oauthDiscoveryCatalogue {
+	if cat, ok := oauthDiscoveryCatalogues[name]; ok {
+		return cat
+	}
+	return oauthDiscoveryCatalogues["oidc"]
 }
 
 // oauthDiscoveryDoc is the subset of fields the check inspects.
@@ -136,15 +168,19 @@ type oauthDiscoveryDoc struct {
 
 // DiscoverFacts returns the cached or freshly fetched discovery facts
 // for the host implied by pageURL, or nil when no well-known path
-// served a parseable document. Per-host cache lifetime matches this
-// receiver's lifetime (one *OAuthDiscovery per scan registration).
+// served a parseable document. catalogue selects which registered
+// well-known path bundle to probe ("oidc" for the canonical RFC
+// 8414 + OIDC discovery surface); unknown names fall back to
+// "oidc" via resolveOAuthDiscoveryCatalogue. Per-host cache
+// lifetime matches this receiver's lifetime (one *OAuthDiscovery per
+// scan registration).
 //
 // The Lua port reads these facts and composes the finding catalog
 // itself (title / severity / detail / CWE / OWASP / remediation /
 // dedupe key / evidence); the algorithm input (HTTP fetch + JSON
 // parse) stays in Go so per-host work happens at most once per scan
 // regardless of which implementation runs at scan time.
-func (c *OAuthDiscovery) DiscoverFacts(ctx context.Context, client *httpclient.Client, sc *scope.Scope, pageURL string) (*OAuthDiscoveryFacts, error) {
+func (c *OAuthDiscovery) DiscoverFacts(ctx context.Context, client *httpclient.Client, sc *scope.Scope, pageURL, catalogue string) (*OAuthDiscoveryFacts, error) {
 	c.once.Do(func() {
 		c.cache = map[string]oauthDiscoveryCacheEntry{}
 	})
@@ -165,19 +201,20 @@ func (c *OAuthDiscovery) DiscoverFacts(ctx context.Context, client *httpclient.C
 		return entry.facts, nil
 	}
 
-	facts := c.probeHost(ctx, client, sc, u)
+	facts := c.probeHost(ctx, client, sc, u, resolveOAuthDiscoveryCatalogue(catalogue))
 	c.mu.Lock()
 	c.cache[hostKey] = oauthDiscoveryCacheEntry{facts: facts}
 	c.mu.Unlock()
 	return facts, nil
 }
 
-// probeHost fetches each well-known path on u's host until one returns
-// a parseable discovery document. Returns the parsed facts, or nil if
-// no path was reachable / parseable.
-func (c *OAuthDiscovery) probeHost(ctx context.Context, client *httpclient.Client, sc *scope.Scope, u *url.URL) *OAuthDiscoveryFacts {
+// probeHost fetches each well-known path in the resolved catalogue
+// against u's host until one returns a parseable discovery document.
+// Returns the parsed facts, or nil if no path was reachable /
+// parseable.
+func (c *OAuthDiscovery) probeHost(ctx context.Context, client *httpclient.Client, sc *scope.Scope, u *url.URL, cat oauthDiscoveryCatalogue) *OAuthDiscoveryFacts {
 	base := u.Scheme + "://" + u.Host
-	for _, path := range oauthDiscoveryPaths {
+	for _, path := range cat.paths {
 		probeURL := base + path
 		probeU, err := url.Parse(probeURL)
 		if err != nil {

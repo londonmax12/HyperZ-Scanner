@@ -158,7 +158,7 @@ func (c *RequestSmuggling) evaluateHost(ctx context.Context, u *url.URL) (*Findi
 	// every variant in that family. First confirmed variant wins -
 	// per-host recommendation is identical regardless of which parser
 	// pair disagreed.
-	for _, family := range smugglingCatalogues["default"].families {
+	for _, family := range smugglingCatalogues["framing"].families {
 		if family.canProbe(ctx, c, u, addr, tlsCfg) != "" {
 			continue
 		}
@@ -395,12 +395,13 @@ type smugglingCatalogue struct {
 	families []*smugglingProtocolFamily
 }
 
-// smugglingCatalogues is the named-catalogue registry. "default" is
+// smugglingCatalogues is the named-catalogue registry. "framing" is
 // the canonical request-smuggling sweep (HTTP/1.1 framing pairs +
-// H2 downgrade); sibling catalogues add themselves to this map and
-// the Lua bridge surfaces them automatically.
+// H2 downgrade); sibling catalogues like "h2c" or "te0" add
+// themselves to this map and the Lua bridge surfaces them
+// automatically.
 var smugglingCatalogues = map[string]smugglingCatalogue{
-	"default": {
+	"framing": {
 		families: []*smugglingProtocolFamily{
 			smugglingHTTP1Family,
 			smugglingHTTP2Family,
@@ -409,14 +410,14 @@ var smugglingCatalogues = map[string]smugglingCatalogue{
 }
 
 // resolveSmugglingCatalogue returns the named catalogue, falling back
-// to "default" when name is empty or unknown. Same fallback rule
+// to "framing" when name is empty or unknown. Same fallback rule
 // resolveDiscoveryCatalogue uses; a Lua-side typo lands on the
 // documented sweep rather than silently scanning nothing.
 func resolveSmugglingCatalogue(name string) smugglingCatalogue {
 	if cat, ok := smugglingCatalogues[name]; ok {
 		return cat
 	}
-	return smugglingCatalogues["default"]
+	return smugglingCatalogues["framing"]
 }
 
 // smugglingVariant describes one desync probe: a label, the wire

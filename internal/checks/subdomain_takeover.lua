@@ -171,7 +171,7 @@ local function compose_fingerprint(ctx, facts)
 end
 
 function check.run(ctx)
-  local facts, err = ctx.takeover.evaluate(ctx.page.url)
+  local facts, err = ctx.takeover.evaluate("saas", ctx.page.url)
   if err then
     ctx:report("subdomain-takeover: " .. err)
     return nil

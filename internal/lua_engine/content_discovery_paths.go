@@ -92,7 +92,7 @@ func (e discoveryEntry) appliesTo(s *fingerprint.Stack) bool {
 
 // discoveryCatalogue groups a wordlist + its follow-up rules + an
 // optional host-named synthetic generator. The Lua bridge looks one up
-// by name (`ctx.discovery.entries("default", ...)`) so a future check
+// by name (`ctx.discovery.entries("common", ...)`) so a future check
 // (API-path discovery, JS-endpoint enumeration, vhost discovery) can
 // register its own catalogue under a different name and reuse the
 // shared sweep / baseline / classify machinery without touching the
@@ -109,10 +109,12 @@ type discoveryCatalogue struct {
 
 // discoveryCatalogues is the named-catalogue registry. New catalogues
 // are added here; the Lua bridge surfaces every registered name to
-// .lua check authors. "default" is the canonical content-discovery
-// wordlist this package has always shipped.
+// .lua check authors. "common" is the canonical content-discovery
+// wordlist this package has always shipped (OWASP-style curated paths
+// + host-named backup synthetics); future siblings like "api_paths"
+// or "vhosts" register under their own names.
 var discoveryCatalogues = map[string]discoveryCatalogue{
-	"default": {
+	"common": {
 		entries:    contentDiscoveryEntries,
 		followUps:  contentDiscoveryFollowUpGroups,
 		hostBackup: hostBackupEntries,
@@ -120,7 +122,7 @@ var discoveryCatalogues = map[string]discoveryCatalogue{
 }
 
 // resolveDiscoveryCatalogue returns the named catalogue, falling back
-// to "default" when name is empty or unknown. Centralised so the two
+// to "common" when name is empty or unknown. Centralised so the two
 // bridge entry points (entries, follow_ups) apply the same fallback
 // rule and a Lua-side typo lands on the documented wordlist rather
 // than silently returning an empty list.
@@ -128,7 +130,7 @@ func resolveDiscoveryCatalogue(name string) discoveryCatalogue {
 	if cat, ok := discoveryCatalogues[name]; ok {
 		return cat
 	}
-	return discoveryCatalogues["default"]
+	return discoveryCatalogues["common"]
 }
 
 // contentDiscoveryEntries is the curated probe catalog. New entries

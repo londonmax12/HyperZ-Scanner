@@ -314,7 +314,7 @@ local function restamp_to_page(findings, page_url)
 end
 
 function check.run(ctx)
-  local facts, err = ctx.oauth.discover(ctx.page.url)
+  local facts, err = ctx.oauth.discover("oidc", ctx.page.url)
   if err then
     ctx:report("oauth-discovery: " .. err)
     return nil
