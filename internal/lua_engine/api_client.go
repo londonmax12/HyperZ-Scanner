@@ -2,9 +2,11 @@ package lua_engine
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	lua "github.com/yuin/gopher-lua"
@@ -245,6 +247,7 @@ func ensureClientMT(L *lua.LState) *lua.LTable {
 	methods.RawSetString("do_no_follow", L.NewFunction(clientDoNoFollow))
 	methods.RawSetString("do_timed", L.NewFunction(clientDoTimed))
 	methods.RawSetString("do_detached", L.NewFunction(clientDoDetached))
+	methods.RawSetString("do_parallel", L.NewFunction(clientDoParallel))
 	methods.RawSetString("new_request", L.NewFunction(clientNewRequest))
 	mt.RawSetString("__index", methods)
 	L.G.Registry.RawSetString(mtClient, mt)
@@ -350,6 +353,80 @@ func clientDoDetached(L *lua.LState) int {
 		return 2
 	}
 	L.Push(pushResponse(L, resp, nil, false))
+	return 1
+}
+
+// parallelBodyCap caps each parallel-probe body read at 64 KiB so a
+// 50-fan-out doesn't pull megabytes of unused body into memory. The
+// hash is computed off the capped bytes; lockout-fuzzing / bulk-probe
+// callers compare hashes to discriminate uniform-rejection responses
+// from a mix.
+const parallelBodyCap = 64 * 1024
+
+// clientDoParallel implements client:do_parallel(request, n). Fires n
+// copies of the request through the regular HTTP client concurrently
+// and returns an array of {status, body_hash, err} entries in launch
+// order. The intended consumers are checks that want bulk parallel
+// behaviour without the single-packet barrier alignment ctx.race uses
+// (e.g. lockout fuzzing, rate-limit probing, brute-force timing).
+//
+// Each goroutine clones the request against env.ctx so the per-check
+// deadline / cancel propagates to every fan-out arm; a per-call
+// transport failure surfaces as a non-empty err string in that slot
+// rather than aborting the whole batch.
+//
+// Body hash is the same sha1[:8] hex prefix bodyHashPrefix produces
+// for the content-discovery soft-404 baseline so a check that wants
+// to compare parallel outcomes against a sequential probe sees the
+// same fingerprint shape.
+func clientDoParallel(L *lua.LState) int {
+	c := clientFromArg(L, 1)
+	r := requestFromArg(L, 2)
+	n := L.CheckInt(3)
+	if n < 1 {
+		n = 1
+	}
+	env := currentEnv(L)
+	if env == nil {
+		L.RaiseError("client:do_parallel called outside a check run")
+	}
+
+	type result struct {
+		status int
+		hash   string
+		errStr string
+	}
+	results := make([]result, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			req := r.req.Clone(env.ctx)
+			resp, err := c.c.Do(env.ctx, req)
+			if err != nil {
+				results[idx] = result{errStr: err.Error()}
+				return
+			}
+			defer resp.Body.Close()
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, parallelBodyCap))
+			results[idx] = result{
+				status: resp.StatusCode,
+				hash:   bodyHashPrefix(body),
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	out := L.NewTable()
+	for i, res := range results {
+		entry := L.NewTable()
+		entry.RawSetString("status", lua.LNumber(res.status))
+		entry.RawSetString("body_hash", lua.LString(res.hash))
+		entry.RawSetString("err", lua.LString(res.errStr))
+		out.RawSetInt(i+1, entry)
+	}
+	L.Push(out)
 	return 1
 }
 
