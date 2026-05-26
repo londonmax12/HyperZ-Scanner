@@ -52,13 +52,19 @@ type SmugglingHostFact struct {
 // which confirmed variant to surface (and how to phrase it) when the
 // host has more than one.
 //
+// catalogue selects which registered family bundle to sweep; pass
+// "default" for the canonical request-smuggling probe set, or any
+// future-registered name. Unknown / empty names fall back to
+// "default" via resolveSmugglingCatalogue, matching the discovery
+// bridge's typo-tolerance rule.
+//
 // Per-host caching keeps cross-page Run calls cheap: a host that
 // confirmed on the first page returns the same variant set from the
 // cache on subsequent pages, with FromCache=true so the Lua port can
 // skip the "no new finding" emit. Same semantics as the Go check's
 // Run (which short-circuits on the same cache map); the Lua port
 // inherits the dedupe-per-host behaviour for free.
-func (c *RequestSmuggling) ScanFacts(ctx context.Context, sc *scope.Scope, p page.Page) (*SmugglingHostFact, error) {
+func (c *RequestSmuggling) ScanFacts(ctx context.Context, sc *scope.Scope, p page.Page, catalogue string) (*SmugglingHostFact, error) {
 	u, err := url.Parse(p.URL)
 	if err != nil || u.Scheme == "" || u.Host == "" {
 		return nil, nil
@@ -90,7 +96,7 @@ func (c *RequestSmuggling) ScanFacts(ctx context.Context, sc *scope.Scope, p pag
 	}
 	c.mu.Unlock()
 
-	variants, err := c.evaluateHostFacts(ctx, u)
+	variants, err := c.evaluateHostFacts(ctx, u, catalogue)
 	if err != nil {
 		// Mirror Run's cancellation handling: ctx-cancel must not be
 		// cached as "host is clean", so callers re-evaluate next time.
@@ -135,11 +141,15 @@ func (c *RequestSmuggling) cachedVariants(hostKey string) []SmugglingVariantFact
 }
 
 // evaluateHostFacts is the ScanFacts equivalent of evaluateHost.
-// Probes every applicable variant once and returns the raw per-
-// variant timing data (whether confirmed or not). Re-uses the same
-// HTTP/1.1 and HTTP/2 probe wire paths the Go check exercises so
-// timing oracle agreement is structurally guaranteed.
-func (c *RequestSmuggling) evaluateHostFacts(ctx context.Context, u *url.URL) ([]SmugglingVariantFact, error) {
+// Probes every applicable variant in the resolved catalogue once and
+// returns the raw per-variant timing data (whether confirmed or not).
+// Variants in a family whose canProbe rejects the host (wrong scheme,
+// ALPN didn't negotiate, etc.) appear in the output with Probed=false
+// and a SkipReason explaining why - same shape callers always
+// observed. Re-uses the same HTTP/1.1 / HTTP/2 / future-family probe
+// wire paths exercised by the Go check so timing oracle agreement is
+// structurally guaranteed.
+func (c *RequestSmuggling) evaluateHostFacts(ctx context.Context, u *url.URL, catalogue string) ([]SmugglingVariantFact, error) {
 	host, port := splitHostPortDefault(u)
 	addr := net.JoinHostPort(host, port)
 	tlsCfg := &tls.Config{
@@ -153,79 +163,81 @@ func (c *RequestSmuggling) evaluateHostFacts(ctx context.Context, u *url.URL) ([
 		return nil, err
 	}
 
-	variants := []smugglingVariant{variantCLTE(), variantTECL()}
-	skipH2 := ""
-	if u.Scheme == "https" {
-		negotiated, alpnErr := c.negotiateALPN(ctx, addr, tlsCfg)
-		switch {
-		case alpnErr != nil:
-			skipH2 = "alpn negotiation failed: " + alpnErr.Error()
-		case negotiated != "h2":
-			skipH2 = "server did not negotiate h2"
-		default:
-			variants = append(variants, variantH2CL())
-		}
-	} else {
-		skipH2 = "scheme is http; h2 probe inapplicable"
-	}
-
-	out := make([]SmugglingVariantFact, 0, len(variants)+1)
-	for _, v := range variants {
-		if ctx.Err() != nil {
-			return out, ctx.Err()
-		}
-		fact := SmugglingVariantFact{
-			Label:       v.label,
-			FrontEnd:    v.frontEnd,
-			BackEnd:     v.backEnd,
-			Description: v.description,
-			Proto:       smugglingProtoName(v.proto),
-			BaselineMS:  baseline.Milliseconds(),
-			ThresholdMS: smugglingHangThreshold.Milliseconds(),
-			Probed:      true,
-		}
-		probe1, p1err := c.runVariant(ctx, u, addr, tlsCfg, v)
-		if p1err != nil {
-			fact.SkipReason = "probe1 transport error: " + p1err.Error()
-			fact.Probed = false
-			out = append(out, fact)
+	cat := resolveSmugglingCatalogue(catalogue)
+	out := make([]SmugglingVariantFact, 0, totalVariants(cat))
+	for _, family := range cat.families {
+		skipReason := family.canProbe(ctx, c, u, addr, tlsCfg)
+		if skipReason != "" {
+			// Emit a Probed=false fact per variant in the family so the
+			// Lua port still sees the variant exists, just can't run here.
+			for _, v := range family.variants {
+				out = append(out, SmugglingVariantFact{
+					Label:       v.label,
+					FrontEnd:    v.frontEnd,
+					BackEnd:     v.backEnd,
+					Description: v.description,
+					Proto:       smugglingProtoName(v.proto),
+					Probed:      false,
+					SkipReason:  skipReason,
+				})
+			}
 			continue
 		}
-		fact.Probe1MS = probe1.Milliseconds()
-		if !c.timingHit(baseline, probe1) {
+		for _, v := range family.variants {
+			if ctx.Err() != nil {
+				return out, ctx.Err()
+			}
+			fact := SmugglingVariantFact{
+				Label:       v.label,
+				FrontEnd:    v.frontEnd,
+				BackEnd:     v.backEnd,
+				Description: v.description,
+				Proto:       smugglingProtoName(v.proto),
+				BaselineMS:  baseline.Milliseconds(),
+				ThresholdMS: smugglingHangThreshold.Milliseconds(),
+				Probed:      true,
+			}
+			probe1, p1err := family.probe(ctx, c, u, addr, tlsCfg, v)
+			if p1err != nil {
+				fact.SkipReason = "probe1 transport error: " + p1err.Error()
+				fact.Probed = false
+				out = append(out, fact)
+				continue
+			}
+			fact.Probe1MS = probe1.Milliseconds()
+			if !c.timingHit(baseline, probe1) {
+				out = append(out, fact)
+				continue
+			}
+			select {
+			case <-time.After(smugglingConfirmDelay):
+			case <-ctx.Done():
+				return out, ctx.Err()
+			}
+			probe2, p2err := family.probe(ctx, c, u, addr, tlsCfg, v)
+			if p2err != nil {
+				fact.SkipReason = "probe2 transport error: " + p2err.Error()
+				out = append(out, fact)
+				continue
+			}
+			fact.Probe2MS = probe2.Milliseconds()
+			if c.timingHit(baseline, probe2) {
+				fact.Confirmed = true
+			}
 			out = append(out, fact)
-			continue
 		}
-		select {
-		case <-time.After(smugglingConfirmDelay):
-		case <-ctx.Done():
-			return out, ctx.Err()
-		}
-		probe2, p2err := c.runVariant(ctx, u, addr, tlsCfg, v)
-		if p2err != nil {
-			fact.SkipReason = "probe2 transport error: " + p2err.Error()
-			out = append(out, fact)
-			continue
-		}
-		fact.Probe2MS = probe2.Milliseconds()
-		if c.timingHit(baseline, probe2) {
-			fact.Confirmed = true
-		}
-		out = append(out, fact)
-	}
-
-	if skipH2 != "" {
-		out = append(out, SmugglingVariantFact{
-			Label:       "H2.CL",
-			FrontEnd:    "HTTP/2 content-length",
-			BackEnd:     "HTTP/1.1 Content-Length",
-			Description: "HTTP/2 front-end downgrades to HTTP/1.1 back-end without rewriting content-length",
-			Proto:       "http2",
-			Probed:      false,
-			SkipReason:  skipH2,
-		})
 	}
 	return out, nil
+}
+
+// totalVariants returns the sum of variants across all families in
+// cat, used to size the result slice up front.
+func totalVariants(cat smugglingCatalogue) int {
+	n := 0
+	for _, f := range cat.families {
+		n += len(f.variants)
+	}
+	return n
 }
 
 // smugglingProtoName maps the internal smugglingProto enum to the

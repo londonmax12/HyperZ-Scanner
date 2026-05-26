@@ -121,7 +121,7 @@ local function compose_finding(ctx, host_key, page_url, v)
 end
 
 function check.run(ctx)
-  local host_fact, err = ctx.smuggling.scan()
+  local host_fact, err = ctx.smuggling.scan("default")
   if err then return nil, err end
   if host_fact == nil then return nil end
 

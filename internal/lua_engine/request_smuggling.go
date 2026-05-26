@@ -153,55 +153,51 @@ func (c *RequestSmuggling) evaluateHost(ctx context.Context, u *url.URL) (*Findi
 		return nil, fmt.Errorf("baseline: %w", err)
 	}
 
-	variants := []smugglingVariant{
-		variantCLTE(),
-		variantTECL(),
-	}
-	// Only probe H2.CL when the server advertises h2 via ALPN. A bare
-	// HTTPS handshake that selects http/1.1 means h2 isn't on the wire,
-	// so the variant is inapplicable.
-	if u.Scheme == "https" {
-		negotiated, err := c.negotiateALPN(ctx, addr, tlsCfg)
-		if err == nil && negotiated == "h2" {
-			variants = append(variants, variantH2CL())
-		}
-	}
-
-	for _, v := range variants {
-		// Each variant can take up to smugglingProbeTimeout twice; bail
-		// the whole loop on cancellation rather than burning the rest
-		// of the budget on a request the caller has given up on.
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		probe1, p1err := c.runVariant(ctx, u, addr, tlsCfg, v)
-		if p1err != nil {
-			// A transport-layer failure on the probe itself (TLS error,
-			// dial refused, etc.) is not a smuggling signal. Move on
-			// to the next variant rather than failing the whole host.
+	// Walk the default catalogue's families. canProbe gates each family
+	// (e.g. H2 needs ALPN h2); a non-empty skip reason short-circuits
+	// every variant in that family. First confirmed variant wins -
+	// per-host recommendation is identical regardless of which parser
+	// pair disagreed.
+	for _, family := range smugglingCatalogues["default"].families {
+		if family.canProbe(ctx, c, u, addr, tlsCfg) != "" {
 			continue
 		}
-		if !c.timingHit(baseline, probe1) {
-			continue
+		for _, v := range family.variants {
+			// Each variant can take up to smugglingProbeTimeout twice; bail
+			// the whole loop on cancellation rather than burning the rest
+			// of the budget on a request the caller has given up on.
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			probe1, p1err := family.probe(ctx, c, u, addr, tlsCfg, v)
+			if p1err != nil {
+				// A transport-layer failure on the probe itself (TLS error,
+				// dial refused, etc.) is not a smuggling signal. Move on
+				// to the next variant rather than failing the whole host.
+				continue
+			}
+			if !c.timingHit(baseline, probe1) {
+				continue
+			}
+			// Wait out any short-lived transient (GC pause, upstream stall)
+			// before the confirmation probe so we are not measuring the
+			// same back-pressure event twice.
+			select {
+			case <-time.After(smugglingConfirmDelay):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			// Re-issue to filter jitter. Both attempts must cross the
+			// threshold before we call it.
+			probe2, p2err := family.probe(ctx, c, u, addr, tlsCfg, v)
+			if p2err != nil {
+				continue
+			}
+			if !c.timingHit(baseline, probe2) {
+				continue
+			}
+			return c.buildFinding(u, v, baseline, probe1, probe2), nil
 		}
-		// Wait out any short-lived transient (GC pause, upstream stall)
-		// before the confirmation probe so we are not measuring the
-		// same back-pressure event twice.
-		select {
-		case <-time.After(smugglingConfirmDelay):
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-		// Re-issue to filter jitter. Both attempts must cross the
-		// threshold before we call it.
-		probe2, p2err := c.runVariant(ctx, u, addr, tlsCfg, v)
-		if p2err != nil {
-			continue
-		}
-		if !c.timingHit(baseline, probe2) {
-			continue
-		}
-		return c.buildFinding(u, v, baseline, probe1, probe2), nil
 	}
 	return nil, nil
 }
@@ -265,22 +261,6 @@ func (c *RequestSmuggling) sendBaseline(ctx context.Context, u *url.URL, addr st
 		return 0, err
 	}
 	return time.Since(start), nil
-}
-
-// runVariant dispatches to the right wire path (HTTP/1.1 vs HTTP/2)
-// for the variant, sends the probe, and returns the wall-clock latency
-// observed. Transport errors are returned to the caller; a probe that
-// completes with any HTTP response (including 4xx/5xx) is a successful
-// measurement.
-func (c *RequestSmuggling) runVariant(ctx context.Context, u *url.URL, addr string, tlsCfg *tls.Config, v smugglingVariant) (time.Duration, error) {
-	switch v.proto {
-	case smugglingProtoHTTP1:
-		return c.runHTTP1Variant(ctx, u, addr, tlsCfg, v)
-	case smugglingProtoHTTP2:
-		return c.runHTTP2Variant(ctx, u, addr, tlsCfg, v)
-	default:
-		return 0, fmt.Errorf("unknown proto %d", v.proto)
-	}
 }
 
 func (c *RequestSmuggling) runHTTP1Variant(ctx context.Context, u *url.URL, addr string, tlsCfg *tls.Config, v smugglingVariant) (time.Duration, error) {
@@ -350,6 +330,94 @@ const (
 	smugglingProtoHTTP1 smugglingProto = iota + 1
 	smugglingProtoHTTP2
 )
+
+// smugglingProtocolFamily groups variants that share a wire protocol
+// and a per-host applicability check. canProbe runs once per host
+// before any variant in the family is attempted: a non-empty return
+// is the skip reason applied to every variant in the family (mirrors
+// the existing H2 ALPN gate). probe runs one variant against the
+// host and returns the wall-clock latency. Future protocols (h2c
+// cleartext upgrade, TE.0 desync over h2, h3) register their own
+// family rather than editing evaluateHost / evaluateHostFacts or the
+// runVariant enum switch.
+type smugglingProtocolFamily struct {
+	name     string
+	variants []smugglingVariant
+	canProbe func(ctx context.Context, c *RequestSmuggling, u *url.URL, addr string, tlsCfg *tls.Config) string
+	probe    func(ctx context.Context, c *RequestSmuggling, u *url.URL, addr string, tlsCfg *tls.Config, v smugglingVariant) (time.Duration, error)
+}
+
+// smugglingHTTP1Family covers the HTTP/1.1 framing-pair desync probes
+// (CL.TE, TE.CL). Always probeable: HTTP/1.1 needs no negotiation.
+var smugglingHTTP1Family = &smugglingProtocolFamily{
+	name:     "http1",
+	variants: []smugglingVariant{variantCLTE(), variantTECL()},
+	canProbe: func(context.Context, *RequestSmuggling, *url.URL, string, *tls.Config) string {
+		return ""
+	},
+	probe: func(ctx context.Context, c *RequestSmuggling, u *url.URL, addr string, tlsCfg *tls.Config, v smugglingVariant) (time.Duration, error) {
+		return c.runHTTP1Variant(ctx, u, addr, tlsCfg, v)
+	},
+}
+
+// smugglingHTTP2Family covers HTTP/2 -> HTTP/1.1 downgrade variants
+// (H2.CL). Gated on ALPN negotiation; non-https hosts and servers
+// that didn't pick "h2" emit a Probed=false fact with the skip reason
+// for each family variant.
+var smugglingHTTP2Family = &smugglingProtocolFamily{
+	name:     "http2",
+	variants: []smugglingVariant{variantH2CL()},
+	canProbe: func(ctx context.Context, c *RequestSmuggling, u *url.URL, addr string, tlsCfg *tls.Config) string {
+		if u.Scheme != "https" {
+			return "scheme is http; h2 probe inapplicable"
+		}
+		negotiated, err := c.negotiateALPN(ctx, addr, tlsCfg)
+		if err != nil {
+			return "alpn negotiation failed: " + err.Error()
+		}
+		if negotiated != "h2" {
+			return "server did not negotiate h2"
+		}
+		return ""
+	},
+	probe: func(ctx context.Context, c *RequestSmuggling, u *url.URL, addr string, tlsCfg *tls.Config, v smugglingVariant) (time.Duration, error) {
+		return c.runHTTP2Variant(ctx, u, addr, tlsCfg, v)
+	},
+}
+
+// smugglingCatalogue is a named bundle of protocol families a check
+// wants to sweep in one call. The Lua bridge takes the name as
+// ctx.smuggling.scan's first argument and resolves it through
+// resolveSmugglingCatalogue. Future check authors register their own
+// catalogue (e.g. "h2c" for an h2c-cleartext-upgrade smuggling check)
+// without touching the request-smuggling sweep.
+type smugglingCatalogue struct {
+	families []*smugglingProtocolFamily
+}
+
+// smugglingCatalogues is the named-catalogue registry. "default" is
+// the canonical request-smuggling sweep (HTTP/1.1 framing pairs +
+// H2 downgrade); sibling catalogues add themselves to this map and
+// the Lua bridge surfaces them automatically.
+var smugglingCatalogues = map[string]smugglingCatalogue{
+	"default": {
+		families: []*smugglingProtocolFamily{
+			smugglingHTTP1Family,
+			smugglingHTTP2Family,
+		},
+	},
+}
+
+// resolveSmugglingCatalogue returns the named catalogue, falling back
+// to "default" when name is empty or unknown. Same fallback rule
+// resolveDiscoveryCatalogue uses; a Lua-side typo lands on the
+// documented sweep rather than silently scanning nothing.
+func resolveSmugglingCatalogue(name string) smugglingCatalogue {
+	if cat, ok := smugglingCatalogues[name]; ok {
+		return cat
+	}
+	return smugglingCatalogues["default"]
+}
 
 // smugglingVariant describes one desync probe: a label, the wire
 // protocol it runs on, a builder for the HTTP/1.1 bytes (used when

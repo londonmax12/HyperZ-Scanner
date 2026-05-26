@@ -5,8 +5,11 @@ import (
 )
 
 // buildSmugglingTable returns the ctx.smuggling helper namespace.
-// The single scan() entry point bundles baseline measurement +
-// per-variant probing + the per-host cache into one Go-side pass.
+// The single scan(catalogue) entry point bundles baseline measurement
+// + per-variant probing + the per-host cache into one Go-side pass.
+// catalogue selects the registered family bundle ("default" covers
+// today's HTTP/1.1 framing pairs + H2.CL downgrade; future sibling
+// catalogues like "h2c" register additional protocol families).
 // The Lua composer reads the raw timings and variant labels, decides
 // which (if any) confirmed variant to surface, and stamps its own
 // severity / title / detail / remediation / dedupe-key shape onto
@@ -40,10 +43,11 @@ func smugglingScan(L *lua.LState) int {
 	if env == nil {
 		L.RaiseError("ctx.smuggling.scan called outside a check run")
 	}
+	catalogue := requireString(L, 1)
 	rs := env.check.AuxOrCreate(smugglingCheckKey{}, func() any {
 		return &RequestSmuggling{}
 	}).(*RequestSmuggling)
-	hostFact, err := rs.ScanFacts(env.ctx, env.scope, env.page)
+	hostFact, err := rs.ScanFacts(env.ctx, env.scope, env.page, catalogue)
 	if err != nil {
 		L.Push(lua.LNil)
 		L.Push(lua.LString(err.Error()))
