@@ -25,6 +25,15 @@ from flask import Flask, Response, jsonify, redirect, request, stream_with_conte
 from jinja2 import Template
 from lxml import etree
 
+# Werkzeug 3.x rejects CR/LF bytes in response header values, which is the
+# right default for a real app but blocks the deliberate CRLF-injection
+# behavior /crlf wants to exhibit. Replace the validator with a no-op so
+# the bytes flow through to the WSGI write path. Custom headers (not
+# Location) round-trip CRLF untouched; the Location header is separately
+# URL-sanitized by Werkzeug, so /crlf uses a custom header below.
+import werkzeug.datastructures.headers as _wz_headers
+_wz_headers._str_header_value = lambda v: str(v) if v is not None else ""
+
 app = Flask(__name__)
 JWT_SECRET = "secret"  # weak symmetric key - hyperz jwt-vulns will brute-force
 
@@ -114,16 +123,17 @@ def poison():
 
 
 # --- crlf-injection --------------------------------------------------------
-# Trigger: request param is dropped into a response header (here:
-# Location) without CR/LF sanitization, so an injected %0d%0a payload
-# splits the response.
+# Trigger: request param is dropped into a response header without
+# CR/LF sanitization, so an injected %0d%0a payload splits the response.
+# Werkzeug treats the Location header as a URL and strips CR/LF as a
+# side effect, so this fixture reflects into a custom header to keep
+# the injected bytes intact end-to-end. The module-level monkey-patch
+# disables Werkzeug's general header CR/LF validator.
 @app.route("/crlf")
 def crlf():
     nxt = request.args.get("next", "/")
-    resp = Response("", status=302)
-    # Raw insert; Flask/Werkzeug normally would scrub, so write via
-    # status_line workaround:
-    resp.headers["Location"] = nxt
+    resp = Response("", status=200)
+    resp.headers["X-Next-URL"] = nxt
     return resp
 
 
@@ -172,8 +182,14 @@ def search():
                     "server version for the right syntax to use near "
                     f"'{q}' at line 1</pre>")
         return Response("".join(body), status=500)
+    # Boolean-SQLi oracle expects truthy ~ baseline and falsy != baseline.
+    # AND 1=1 leaves the original predicate intact, so emit the same
+    # "match for {q}" shape as the no-injection branch; after the
+    # check's strip_all removes the literal " AND 1=1" from the body,
+    # truthy collapses onto the baseline. AND 1=2 wipes the result set,
+    # so falsy returns an empty list and diverges from baseline.
     if "1=1" in qlow:
-        body.append("<ul>" + "".join(f"<li>row {i}</li>" for i in range(20)) + "</ul>")
+        body.append(f"<ul><li>match for {q}</li></ul>")
     elif "1=2" in qlow:
         body.append("<ul></ul>")
     else:
@@ -198,15 +214,23 @@ def dom_xss():
 
 # --- nosqli ----------------------------------------------------------------
 # Trigger: param accepts mongo-style operator dicts. Hyperz rewrites
-# q -> q[$eq]=... or JSON body to {"q":{"$eq":...}} and looks for a
-# divergent boolean response between truthy/falsy.
+# q -> q[$eq]=... (LocQuery) or JSON body to {"q":{"$eq":...}} and
+# looks for boolean divergence between truthy (sink.value) and falsy
+# (canary) probes. The oracle wants truthy ~ baseline and falsy !=
+# baseline, so the operator branch must match the actual probed value
+# rather than collapsing every $ to the same answer.
 @app.route("/find")
 def nosql():
+    op_val = None
+    for key, val in request.args.items():
+        if key.startswith("q[$"):
+            op_val = val
+            break
+    if op_val is not None:
+        if op_val == "alice":
+            return jsonify({"users": [{"name": "alice"}]})
+        return jsonify({"users": []})
     q = request.args.get("q", "")
-    # truthy operator (anything with $) collapses to "match all"; a
-    # canary plain string returns "no match" - boolean divergence.
-    if "$" in q or "[$" in request.query_string.decode("latin1"):
-        return jsonify({"users": [{"name": "alice"}, {"name": "bob"}]})
     if q == "alice":
         return jsonify({"users": [{"name": "alice"}]})
     return jsonify({"users": []})
@@ -295,11 +319,14 @@ def ssti():
 
 # --- idor ------------------------------------------------------------------
 # Trigger: numeric-id path with divergent bodies. Hyperz idor walks
-# variants and looks for boolean divergence vs baseline.
+# variants and looks for boolean divergence vs baseline. The records
+# carry enough fields to clear the check's 64-byte minimum baseline
+# body floor; smaller responses are treated as "nothing to compare
+# against" and skipped before the oracle even runs.
 USERS = {
-    "1": {"id": 1, "email": "alice@example.com", "balance": 100},
-    "2": {"id": 2, "email": "bob@example.com",   "balance": 250},
-    "3": {"id": 3, "email": "carol@example.com", "balance": 999},
+    "1": {"id": 1, "email": "alice@example.com", "name": "Alice Anderson", "role": "user",  "balance": 100, "last_login": "2024-11-01T08:15:00Z"},
+    "2": {"id": 2, "email": "bob@example.com",   "name": "Bob Brown",      "role": "user",  "balance": 250, "last_login": "2024-11-02T09:30:00Z"},
+    "3": {"id": 3, "email": "carol@example.com", "name": "Carol Carter",   "role": "admin", "balance": 999, "last_login": "2024-11-03T10:45:00Z"},
 }
 
 

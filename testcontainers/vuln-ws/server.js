@@ -11,14 +11,18 @@ const http = require("http");
 const { WebSocketServer } = require("ws");
 
 const server = http.createServer((req, res) => {
-  // A plain GET so the crawler can discover the host. Body
-  // references the ws endpoint so ws-audit's URL extractor picks it
-  // up even when this container is scanned standalone.
+  // A plain GET so the crawler can discover the host. Body references
+  // the ws endpoint so ws-audit's URL extractor picks it up even when
+  // this container is scanned standalone. The host is rewritten into
+  // the literal so the regex-based discovery sees an absolute ws://
+  // URL (host concatenation at runtime hides the URL from the static
+  // scanner).
+  const host = req.headers.host || "localhost:8081";
   res.writeHead(200, { "Content-Type": "text/html" });
   res.end(`<!doctype html>
 <title>vuln-ws</title>
 <script>
-  var ws = new WebSocket("ws://" + location.host + "/echo");
+  var ws = new WebSocket("ws://${host}/echo");
 </script>`);
 });
 

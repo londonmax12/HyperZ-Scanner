@@ -2,9 +2,11 @@
 # See vuln-static/hyperz.yaml for the enable-vs-assertion contract
 # and the ${ORIGIN_HTTP} placeholder convention.
 mode: aggressive
+crawl:
+  enabled: true
 
 url:
-  - "${ORIGIN_HTTP}/spend?amount=60"
+  - "${ORIGIN_HTTP}/"
 
 checks:
   pollute: true
