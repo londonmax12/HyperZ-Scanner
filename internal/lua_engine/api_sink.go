@@ -24,6 +24,7 @@ import (
 func buildSinksTable(L *lua.LState) *lua.LTable {
 	t := L.NewTable()
 	t.RawSetString("for_page", L.NewFunction(sinksForPage))
+	t.RawSetString("for_headers", L.NewFunction(sinksForHeaders))
 	return t
 }
 
@@ -93,6 +94,45 @@ func sinksForPage(L *lua.LState) int {
 		}
 		return out[i].Name < out[j].Name
 	})
+
+	arr := L.NewTable()
+	for i := range out {
+		arr.RawSetInt(i+1, pushSink(L, &out[i]))
+	}
+	L.Push(arr)
+	return 1
+}
+
+// sinksForHeaders implements ctx.sinks.for_headers(page_url, {names}).
+//
+// Builds one LocHeader Sink per name against page_url, returned as
+// Sink userdata so callers can use the same :mutate_request /
+// field-read surface they get from for_page. The Lua check supplies
+// the header list (e.g. SSTI / cmd-injection aggressive-mode header
+// fan-out) so the bridge stays generic instead of baking in any
+// single check's header set.
+func sinksForHeaders(L *lua.LState) int {
+	env := currentEnv(L)
+	if env == nil {
+		L.RaiseError("ctx.sinks.for_headers called outside a check run")
+	}
+	pageURL := requireString(L, 1)
+	names := L.CheckTable(2)
+
+	n := names.Len()
+	out := make([]Sink, 0, n)
+	for i := 1; i <= n; i++ {
+		name := lvalString(names.RawGetInt(i))
+		if name == "" {
+			continue
+		}
+		out = append(out, Sink{
+			Method: http.MethodGet,
+			URL:    pageURL,
+			Loc:    LocHeader,
+			Name:   name,
+		})
+	}
 
 	arr := L.NewTable()
 	for i := range out {

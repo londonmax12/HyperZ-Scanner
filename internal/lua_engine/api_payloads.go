@@ -75,7 +75,6 @@ func buildPayloadsTable(L *lua.LState) *lua.LTable {
 	t.RawSetString("cmd_injection_filler_value", L.NewFunction(payloadsCmdInjectionFiller))
 	t.RawSetString("cmd_injection_blind_oob", L.NewFunction(payloadsCmdInjectionBlindOOB))
 	t.RawSetString("ssti_oob_payloads", L.NewFunction(payloadsSSTIOOB))
-	t.RawSetString("ssti_header_sinks", L.NewFunction(payloadsSSTIHeaderSinks))
 	t.RawSetString("loc_descriptor", L.NewFunction(payloadsLocDescriptor))
 
 	t.RawSetString("ssrf_canary", L.NewFunction(payloadsSSRFCanary))
@@ -138,22 +137,6 @@ func payloadsSSTIOOB(L *lua.LState) int {
 		entry := L.NewTable()
 		entry.RawSetString("engine", lua.LString(p.Engine))
 		entry.RawSetString("template", lua.LString(p.Template))
-		out.RawSetInt(i+1, entry)
-	}
-	L.Push(out)
-	return 1
-}
-
-func payloadsSSTIHeaderSinks(L *lua.LState) int {
-	pageURL := requireString(L, 1)
-	src := SSTIHeaderSinksLua(pageURL)
-	out := L.NewTable()
-	for i, s := range src {
-		entry := L.NewTable()
-		entry.RawSetString("method", lua.LString(s.Method))
-		entry.RawSetString("url", lua.LString(s.URL))
-		entry.RawSetString("loc", lua.LString(s.Loc))
-		entry.RawSetString("name", lua.LString(s.Name))
 		out.RawSetInt(i+1, entry)
 	}
 	L.Push(out)

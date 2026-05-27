@@ -150,20 +150,6 @@ func buildSSTIOOBFinding(reg oob.Registration, hits []oob.Hit) Finding {
 	}
 }
 
-func (c SSTI) headerSinks(pageURL string) []Sink {
-	var sinks []Sink
-	for _, name := range []string{"User-Agent", "Referer", "X-Forwarded-For", "X-Forwarded-Host"} {
-		sinks = append(sinks, Sink{
-			Method: http.MethodGet,
-			URL:    pageURL,
-			Loc:    LocHeader,
-			Name:   name,
-			Value:  "",
-		})
-	}
-	return sinks
-}
-
 // probe runs the detection sequence for one sink. Returns a finding when either
 // expression evaluation (with confirmation) or error-based detection succeeds;
 // whichever fires first wins (stops further probing).

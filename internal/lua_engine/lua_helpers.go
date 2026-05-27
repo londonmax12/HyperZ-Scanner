@@ -1378,30 +1378,6 @@ func SSTIOOBPayloadsLua() []SSTIOOBPayloadLua {
 // the Go check does. Drops the need for a per-port lookup table.
 func LocDescriptorLua(loc string) string { return locDescriptor(Loc(loc)) }
 
-// CmdInjectionHeaderSinksLua returns the synthetic header sinks the
-// SSTI / cmd-injection checks fold in at LevelAggressive. The Lua
-// port consumes the same set so its aggressive-level fan-out matches.
-type SSTIHeaderSinkLua struct {
-	Method string
-	URL    string
-	Loc    string
-	Name   string
-}
-
-func SSTIHeaderSinksLua(pageURL string) []SSTIHeaderSinkLua {
-	src := (SSTI{}).headerSinks(pageURL)
-	out := make([]SSTIHeaderSinkLua, 0, len(src))
-	for _, s := range src {
-		out = append(out, SSTIHeaderSinkLua{
-			Method: s.Method,
-			URL:    s.URL,
-			Loc:    string(s.Loc),
-			Name:   s.Name,
-		})
-	}
-	return out
-}
-
 // SubdomainTakeoverLookupCNAMEForTest / SetSubdomainTakeoverLookupCNAMEForTest
 // expose the package-level CNAME resolver indirection so the
 // checks_lua parity tests can swap in a synthetic resolver without

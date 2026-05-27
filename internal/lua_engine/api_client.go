@@ -246,6 +246,7 @@ func ensureClientMT(L *lua.LState) *lua.LTable {
 	methods.RawSetString("do", L.NewFunction(clientDo))
 	methods.RawSetString("do_no_follow", L.NewFunction(clientDoNoFollow))
 	methods.RawSetString("do_timed", L.NewFunction(clientDoTimed))
+	methods.RawSetString("do_no_follow_timed", L.NewFunction(clientDoNoFollowTimed))
 	methods.RawSetString("do_detached", L.NewFunction(clientDoDetached))
 	methods.RawSetString("do_parallel", L.NewFunction(clientDoParallel))
 	methods.RawSetString("new_request", L.NewFunction(clientNewRequest))
@@ -295,7 +296,21 @@ func clientDoNoFollow(L *lua.LState) int { return clientDispatch(L, true) }
 // compare against baseline + sleep margins; gopher-lua has no native
 // monotonic clock that would let a Lua-authored check measure latency
 // itself with the same fidelity.
-func clientDoTimed(L *lua.LState) int {
+func clientDoTimed(L *lua.LState) int { return clientDispatchTimed(L, false) }
+
+// clientDoNoFollowTimed mirrors clientDoTimed but dispatches via
+// Client.DoNoFollow so the latency measurement isn't inflated by a
+// chased 3xx Location. Time-based oracles (sqli-time) want the
+// server-side delay on the immediate response; following a redirect
+// adds a second round-trip whose latency the oracle would attribute
+// to the SQL probe.
+func clientDoNoFollowTimed(L *lua.LState) int { return clientDispatchTimed(L, true) }
+
+// clientDispatchTimed is the shared implementation behind client:do_timed
+// and client:do_no_follow_timed. Mirrors clientDispatch's split so the
+// redirect-following choice is the only behavioral difference and
+// timing semantics stay identical across both variants.
+func clientDispatchTimed(L *lua.LState, noFollow bool) int {
 	c := clientFromArg(L, 1)
 	r := requestFromArg(L, 2)
 	env := currentEnv(L)
@@ -303,7 +318,15 @@ func clientDoTimed(L *lua.LState) int {
 		L.RaiseError("client:do_timed called outside a check run")
 	}
 	start := time.Now()
-	resp, err := c.c.Do(env.ctx, r.req)
+	var (
+		resp *http.Response
+		err  error
+	)
+	if noFollow {
+		resp, err = c.c.DoNoFollow(env.ctx, r.req)
+	} else {
+		resp, err = c.c.Do(env.ctx, r.req)
+	}
 	latency := time.Since(start)
 	if err != nil {
 		L.Push(lua.LNil)
