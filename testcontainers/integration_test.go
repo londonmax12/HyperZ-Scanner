@@ -128,8 +128,10 @@ var vulnSuites = []vulnCase{
 	{
 		// Real WordPress (Apache + MariaDB co-hosted, installed via
 		// wp-cli on first boot) so wp-rest-user-enum exercises the
-		// live /wp-json/wp/v2/users surface. The startup wait keys
-		// off the install-complete marker emitted by init.sh; the
+		// live /wp-json/wp/v2/users surface and wp-xmlrpc-enabled
+		// exercises the live /xmlrpc.php surface (WordPress 6.4
+		// ships it enabled by default). The startup wait keys off
+		// the install-complete marker emitted by init.sh; the
 		// default port-listen wait would race the wp core install
 		// step. Bumped startupWait covers the apt-cached image's
 		// MariaDB bootstrap + wp-cli install (~30s warm, ~3min cold).
@@ -139,7 +141,7 @@ var vulnSuites = []vulnCase{
 			waitLog:     "[vuln-wordpress] ready",
 			startupWait: 5 * time.Minute,
 		},
-		notes: "wp-rest-user-enum (real WordPress install + author list)",
+		notes: "wp-rest-user-enum + wp-xmlrpc-enabled (real WordPress install)",
 	},
 	{
 		// Real Drupal 7 (Apache + MariaDB co-hosted, installed via

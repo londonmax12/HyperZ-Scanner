@@ -2,10 +2,16 @@
 # See vuln-static/hyperz.yaml for the enable-vs-assertion contract
 # and the ${ORIGIN_HTTP} placeholder convention.
 #
-# Single seed is enough: wp-rest-user-enum is host-scoped and
-# claim_once-guarded, so the host-root visit alone fires the probe.
-# Crawl stays off to keep the run focused on the one finding under
-# assertion and to avoid noise from any future page additions.
+# Single seed is enough: both checks are host-scoped and
+# claim_once-guarded, so the host-root visit alone fires each probe
+# exactly once. Crawl stays off to keep the run focused on the
+# findings under assertion and to avoid noise from any future page
+# additions.
+#
+# WordPress 6.4 (the base image) ships /xmlrpc.php enabled by
+# default and answers system.listMethods with a canonical
+# methodResponse advertising pingback.ping, so wp-xmlrpc-enabled
+# fires against the unmodified install with no fixture changes.
 mode: default
 crawl:
   enabled: false
@@ -16,3 +22,4 @@ url:
 checks:
   enable:
     - wp-rest-user-enum
+    - wp-xmlrpc-enabled
