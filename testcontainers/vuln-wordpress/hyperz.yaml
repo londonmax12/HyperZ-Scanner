@@ -1,0 +1,18 @@
+# Scan profile for the vuln-wordpress integration container.
+# See vuln-static/hyperz.yaml for the enable-vs-assertion contract
+# and the ${ORIGIN_HTTP} placeholder convention.
+#
+# Single seed is enough: wp-rest-user-enum is host-scoped and
+# claim_once-guarded, so the host-root visit alone fires the probe.
+# Crawl stays off to keep the run focused on the one finding under
+# assertion and to avoid noise from any future page additions.
+mode: default
+crawl:
+  enabled: false
+
+url:
+  - "${ORIGIN_HTTP}/"
+
+checks:
+  enable:
+    - wp-rest-user-enum

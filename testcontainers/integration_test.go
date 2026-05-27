@@ -34,7 +34,10 @@
 // lazily; subsequent runs hit the layer cache and complete quickly.
 package testcontainers
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 // vulnCase describes one container suite. spec is forwarded to
 // startTarget; prepareScan is an optional hook that runs after the
@@ -121,6 +124,22 @@ var vulnSuites = []vulnCase{
 			waitLog:     "vuln-race on :8084",
 		},
 		notes: "race-condition TOCTOU",
+	},
+	{
+		// Real WordPress (Apache + MariaDB co-hosted, installed via
+		// wp-cli on first boot) so wp-rest-user-enum exercises the
+		// live /wp-json/wp/v2/users surface. The startup wait keys
+		// off the install-complete marker emitted by init.sh; the
+		// default port-listen wait would race the wp core install
+		// step. Bumped startupWait covers the apt-cached image's
+		// MariaDB bootstrap + wp-cli install (~30s warm, ~3min cold).
+		spec: targetSpec{
+			dir:         "vuln-wordpress",
+			exposedPort: 80,
+			waitLog:     "[vuln-wordpress] ready",
+			startupWait: 5 * time.Minute,
+		},
+		notes: "wp-rest-user-enum (real WordPress install + author list)",
 	},
 }
 
