@@ -27,6 +27,7 @@ local check = {
               .. "setTimeout/setInterval with a string argument, or as a javascript: URI. Use textContent "
               .. "or setAttribute; when HTML is unavoidable, sanitize through a vetted library (DOMPurify) "
               .. "before injection.",
+  consumes    = {"page", "param"},
 }
 
 -- Long enough for typical event-loop work (DOMContentLoaded handlers,

@@ -22,6 +22,7 @@ local check = {
                 .. "before concatenating user input into a filter string. Prefer libraries that build filters from typed "
                 .. "values (FilterBuilder APIs) over string concatenation. For authentication, bind with the user's DN "
                 .. "rather than embedding the username and password in a search filter.",
+  consumes    = {"page", "param"},
 }
 
 local BODY_CAP = 64 * 1024

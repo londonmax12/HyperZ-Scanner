@@ -19,6 +19,7 @@ local check = {
   level          = "aggressive",
   scope          = "host",
   budget_seconds = 180,
+  tier           = "active",
   pollute        = true,
 }
 

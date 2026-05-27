@@ -13,6 +13,7 @@ local check = {
                 .. "Audit access logs for the affected key during the exposure window. "
                 .. "Remove the embedded value from the source that generated this response (HTML template, JS bundle, JSON serializer, error/debug handler) and replace it with a server-side lookup or a short-lived, scoped token issued per request. "
                 .. "For build-time leaks (keys baked into JS bundles), move the secret to an environment variable consumed only by the backend and front the third-party call with a same-origin proxy endpoint.",
+  tier        = "passive",
 }
 
 local SEVERITY_RANK = { info = 0, low = 1, medium = 2, high = 3, critical = 4 }

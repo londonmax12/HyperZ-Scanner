@@ -9,6 +9,7 @@ local check = {
   scope = "page",
   cwe   = "CWE-1021",
   owasp = "A05:2021 Security Misconfiguration",
+  tier  = "passive",
 }
 
 -- input type -> severity. Every entry is Info today; the per-type

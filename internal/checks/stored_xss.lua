@@ -38,6 +38,8 @@ local check = {
                 .. "and JavaScript-encode (or hand off via JSON) for values placed inside <script>. "
                 .. "Storing the raw user input is fine when every read path is guaranteed to escape - audit every template that renders this field.",
   budget_seconds = 90,
+  tier     = "active",
+  consumes = {"page", "param"},
   phase = "two-phase",
   pollute = true,
 }

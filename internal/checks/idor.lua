@@ -40,6 +40,7 @@ local check = {
                 .. "supplied IDs. Add automated tests that swap identifiers across users in CI so regressions cannot reach "
                 .. "production unnoticed.",
   budget_seconds = 180,
+  consumes    = {"page", "param"},
 }
 
 local BODY_CAP = 64 * 1024

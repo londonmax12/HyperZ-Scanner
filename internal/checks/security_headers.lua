@@ -10,6 +10,7 @@ local check = {
   level = "passive",
   scope = "host",
   owasp = "A05:2021 Security Misconfiguration",
+  tier  = "passive",
 }
 
 local SEVERITY_RANK = { info = 0, low = 1, medium = 2, high = 3, critical = 4 }

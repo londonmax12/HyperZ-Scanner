@@ -10,6 +10,7 @@ local check = {
   cwe         = "CWE-200",
   owasp       = "A05:2021 Security Misconfiguration",
   remediation = nil, -- per-finding because the header name is interpolated
+  tier        = "fingerprint",
 }
 
 local LEAK_HEADERS = { "Server", "X-Powered-By" }

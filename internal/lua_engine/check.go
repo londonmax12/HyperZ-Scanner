@@ -12,10 +12,12 @@ import (
 	lua "github.com/yuin/gopher-lua"
 	luaparse "github.com/yuin/gopher-lua/parse"
 
+	"github.com/londonmax12/hyperz/internal/core"
 	"github.com/londonmax12/hyperz/internal/fingerprint"
 	"github.com/londonmax12/hyperz/internal/httpclient"
 	"github.com/londonmax12/hyperz/internal/page"
 	"github.com/londonmax12/hyperz/internal/scope"
+	"github.com/londonmax12/hyperz/internal/target"
 )
 
 // LuaCheck adapts a compiled Lua module to the Check interface.
@@ -61,6 +63,20 @@ type LuaCheck struct {
 	// Stack and appends info-level "version inferred" / "patched but
 	// fired" observations as additional findings.
 	patchedIn fingerprint.PatchedIn
+
+	// tier is the parsed `tier` field declaring where the check sits
+	// in the worklist dispatch pipeline. Zero (the unset default)
+	// satisfies core.Targeted by returning the zero Tier; the scanner's
+	// checkTier helper clamps that to TierActive, matching the
+	// pre-tier behavior where every check ran as one batch at the
+	// active stage.
+	tier core.Tier
+
+	// consumes is the parsed `consumes` field listing which target
+	// kinds the check accepts dispatch against. nil / empty (the
+	// unset default) is treated by the scanner as a permissive
+	// KindPage-only allow-list, matching the pre-tier behavior.
+	consumes []target.Kind
 
 	// settings is the per-check config bag the operator supplied
 	// via the YAML config's `checks.settings[<name>]` block. The
@@ -145,6 +161,8 @@ func Load(name string, src []byte) (*LuaCheck, error) {
 		pollute:      meta.pollute,
 		appliesTo:    meta.appliesTo,
 		patchedIn:    meta.patchedIn,
+		tier:         meta.tier,
+		consumes:     meta.consumes,
 		proto:        proto,
 		source:       name,
 	}
@@ -182,6 +200,8 @@ type checkMeta struct {
 	pollute     bool
 	appliesTo   fingerprint.AppliesSpec
 	patchedIn   fingerprint.PatchedIn
+	tier        core.Tier
+	consumes    []target.Kind
 }
 
 func readCheckMeta(t *lua.LTable) (checkMeta, error) {
@@ -271,7 +291,95 @@ func readCheckMeta(t *lua.LTable) (checkMeta, error) {
 		}
 		m.patchedIn = pin
 	}
+
+	// tier places the check on the worklist's dispatch pipeline.
+	// Omitting the field leaves m.tier at zero, which the scanner's
+	// checkTier clamps to TierActive - matching the pre-tier default
+	// where every check ran as one batch at the active stage. A typo
+	// in the value is an error rather than silently falling back, so
+	// `tier = "passsive"` does not silently disable a passive check's
+	// ordering guarantee.
+	if tierStr := lvalString(t.RawGetString("tier")); tierStr != "" {
+		tier, err := parseTier(tierStr)
+		if err != nil {
+			return m, fmt.Errorf("%s: %w", m.name, err)
+		}
+		m.tier = tier
+	}
+
+	// consumes lists the target kinds the check accepts dispatch
+	// against. A check that probes a specific (param, location) tuple
+	// declares `consumes = {"param"}` so the scanner only dispatches
+	// it against KindParam targets; the default (omitted field or
+	// empty list) is the legacy KindPage-only contract. Accepts either
+	// a single string ("param") or an array of strings; an unknown
+	// kind name is an error for the same reason a typo in tier is.
+	if con := t.RawGetString("consumes"); con != lua.LNil {
+		kinds, err := parseConsumes(con)
+		if err != nil {
+			return m, fmt.Errorf("%s: %w", m.name, err)
+		}
+		m.consumes = kinds
+	}
 	return m, nil
+}
+
+// parseTier maps the Lua-side tier label to a core.Tier. Unknown
+// labels error so a typo cannot silently downgrade a check to the
+// default active tier.
+func parseTier(s string) (core.Tier, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "fingerprint":
+		return core.TierFingerprint, nil
+	case "passive":
+		return core.TierPassive, nil
+	case "discovery":
+		return core.TierDiscovery, nil
+	case "active":
+		return core.TierActive, nil
+	}
+	return 0, fmt.Errorf("invalid tier %q (want fingerprint, passive, discovery, or active)", s)
+}
+
+// parseConsumes reads the `consumes` field as either a single string
+// or an array-of-strings, returning the corresponding target.Kind
+// list. The single-string form is sugar for a one-element array, the
+// common case for param-tampering checks. Returns an empty slice for
+// an empty array literal (`consumes = {}`); callers treat that the
+// same as the omitted-field case.
+func parseConsumes(v lua.LValue) ([]target.Kind, error) {
+	switch val := v.(type) {
+	case lua.LString:
+		k, err := parseTargetKind(string(val))
+		if err != nil {
+			return nil, fmt.Errorf("consumes: %w", err)
+		}
+		return []target.Kind{k}, nil
+	case *lua.LTable:
+		var out []target.Kind
+		var firstErr error
+		val.ForEach(func(_, item lua.LValue) {
+			if firstErr != nil {
+				return
+			}
+			s, ok := item.(lua.LString)
+			if !ok {
+				firstErr = fmt.Errorf("consumes entries must be strings, got %s", item.Type())
+				return
+			}
+			k, err := parseTargetKind(string(s))
+			if err != nil {
+				firstErr = fmt.Errorf("consumes: %w", err)
+				return
+			}
+			out = append(out, k)
+		})
+		if firstErr != nil {
+			return nil, firstErr
+		}
+		return out, nil
+	}
+	return nil, fmt.Errorf("consumes must be a string or table of strings, got %s", v.Type())
 }
 
 // parseAppliesTo reads an applies_to sub-table:
@@ -482,6 +590,18 @@ func (c *LuaCheck) Budget() time.Duration { return c.budget }
 func (c *LuaCheck) AppliesTo(stack *fingerprint.Stack) bool {
 	return c.appliesTo.Matches(stack)
 }
+
+// Tier satisfies core.Targeted. Returns the parsed `tier` field or
+// the zero Tier if the field was omitted; the scanner's checkTier
+// clamps the zero return to core.TierActive so omitting `tier`
+// preserves the legacy dispatch-as-active default.
+func (c *LuaCheck) Tier() core.Tier { return c.tier }
+
+// Consumes satisfies core.Targeted. Returns the parsed `consumes`
+// field or nil if the field was omitted; the scanner's consumesKind
+// treats nil / empty as the KindPage-only allow-list, matching the
+// pre-tier dispatch contract.
+func (c *LuaCheck) Consumes() []target.Kind { return c.consumes }
 
 // Run executes check.run(ctx) inside a pooled VM.
 //

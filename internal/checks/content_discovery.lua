@@ -25,6 +25,7 @@ local check = {
   owasp       = "A05:2021 Security Misconfiguration",
   remediation = "Restrict admin / debug / VCS metadata paths at the web server or CDN layer; "
                 .. "produce deploy artifacts that exclude editor backups, lockfiles, and VCS dirs.",
+  tier        = "discovery",
 }
 
 local function get_status(resp)

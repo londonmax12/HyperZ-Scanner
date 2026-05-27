@@ -18,6 +18,7 @@ local check = {
   scope = "host",
   cwe   = "CWE-942",
   owasp = "A05:2021 Security Misconfiguration",
+  tier  = "passive",
 }
 
 local function trim(s) return (s:gsub("^%s+", ""):gsub("%s+$", "")) end

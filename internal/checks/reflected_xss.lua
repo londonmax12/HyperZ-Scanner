@@ -20,6 +20,7 @@ local check = {
   remediation = "Context-aware output encoding: HTML-encode user input rendered into HTML text, "
                 .. "attribute-encode for values placed in tag attributes, and JavaScript-encode (or hand off via JSON) for values "
                 .. "placed inside <script>. Prefer templating engines that auto-escape by default; never concatenate user input into HTML.",
+  consumes    = {"page", "param"},
 }
 
 local BODY_CAP = 64 * 1024

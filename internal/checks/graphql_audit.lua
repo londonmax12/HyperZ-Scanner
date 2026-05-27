@@ -27,6 +27,7 @@ local check = {
   name  = "graphql-audit",
   level = "default",
   scope = "page",
+  tier  = "active",
 }
 
 local BODY_CAP = 64 * 1024

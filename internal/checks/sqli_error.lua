@@ -17,6 +17,7 @@ local check = {
   remediation = "Use parameterized queries / prepared statements so user input is passed as a value, never "
                 .. "concatenated into SQL text. Disable verbose database error reporting in production responses regardless - "
                 .. "leaked error traces accelerate exploitation even when the underlying bug is patched.",
+  consumes    = {"page", "param"},
 }
 
 local BODY_CAP = 32 * 1024

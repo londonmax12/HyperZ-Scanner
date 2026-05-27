@@ -24,6 +24,7 @@ local check = {
   name  = "openapi-audit",
   level = "passive",
   scope = "host",
+  tier  = "passive",
 }
 
 local BODY_SNIPPET_CAP = 512

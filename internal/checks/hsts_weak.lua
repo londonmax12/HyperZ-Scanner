@@ -13,6 +13,7 @@ local check = {
   remediation = "Aim for Strict-Transport-Security: max-age=63072000; includeSubDomains; preload. "
                 .. "Confirm every subdomain serves HTTPS before enabling includeSubDomains. "
                 .. "Once max-age >= 31536000, includeSubDomains, and preload are in place, submit the host at https://hstspreload.org so first-visit downgrade is also defeated.",
+  tier        = "passive",
 }
 
 local HSTS_MAX_AGE_RECOMMENDED = 31536000  -- 1 year

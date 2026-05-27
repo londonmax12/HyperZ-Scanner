@@ -30,6 +30,7 @@ local check = {
     .. "disable HTTP keep-alive on the front-to-back connection if the framing risk cannot be "
     .. "eliminated at the parser level.",
   budget_seconds = 300,
+  tier = "active",
   pollute = true,
 }
 

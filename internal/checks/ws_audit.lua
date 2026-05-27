@@ -28,6 +28,7 @@ local check = {
   name  = "ws-audit",
   level = "default",
   scope = "host",
+  tier  = "active",
 }
 
 function check.run(ctx)

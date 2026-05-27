@@ -26,6 +26,7 @@ local check = {
                 .. "keeping a foreign page from reading the stream via EventSource is server-side CORS. If "
                 .. "the stream MUST be public, remove credentials from the channel (sessionless tokens in the "
                 .. "URL or first message) so a permissive ACAO does not leak authenticated content.",
+  tier        = "active",
 }
 
 local SSE_PROBE_BODY_CAP = 4 * 1024

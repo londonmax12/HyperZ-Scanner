@@ -10,6 +10,7 @@ local check = {
   scope = "page",
   cwe   = "CWE-1022",
   owasp = "A05:2021 Security Misconfiguration",
+  tier  = "passive",
 }
 
 local INTERESTING_TAGS = { "base", "a", "area", "form" }

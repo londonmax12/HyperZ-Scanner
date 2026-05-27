@@ -37,6 +37,7 @@ local check = {
                 .. "For PHP libxml, call libxml_disable_entity_loader(true) (or use parsers with externals off by default). "
                 .. "For Python lxml, parse with resolve_entities=False and no_network=True. "
                 .. "Prefer JSON over XML where the protocol permits.",
+  tier        = "active",
 }
 
 local BODY_CAP = 32 * 1024

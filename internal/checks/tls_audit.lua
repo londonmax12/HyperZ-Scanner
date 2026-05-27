@@ -15,6 +15,7 @@ local check = {
   level = "passive",
   scope = "host",
   owasp = "A02:2021 Cryptographic Failures",
+  tier  = "fingerprint",
 }
 
 local function version_finding(ctx, target, version_name)

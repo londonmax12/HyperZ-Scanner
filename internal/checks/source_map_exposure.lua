@@ -13,6 +13,7 @@ local check = {
   scope       = "host",
   cwe         = "CWE-540",
   owasp       = "A05:2021 Security Misconfiguration",
+  tier        = "passive",
 }
 
 local SOURCE_MAP_PROBE_BODY_CAP = 64 * 1024

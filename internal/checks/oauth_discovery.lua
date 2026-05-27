@@ -16,6 +16,7 @@ local check = {
   name  = "oauth-discovery",
   level = "passive",
   scope = "host",
+  tier  = "passive",
 }
 
 -- Cap on the inline snippet. The full body lives in the Exchange field.

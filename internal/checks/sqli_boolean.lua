@@ -14,6 +14,7 @@ local check = {
   remediation = "Use parameterized queries / prepared statements so user input is bound as a value, never "
                 .. "concatenated into SQL text. Boolean-based SQLi remains exploitable even when verbose errors are disabled, "
                 .. "so suppressing error output alone is not a fix.",
+  consumes    = {"page", "param"},
 }
 
 local BODY_CAP = 64 * 1024

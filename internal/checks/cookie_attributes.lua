@@ -9,6 +9,7 @@ local check = {
   level = "passive",
   scope = "host",
   owasp = "A05:2021 Security Misconfiguration",
+  tier  = "passive",
 }
 
 -- Per-attribute (severity, cwe, remediation). All three share OWASP

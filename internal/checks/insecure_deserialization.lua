@@ -24,6 +24,7 @@ local check = {
                 .. "unavoidable, sign the blob with a server-side key (HMAC) and verify the MAC before "
                 .. "deserializing, and restrict the deserializer's type allowlist (Java: ObjectInputFilter; "
                 .. ".NET: ISerializationBinder; Python: a RestrictedUnpickler).",
+  consumes    = {"page", "param"},
 }
 
 local FINGERPRINT_PREVIEW_CAP = 80

@@ -23,6 +23,7 @@ local check = {
   cwe         = "CWE-942",
   owasp       = "A05:2021 Security Misconfiguration",
   remediation = "Validate the request Origin against a hardcoded allowlist before echoing it. If credentialed cross-origin access is not required, drop Access-Control-Allow-Credentials. Never return Access-Control-Allow-Origin: <whatever the client sent>.",
+  tier        = "active",
 }
 
 local CANARY_HOST = "hyperz-canary.invalid"

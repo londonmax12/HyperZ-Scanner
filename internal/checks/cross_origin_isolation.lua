@@ -14,6 +14,7 @@ local check = {
   remediation = "Aim for Cross-Origin-Opener-Policy: same-origin and Cross-Origin-Embedder-Policy: require-corp on every HTML document that should be cross-origin isolated. "
                 .. "Tag every cross-origin subresource (images, scripts, fonts, frames) with Cross-Origin-Resource-Policy: same-origin or cross-origin so require-corp does not block them. "
                 .. "During rollout, deploy Cross-Origin-Embedder-Policy-Report-Only first to inventory subresources that would break under require-corp, then switch to enforcement once the report stream is clean.",
+  tier        = "passive",
 }
 
 local COOP_VALID = {

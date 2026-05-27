@@ -23,6 +23,7 @@ local check = {
   cwe         = "CWE-200",
   owasp       = "A01:2021 Broken Access Control",
   remediation = "Restrict /wp-json/wp/v2/users to authenticated requests via a security plugin (Wordfence, iThemes Security) or a custom permission_callback on the route. Sites that do not need the endpoint should disable it entirely.",
+  tier        = "passive",
   applies_to  = { cms = {"wordpress"} },
 }
 

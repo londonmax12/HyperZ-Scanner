@@ -29,6 +29,7 @@ local check = {
     .. "response. For account-creation flows, lean on the database's uniqueness constraint rather than an "
     .. "application-level SELECT-then-INSERT.",
   budget_seconds = 300,
+  tier = "active",
   pollute = true,
 }
 

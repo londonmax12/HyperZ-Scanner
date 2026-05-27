@@ -22,6 +22,7 @@ local check = {
                 .. "whose type does not match the schema - a username field that arrives as an object should fail "
                 .. "validation before reaching the database driver. In Express/Node, sanitize keys starting with `$` "
                 .. "(e.g. via express-mongo-sanitize) or disable bracket-object expansion in the body parser / qs.",
+  consumes    = {"page", "param"},
 }
 
 local BODY_CAP = 64 * 1024

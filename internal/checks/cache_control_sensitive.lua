@@ -15,6 +15,7 @@ local check = {
   remediation = "Set Cache-Control: private, no-store, no-cache (or at minimum private) for authenticated or sensitive pages. "
                 .. "Use public, max-age=<seconds> only for cacheable, non-sensitive content. "
                 .. "For dynamic pages, prefer private to prevent caching in shared proxies.",
+  tier        = "passive",
 }
 
 local SAFE_DIRECTIVES = { "private", "no-store", "no-cache" }

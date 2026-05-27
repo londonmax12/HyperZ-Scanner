@@ -13,6 +13,7 @@ local check = {
                 .. "Most public CDNs (jsDelivr, unpkg, cdnjs) publish SRI hashes alongside their URLs; "
                 .. "for self-hosted assets generate one with `openssl dgst -sha384 -binary <file> | openssl base64 -A`. "
                 .. "Alternatively, host the file from the same origin so the integrity question collapses to TLS.",
+  tier        = "passive",
 }
 
 local LINK_RELS = {

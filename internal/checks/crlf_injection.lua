@@ -18,6 +18,7 @@ local check = {
   remediation = "Reject or strip CR (\\r) and LF (\\n) bytes from any value that flows into a response header (Location, Set-Cookie, custom headers). "
                 .. "Prefer the framework's typed setters that perform this validation automatically rather than concatenating raw strings into the header stream. "
                 .. "At the edge, configure the reverse proxy / WAF to drop responses whose header section contains unexpected line terminators.",
+  consumes    = {"page", "param"},
 }
 
 local CANARY_HEADER = "X-Hyperz-CRLF"

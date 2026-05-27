@@ -25,6 +25,7 @@ local check = {
   cwe         = "CWE-200",
   owasp       = "A05:2021 Security Misconfiguration",
   remediation = "Remove /CHANGELOG.txt from the document root, or deny it at the web server (nginx: location = /CHANGELOG.txt { deny all; }) or CDN. Drupal 8+ no longer ships the file by default; legacy Drupal 7 deployments should clean it up as part of hardening.",
+  tier        = "passive",
   applies_to  = { cms = {"drupal"} },
 }
 

@@ -19,6 +19,7 @@ local check = {
                 .. "(filepath.Clean + prefix check, or chroot-equivalent containment). Never pass raw user input to "
                 .. "os.Open / fs.ReadFile - even after a regex filter, encoded variants (`..%2f`, `....//`) bypass naive "
                 .. "defenses. Prefer opaque IDs that map to allowlisted filenames server-side.",
+  consumes    = {"page", "param"},
 }
 
 local BODY_CAP = 32 * 1024

@@ -21,6 +21,7 @@ local check = {
   scope = "host",
   cwe   = "CWE-1104",
   owasp = "A05:2021 Security Misconfiguration",
+  tier  = "passive",
 }
 
 -- Generic suffixes appended to the per-provider guidance prefix the

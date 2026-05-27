@@ -18,6 +18,7 @@ local check = {
                 .. "Go's exec.Command(name, args...), Python's subprocess with shell=False) so arguments are passed as "
                 .. "separate elements rather than concatenated into a shell-parsed string. When a shell is unavoidable, "
                 .. "strictly allowlist the permitted argument shape - blocklists of metacharacters are routinely bypassed.",
+  consumes    = {"page", "param"},
 }
 
 local BODY_CAP = 4 * 1024

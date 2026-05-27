@@ -16,6 +16,7 @@ local check = {
   remediation = "Use parameterized queries / prepared statements; time-based blind SQLi remains exploitable "
                 .. "even when the response body never reflects database content. Disabling SLEEP / pg_sleep / WAITFOR via "
                 .. "the DB user's privileges narrows the attack surface but is not a replacement for parameterized queries.",
+  consumes    = {"page", "param"},
 }
 
 local BODY_CAP = 4 * 1024

@@ -8,6 +8,7 @@ local check = {
   name  = "js-libs-known-vuln",
   level = "passive",
   scope = "host",
+  tier  = "fingerprint",
 }
 
 function check.run(ctx)

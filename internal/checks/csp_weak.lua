@@ -16,6 +16,7 @@ local check = {
   remediation = "Aim for a strict, nonce-based policy: default-src 'none'; script-src 'nonce-{random}' 'strict-dynamic'; style-src 'nonce-{random}'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'. "
                 .. "Drop 'unsafe-inline' and 'unsafe-eval' from script-src; refactor inline handlers and string-eval call sites instead of allowlisting them. "
                 .. "For incremental rollout, deploy the strict policy via Content-Security-Policy-Report-Only first, monitor violation reports, and switch to enforcement once clean.",
+  tier        = "passive",
 }
 
 local SEVERITY_RANK = { info = 0, low = 1, medium = 2, high = 3, critical = 4 }

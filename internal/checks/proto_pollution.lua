@@ -33,6 +33,8 @@ local check = {
                 .. "untrusted payloads; use schema-validated DTOs instead. As a defense in depth, freeze "
                 .. "`Object.prototype` at process start with `Object.freeze(Object.prototype)` so even a missed "
                 .. "sanitization step cannot mutate the shared prototype.",
+  tier     = "active",
+  consumes = {"page", "param"},
   pollute = true,
 }
 

@@ -26,6 +26,7 @@ local check = {
   remediation = "Validate and restrict the URL parameter to a strict allowlist of domains/hosts. "
                 .. "Disable access to private/internal IP ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, ::1). "
                 .. "Use a URL parsing library that properly validates scheme and host. Never fetch arbitrary user-supplied URLs.",
+  consumes    = {"page", "param"},
 }
 
 local function probe_inband(ctx, target, sink)

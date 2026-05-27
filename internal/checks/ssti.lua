@@ -23,6 +23,7 @@ local check = {
   remediation = "Never concatenate user input into template source code. Render user input as template "
                 .. "variables or data objects instead. Use template engines with sandboxing when user-controlled templates "
                 .. "are a product requirement.",
+  consumes    = {"page", "param"},
 }
 
 local BODY_CAP = 32 * 1024

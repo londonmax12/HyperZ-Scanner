@@ -19,6 +19,7 @@ local check = {
                 .. "Use absolute URLs from configuration (not derived from the Host header) for sensitive operations like password resets. "
                 .. "Implement cache-busting strategies per Host header variant, or use Host-independent cache keys. "
                 .. "Use HTTP/2 or enforce Host header validation at the proxy layer.",
+  tier        = "active",
 }
 
 local CANARY    = "evil.example"

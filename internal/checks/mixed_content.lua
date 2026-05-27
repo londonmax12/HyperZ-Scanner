@@ -11,6 +11,7 @@ local check = {
   cwe         = "CWE-319",
   owasp       = "A02:2021 Cryptographic Failures",
   remediation = "Serve the referenced resource over HTTPS, host it locally on the same origin, or remove the reference.",
+  tier        = "passive",
 }
 
 -- Per tag: { attribute_carrying_the_url, is_active }. <a href> is

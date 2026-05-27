@@ -21,6 +21,8 @@ type (
 	OOBCheck      = core.OOBCheck
 	TwoPhaseCheck = core.TwoPhaseCheck
 	Budgeted      = core.Budgeted
+	Targeted      = core.Targeted
+	Tier          = core.Tier
 )
 
 const (
@@ -37,6 +39,11 @@ const (
 	ScopeHost  = core.ScopeHost
 	ScopePage  = core.ScopePage
 	ScopeParam = core.ScopeParam
+
+	TierFingerprint = core.TierFingerprint
+	TierPassive     = core.TierPassive
+	TierDiscovery   = core.TierDiscovery
+	TierActive      = core.TierActive
 
 	DefaultBudget = core.DefaultBudget
 )

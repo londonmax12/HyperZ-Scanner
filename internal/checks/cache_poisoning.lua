@@ -22,6 +22,7 @@ local check = {
   remediation = "Add the header to the cache key (Vary or the CDN's surrogate-key config) so a poisoned response can't be served back to other users. "
                 .. "Better: stop reflecting reverse-proxy hints into generated URLs - derive absolute URLs from configuration, not from request headers. "
                 .. "For X-Original-URL / X-Rewrite-URL specifically, ignore the header at the application layer and rely solely on the routed path.",
+  tier        = "active",
 }
 
 local BODY_CAP = 16 * 1024

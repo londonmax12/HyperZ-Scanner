@@ -37,6 +37,7 @@ local check = {
   cwe         = "CWE-200",
   owasp       = "A05:2021 Security Misconfiguration",
   remediation = "Disable /xmlrpc.php at the web server or via a security plugin (e.g. WordPress filter `xmlrpc_enabled = false` or a server-level deny). If XML-RPC is required for a specific integration, restrict it to the integration's source IPs. Even when kept, disable pingback.ping (which is the SSRF / DDoS amplification vector) via the `xmlrpc_methods` filter.",
+  tier        = "passive",
   applies_to  = { cms = {"wordpress"} },
 }
 

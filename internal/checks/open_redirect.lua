@@ -15,6 +15,7 @@ local check = {
   remediation = "Validate the redirect target against an allowlist of trusted hosts "
                 .. "(or restrict to same-origin paths). Never use unvalidated user input "
                 .. "as a Location value; map opaque tokens to known destinations instead.",
+  consumes    = {"page", "param"},
 }
 
 -- RFC 2606 .example so the host is guaranteed unregistered. The

@@ -14,6 +14,7 @@ local check = {
   scope       = "page",
   cwe         = "CWE-319",
   owasp       = "A02:2021 Cryptographic Failures",
+  tier        = "passive",
 }
 
 local function format_inputs(inputs)
