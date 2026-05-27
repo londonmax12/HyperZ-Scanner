@@ -1,0 +1,11 @@
+# Scan profile for the vuln-ws integration container.
+# See vuln-static/hyperz.yaml for the enable-vs-assertion contract
+# and the ${ORIGIN_HTTP} placeholder convention.
+mode: default
+
+url:
+  - "${ORIGIN_HTTP}/"
+
+checks:
+  enable:
+    - ws-audit

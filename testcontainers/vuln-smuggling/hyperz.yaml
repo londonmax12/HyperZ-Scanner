@@ -1,0 +1,12 @@
+# Scan profile for the vuln-smuggling integration container.
+# See vuln-static/hyperz.yaml for the enable-vs-assertion contract
+# and the ${ORIGIN_HTTP} placeholder convention.
+mode: aggressive
+
+url:
+  - "${ORIGIN_HTTP}/"
+
+checks:
+  pollute: true
+  enable:
+    - request-smuggling

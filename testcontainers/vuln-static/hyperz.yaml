@@ -1,0 +1,51 @@
+# Scan profile for the vuln-static integration container.
+#
+# The list under checks.enable is BOTH the run-time allowlist (the
+# scanner only fires these checks) AND the assertion contract the Go
+# test enforces (every name here must produce at least one finding
+# against this container). Edit them as a pair.
+#
+# ${ORIGIN_HTTP} / ${ORIGIN_HTTPS} are placeholders the harness
+# substitutes with the running container's host:port before passing
+# this file to `hyperz scan --config`. Anything outside these markers
+# is plain hyperz config - the materialized file goes straight through
+# the strict YAML decoder.
+mode: default
+crawl:
+  enabled: true
+
+url:
+  - "${ORIGIN_HTTPS}/"
+  - "${ORIGIN_HTTP}/openapi.json"
+  - "${ORIGIN_HTTP}/.well-known/oauth-authorization-server"
+  - "${ORIGIN_HTTP}/api/profile"
+  - "${ORIGIN_HTTP}/api/reflect"
+  - "${ORIGIN_HTTP}/jsonp"
+
+checks:
+  enable:
+    # passive header surface
+    - security-headers
+    - cookie-attributes
+    - cache-control-sensitive
+    - csp-weak
+    - hsts-weak
+    - cross-origin-isolation
+    - form-autocomplete
+    - form-action-insecure
+    - cors-config
+    - server-leak
+    - secrets-in-body
+    - oauth-discovery
+    - tls-audit
+    - mixed-content
+    - js-libs-known-vuln
+    - sri-missing
+    - source-map-exposure
+    - target-blank-noopener
+    # passive metadata
+    - openapi-audit
+    # default-level active probes hitting the same image
+    - cors-reflection
+    - csp-bypass
+    - content-discovery

@@ -1,0 +1,35 @@
+# Scan profile for the vuln-app integration container.
+# See vuln-static/hyperz.yaml for the enable-vs-assertion contract
+# and the ${ORIGIN_HTTP} placeholder convention.
+mode: aggressive
+crawl:
+  enabled: true
+
+url:
+  - "${ORIGIN_HTTP}/"
+
+checks:
+  pollute: true
+  enable:
+    - open-redirect
+    - host-header-injection
+    - cache-poisoning
+    - crlf-injection
+    - ssrf
+    - reflected-xss
+    - sqli-error
+    - sqli-boolean
+    - sqli-time
+    - nosqli
+    - ldapi
+    - path-traversal
+    - cmd-injection
+    - cmd-injection-blind
+    - insecure-deserialization
+    - xxe
+    - ssti
+    - idor
+    - stored-xss
+    - jwt-vulns
+    - graphql-audit
+    - sse-audit
