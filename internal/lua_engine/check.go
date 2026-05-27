@@ -12,6 +12,7 @@ import (
 	lua "github.com/yuin/gopher-lua"
 	luaparse "github.com/yuin/gopher-lua/parse"
 
+	"github.com/londonmax12/hyperz/internal/fingerprint"
 	"github.com/londonmax12/hyperz/internal/httpclient"
 	"github.com/londonmax12/hyperz/internal/page"
 	"github.com/londonmax12/hyperz/internal/scope"
@@ -44,6 +45,22 @@ type LuaCheck struct {
 	budget       time.Duration
 	isTwoPhase   bool
 	pollute      bool
+
+	// appliesTo is the parsed `applies_to` table. An empty spec (no
+	// declared constraints) is permissive: the check runs against every
+	// stack, matching the default for checks that omit the field. When
+	// at least one allow-list is populated, the check is StackGated
+	// and the scanner skips dispatch on non-matching hosts.
+	appliesTo fingerprint.AppliesSpec
+
+	// patchedIn is the parsed `patched_in` table mapping lowercased
+	// stack field names to version strings. It is metadata, not a gate:
+	// the check still runs regardless of banner version (banners are
+	// unreliable and a trip is the strongest signal we have). When the
+	// check fires, Run cross-references PatchedIn against the live
+	// Stack and appends info-level "version inferred" / "patched but
+	// fired" observations as additional findings.
+	patchedIn fingerprint.PatchedIn
 
 	// settings is the per-check config bag the operator supplied
 	// via the YAML config's `checks.settings[<name>]` block. The
@@ -126,6 +143,8 @@ func Load(name string, src []byte) (*LuaCheck, error) {
 		budget:       meta.budget,
 		isTwoPhase:   meta.twoPhase,
 		pollute:      meta.pollute,
+		appliesTo:    meta.appliesTo,
+		patchedIn:    meta.patchedIn,
 		proto:        proto,
 		source:       name,
 	}
@@ -161,6 +180,8 @@ type checkMeta struct {
 	budget      time.Duration
 	twoPhase    bool
 	pollute     bool
+	appliesTo   fingerprint.AppliesSpec
+	patchedIn   fingerprint.PatchedIn
 }
 
 func readCheckMeta(t *lua.LTable) (checkMeta, error) {
@@ -217,7 +238,142 @@ func readCheckMeta(t *lua.LTable) (checkMeta, error) {
 	if v, ok := t.RawGetString("pollute").(lua.LBool); ok {
 		m.pollute = bool(v)
 	}
+
+	// applies_to gates vendor-specific checks to hosts whose detected
+	// fingerprint matches the declared spec. Empty / missing field
+	// leaves the check stack-agnostic (the default). See
+	// fingerprint.AppliesSpec for the semantic contract.
+	if at := t.RawGetString("applies_to"); at != lua.LNil {
+		atTbl, ok := at.(*lua.LTable)
+		if !ok {
+			return m, fmt.Errorf("%s: applies_to must be a table, got %s", m.name, at.Type())
+		}
+		spec, err := parseAppliesTo(atTbl)
+		if err != nil {
+			return m, fmt.Errorf("%s: %w", m.name, err)
+		}
+		m.appliesTo = spec
+	}
+
+	// patched_in is metadata for derived version-inference
+	// observations the engine emits when this check fires. Keys are
+	// lowercased stack field names (cms, framework, server, ...);
+	// values are the version at which the upstream vendor patched the
+	// underlying issue. See fingerprint.PatchedIn.
+	if pi := t.RawGetString("patched_in"); pi != lua.LNil {
+		piTbl, ok := pi.(*lua.LTable)
+		if !ok {
+			return m, fmt.Errorf("%s: patched_in must be a table, got %s", m.name, pi.Type())
+		}
+		pin, err := parsePatchedIn(piTbl)
+		if err != nil {
+			return m, fmt.Errorf("%s: %w", m.name, err)
+		}
+		m.patchedIn = pin
+	}
 	return m, nil
+}
+
+// parseAppliesTo reads an applies_to sub-table:
+//
+//	applies_to = { cms = {"wordpress"}, server = {"nginx", "apache"} }
+//
+// Per-field values may be a single string or an array-of-strings; the
+// single-string form is sugar for a one-element array, common for
+// vendor checks that name exactly one CMS or framework. Unknown field
+// names are an error: a typo (e.g. "stack" instead of "framework")
+// would otherwise silently disable the gate.
+func parseAppliesTo(t *lua.LTable) (fingerprint.AppliesSpec, error) {
+	var spec fingerprint.AppliesSpec
+	var firstErr error
+	t.ForEach(func(k, v lua.LValue) {
+		if firstErr != nil {
+			return
+		}
+		keyV, ok := k.(lua.LString)
+		if !ok {
+			firstErr = fmt.Errorf("applies_to keys must be strings, got %s", k.Type())
+			return
+		}
+		key := strings.ToLower(string(keyV))
+		var values []string
+		switch vv := v.(type) {
+		case lua.LString:
+			values = []string{string(vv)}
+		case *lua.LTable:
+			n := vv.Len()
+			for i := 1; i <= n; i++ {
+				if s := lvalString(vv.RawGetInt(i)); s != "" {
+					values = append(values, s)
+				}
+			}
+		default:
+			firstErr = fmt.Errorf("applies_to.%s must be a string or table of strings, got %s",
+				key, v.Type())
+			return
+		}
+		switch key {
+		case "server":
+			spec.Server = values
+		case "language":
+			spec.Language = values
+		case "framework":
+			spec.Framework = values
+		case "cms":
+			spec.CMS = values
+		case "cdn":
+			spec.CDN = values
+		case "waf":
+			spec.WAF = values
+		default:
+			firstErr = fmt.Errorf("applies_to has unknown field %q (want server, language, framework, cms, cdn, or waf)", key)
+		}
+	})
+	return spec, firstErr
+}
+
+// parsePatchedIn reads a patched_in sub-table:
+//
+//	patched_in = { cms = "6.2", framework = "4.18.0" }
+//
+// Values must be non-empty strings; the version syntax itself is
+// validated lazily at finding-emit time via fingerprint.Stack's
+// CompareVersion (loose parse: leading digits per segment). Unknown
+// field names are an error for the same reason as applies_to - a typo
+// would silently drop the inference signal.
+func parsePatchedIn(t *lua.LTable) (fingerprint.PatchedIn, error) {
+	out := fingerprint.PatchedIn{}
+	var firstErr error
+	t.ForEach(func(k, v lua.LValue) {
+		if firstErr != nil {
+			return
+		}
+		keyV, ok := k.(lua.LString)
+		if !ok {
+			firstErr = fmt.Errorf("patched_in keys must be strings, got %s", k.Type())
+			return
+		}
+		key := strings.ToLower(string(keyV))
+		switch key {
+		case "server", "language", "framework", "cms", "cdn", "waf":
+		default:
+			firstErr = fmt.Errorf("patched_in has unknown field %q (want server, language, framework, cms, cdn, or waf)", key)
+			return
+		}
+		val := lvalString(v)
+		if val == "" {
+			firstErr = fmt.Errorf("patched_in.%s must be a non-empty version string", key)
+			return
+		}
+		out[key] = val
+	})
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
 }
 
 // Pollute reports whether the module declared `pollute = true`. The
@@ -319,6 +475,14 @@ func (c *LuaCheck) Level() Level { return c.level }
 // the field.
 func (c *LuaCheck) Budget() time.Duration { return c.budget }
 
+// AppliesTo satisfies fingerprint.StackGated. Returns true when the
+// check's declared `applies_to` spec matches stack, or unconditionally
+// when no spec was declared (the empty spec is permissive). Checks
+// without the field are stack-agnostic and run against every host.
+func (c *LuaCheck) AppliesTo(stack *fingerprint.Stack) bool {
+	return c.appliesTo.Matches(stack)
+}
+
 // Run executes check.run(ctx) inside a pooled VM.
 //
 // One VM = one goroutine: gopher-lua LStates carry mutable globals and
@@ -389,7 +553,81 @@ func (c *LuaCheck) Run(ctx context.Context, client *httpclient.Client, sc *scope
 	if !ok {
 		return nil, fmt.Errorf("%s: run() must return a table of findings (got %s)", c.name, findV.Type())
 	}
-	return c.marshalFindings(tbl, envCtx)
+	marshalled, marshalErr := c.marshalFindings(tbl, envCtx)
+	if marshalErr != nil {
+		return nil, marshalErr
+	}
+	return c.applyPatchedInInference(ctx, marshalled), nil
+}
+
+// applyPatchedInInference cross-references the check's patched_in
+// metadata against the stack attached to ctx and appends derived
+// info-level observations for each (field, version) pair that
+// warrants one. Returns findings unchanged when the check declared no
+// patched_in, when no source findings fired (nothing to be inferred
+// from), or when no stack is attached.
+//
+// Derived observations dedupe at host scope per field, so a 50-page
+// crawl on a vulnerable WordPress site produces one "version inferred"
+// observation per patched_in field, not 50. The dedupe key folds the
+// emitting check name so two distinct vendor checks both declaring
+// patched_in for the same field produce two independent observations
+// (each with its own evidence chain) rather than silently collapsing.
+func (c *LuaCheck) applyPatchedInInference(ctx context.Context, findings []Finding) []Finding {
+	if len(findings) == 0 || len(c.patchedIn) == 0 {
+		return findings
+	}
+	stack := StackFrom(ctx)
+	obs := c.patchedIn.Infer(stack)
+	if len(obs) == 0 {
+		return findings
+	}
+	// The source row drives target / URL on the derived observation;
+	// any of the firing findings works because the inference is
+	// host-scoped, but using the first preserves a recognizable URL
+	// in reports.
+	src := findings[0]
+	out := make([]Finding, len(findings), len(findings)+len(obs))
+	copy(out, findings)
+	for _, o := range obs {
+		out = append(out, c.buildInferenceFinding(src, o))
+	}
+	return out
+}
+
+// buildInferenceFinding renders one fingerprint.VersionInference
+// observation as a Finding. The user-visible strings live here in the
+// engine, not in the check's .lua source - the check declares
+// patched_in as a structured fact; the engine owns rendering. Info
+// severity for both kinds: the source finding already carries the
+// vuln's actual severity, the derived observation only adds version
+// context.
+func (c *LuaCheck) buildInferenceFinding(src Finding, o fingerprint.VersionInference) Finding {
+	var title, detail string
+	switch o.Kind {
+	case "inferred":
+		title = fmt.Sprintf("%s version inferred below %s", o.DetectedName, o.PatchedVersion)
+		detail = fmt.Sprintf(
+			"Vendor-specific check %q fired against this host. The vendor patched the underlying issue in %s %s; the host's response banner did not advertise a %s version, so the deployed build is inferred to be older than %s.",
+			c.name, o.DetectedName, o.PatchedVersion, o.DetectedName, o.PatchedVersion)
+	case "patched_but_fired":
+		title = fmt.Sprintf("%s reports version %s but vendor check fired anyway", o.DetectedName, o.BannerVersion)
+		detail = fmt.Sprintf(
+			"Vendor-specific check %q fired against this host. The vendor patched the underlying issue in %s %s, yet the host's response banner advertises %s %s. Either the patch was regressed in this deployment, the patch is partial, or the version banner is spoofed.",
+			c.name, o.DetectedName, o.PatchedVersion, o.DetectedName, o.BannerVersion)
+	}
+	return Finding{
+		Check:       c.name,
+		Target:      src.Target,
+		URL:         src.URL,
+		Severity:    SeverityInfo,
+		Title:       title,
+		Detail:      detail,
+		CWE:         "CWE-1104",
+		OWASP:       "A06:2021 Vulnerable and Outdated Components",
+		Remediation: "Upgrade " + o.DetectedName + " to " + o.PatchedVersion + " or later, then re-scan to confirm the source finding clears.",
+		DedupeKey:   MakeKey(c.name, ScopeHost, src.URL, "patched_in", o.Field, o.Kind),
+	}
 }
 
 // borrow takes a VM out of the pool (or builds a fresh one), running
