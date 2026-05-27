@@ -88,6 +88,7 @@ type staticHelpers struct {
 	openapi   *lua.LTable
 	deserial  *lua.LTable
 	discovery *lua.LTable
+	host      *lua.LTable
 	xxe       *lua.LTable
 	browser   *lua.LTable
 	tls       *lua.LTable

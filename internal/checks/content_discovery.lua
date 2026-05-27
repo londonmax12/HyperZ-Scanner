@@ -2,7 +2,7 @@
 -- against the target host. The wordlist lives behind
 -- ctx.discovery.entries so catalog edits land once.
 --
--- Per-host once: ctx.discovery.claim_host enforces a single sweep per
+-- Per-host once: ctx.host.claim_once enforces a single sweep per
 -- (scheme://host, check) tuple regardless of how many pages on this
 -- host the crawler hands the check.
 --
@@ -229,7 +229,7 @@ function check.run(ctx)
   if perr or u == nil or u.scheme == "" or u.host == "" then return nil end
   if not ctx.scope:allows(ctx.page.url) then return nil end
   local host_root = u.scheme .. "://" .. u.host
-  if not ctx.discovery.claim_host(host_root) then return nil end
+  if not ctx.host.claim_once(host_root) then return nil end
 
   local baseline, base_err = baseline_for_host(ctx, host_root)
   if base_err then return nil, "content-discovery baseline: " .. base_err end

@@ -1,8 +1,6 @@
 package lua_engine
 
 import (
-	"sync"
-
 	lua "github.com/yuin/gopher-lua"
 )
 
@@ -50,11 +48,8 @@ import (
 //	ctx.discovery.body_cap() -> int (=16 KiB)
 //	  The per-probe body-read cap.
 //
-//	ctx.discovery.claim_host(host_root) -> bool
-//	  Atomically marks host_root as swept by this LuaCheck instance
-//	  and reports whether this caller won the race. The claim state
-//	  lives on the LuaCheck so a scan that crawls many pages on one
-//	  host triggers the sweep exactly once.
+// Per-host once-fire is provided by ctx.host.claim_once in api_host.go;
+// content-discovery uses it the same way any host-scoped check does.
 func buildDiscoveryTable(L *lua.LState) *lua.LTable {
 	t := L.NewTable()
 	t.RawSetString("entries", L.NewFunction(discoveryEntries))
@@ -66,23 +61,7 @@ func buildDiscoveryTable(L *lua.LState) *lua.LTable {
 	t.RawSetString("canary_path", L.NewFunction(discoveryCanaryPath))
 	t.RawSetString("baseline_probes", L.NewFunction(discoveryBaselineProbes))
 	t.RawSetString("body_cap", L.NewFunction(discoveryBodyCap))
-	t.RawSetString("claim_host", L.NewFunction(discoveryClaimHost))
 	return t
-}
-
-// discoveryClaimsKey identifies the per-LuaCheck slot for the host-
-// claim set. Unique zero-size type so AuxOrCreate's key equality
-// can't collide with another helper's slot.
-type discoveryClaimsKey struct{}
-
-// discoveryClaims holds the deduplicated set of host roots this
-// LuaCheck instance has already swept. Mirrors the sync.Mutex-guarded
-// map on the Go *ContentDiscovery receiver: the sweep fires exactly
-// once per (scheme://host, LuaCheck) tuple regardless of how many
-// pages the crawler hands the check.
-type discoveryClaims struct {
-	mu  sync.Mutex
-	set map[string]struct{}
 }
 
 // discoveryEntries reads catalogue + aggressive + hostname from Lua
@@ -206,26 +185,3 @@ func discoveryBodyCap(L *lua.LState) int {
 	return 1
 }
 
-// discoveryClaimHost claims host_root for this LuaCheck instance and
-// returns true exactly once per (host_root, check) tuple. The state
-// lives on the LuaCheck (AuxOrCreate) so the lifetime mirrors the
-// receiver-bound visited map on the Go *ContentDiscovery.
-func discoveryClaimHost(L *lua.LState) int {
-	env := currentEnv(L)
-	if env == nil {
-		L.RaiseError("ctx.discovery.claim_host called outside a check run")
-	}
-	hostRoot := requireString(L, 1)
-	claims := env.check.AuxOrCreate(discoveryClaimsKey{}, func() any {
-		return &discoveryClaims{set: map[string]struct{}{}}
-	}).(*discoveryClaims)
-	claims.mu.Lock()
-	defer claims.mu.Unlock()
-	if _, ok := claims.set[hostRoot]; ok {
-		L.Push(lua.LBool(false))
-		return 1
-	}
-	claims.set[hostRoot] = struct{}{}
-	L.Push(lua.LBool(true))
-	return 1
-}

@@ -36,6 +36,7 @@ func bindHyperzAPI(L *lua.LState) {
 		openapi:   buildOpenAPITable(L),
 		deserial:  buildDeserialTable(L),
 		discovery: buildDiscoveryTable(L),
+		host:      buildHostTable(L),
 		xxe:       buildXXETable(L),
 		browser:   buildBrowserTable(L),
 		tls:       buildTLSTable(L),
