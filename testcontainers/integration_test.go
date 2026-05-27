@@ -2,15 +2,28 @@
 
 // Integration tests that exercise every check the scanner ships
 // against a purpose-built vulnerable container. Each Test* function
-// owns one container and a contract: the set of check names it MUST
-// see in the JSON output. Adding a new check to the catalog means
-// either (a) extending one of the existing test contracts to assert
-// it fires here too, or (b) adding a new container + test.
+// owns one container and delegates the run profile (mode, crawl,
+// pollute, seed URLs, the exact checks to run) to a sibling
+// testcontainers/<dir>/hyperz.yaml. The same YAML's checks.enable
+// list is the assertion contract: every check named there must fire
+// against this container.
+//
+// Adding a new check to the catalog means either (a) extending an
+// existing container's hyperz.yaml so the check appears in both the
+// enable list AND the assertion, or (b) adding a new container plus
+// its own YAML + test stub.
 //
 // Gated behind `-tags integration` so a plain `go test ./...` stays
 // fast and Docker-free. Run via:
 //
 //	go test -tags integration -timeout 15m ./testcontainers/...
+//
+// The harness lives inside the main module and invokes the scanner
+// in-process through internal/cli.Run rather than fork/exec'ing a
+// freshly-built hyperz.exe. See testcontainers/harness.go for the
+// rationale: Windows Smart App Control blocks the unsigned scanner
+// binary by content hash regardless of where it's built, so any
+// subprocess-based harness is dead on arrival on SAC-enabled hosts.
 //
 // Requires a reachable Docker daemon. Each test builds its image
 // lazily; subsequent runs hit the layer cache and complete quickly.
@@ -20,62 +33,22 @@ import "testing"
 
 // TestVulnStatic covers the passive headers / HTML / TLS / JS / CORS
 // / discovery / OAuth surface plus the CORS reflection and CSP
-// bypass active probes. Crawl + default level pull the linked URLs
-// into the scan automatically.
+// bypass active probes. The HTTPS seed lives in the YAML; the
+// harness pulls the container's CA out so the hyperz subprocess can
+// verify the self-signed server cert.
 func TestVulnStatic(t *testing.T) {
 	tgt := startTarget(t, targetSpec{
 		dir:         "vuln-static",
 		exposedPort: 80,
 		httpsPort:   443,
 	})
-
-	httpsURL := tgt.HTTPSURL("/")
-	if httpsURL == "" {
+	if tgt.HTTPSURL("") == "" {
 		t.Fatalf("vuln-static did not expose its HTTPS port")
 	}
-
-	// Pull the container's CA cert out so the hyperz subprocess can
-	// verify the self-signed server cert without an --insecure flag
-	// the scanner doesn't ship.
 	caPath := extractCAFromContainer(t, tgt.container, "/export/ca.crt")
-
-	got := runScanWith(t, scanOpts{CAFile: caPath}, httpsURL,
-		"--url", tgt.URL("/openapi.json"),
-		"--url", tgt.URL("/.well-known/oauth-authorization-server"),
-		"--url", tgt.URL("/api/profile"),
-		"--url", tgt.URL("/api/reflect"),
-		"--url", tgt.URL("/jsonp"),
-		"--mode", "default",
-		"--crawl",
-	)
-
-	assertChecksFired(t, got,
-		// passive header surface
-		"security-headers",
-		"cookie-attributes",
-		"cache-control-sensitive",
-		"csp-weak",
-		"hsts-weak",
-		"cross-origin-isolation",
-		"form-autocomplete",
-		"form-action-insecure",
-		"cors-config",
-		"server-leak",
-		"secrets-in-body",
-		"oauth-discovery",
-		"tls-audit",
-		"mixed-content",
-		"js-libs-known-vuln",
-		"sri-missing",
-		"source-map-exposure",
-		"target-blank-noopener",
-		// passive metadata
-		"openapi-audit",
-		// default-level active probes hitting the same image
-		"cors-reflection",
-		"csp-bypass",
-		"content-discovery",
-	)
+	cfgPath, checks := materializeContainerConfig(t, "vuln-static", tgt)
+	got := runScanWith(t, scanOpts{CAFile: caPath}, "--config", cfgPath)
+	assertChecksFired(t, got, checks...)
 }
 
 // TestVulnTakeover isolates subdomain-takeover via the fingerprint-
@@ -86,48 +59,21 @@ func TestVulnTakeover(t *testing.T) {
 		dir:         "vuln-takeover",
 		exposedPort: 80,
 	})
-	got := runScan(t, tgt.URL("/"))
-	assertChecksFired(t, got, "subdomain-takeover")
+	cfgPath, checks := materializeContainerConfig(t, "vuln-takeover", tgt)
+	got := runScan(t, "--config", cfgPath)
+	assertChecksFired(t, got, checks...)
 }
 
 // TestVulnApp covers every active web-app probe in one container.
-// Crawl + default mode + --pollute lights up stored-xss; --mode
-// aggressive lifts the idor sweep.
+// Mode / crawl / pollute / enable all come from vuln-app/hyperz.yaml.
 func TestVulnApp(t *testing.T) {
 	tgt := startTarget(t, targetSpec{
 		dir:         "vuln-app",
 		exposedPort: 8080,
 	})
-	got := runScan(t, tgt.URL("/"),
-		"--crawl",
-		"--mode", "aggressive",
-		"--pollute",
-	)
-
-	assertChecksFired(t, got,
-		"open-redirect",
-		"host-header-injection",
-		"cache-poisoning",
-		"crlf-injection",
-		"ssrf",
-		"reflected-xss",
-		"sqli-error",
-		"sqli-boolean",
-		"sqli-time",
-		"nosqli",
-		"ldapi",
-		"path-traversal",
-		"cmd-injection",
-		"cmd-injection-blind",
-		"insecure-deserialization",
-		"xxe",
-		"ssti",
-		"idor",
-		"stored-xss",
-		"jwt-vulns",
-		"graphql-audit",
-		"sse-audit",
-	)
+	cfgPath, checks := materializeContainerConfig(t, "vuln-app", tgt)
+	got := runScan(t, "--config", cfgPath)
+	assertChecksFired(t, got, checks...)
 }
 
 // TestVulnWS exercises ws-audit against a Node ws server that
@@ -138,10 +84,9 @@ func TestVulnWS(t *testing.T) {
 		exposedPort: 8081,
 		waitLog:     "vuln-ws listening on :8081",
 	})
-	got := runScan(t, tgt.URL("/"),
-		"--mode", "default",
-	)
-	assertChecksFired(t, got, "ws-audit")
+	cfgPath, checks := materializeContainerConfig(t, "vuln-ws", tgt)
+	got := runScan(t, "--config", cfgPath)
+	assertChecksFired(t, got, checks...)
 }
 
 // TestVulnNode covers proto-pollution: a recursive merge that
@@ -153,12 +98,9 @@ func TestVulnNode(t *testing.T) {
 		exposedPort: 8082,
 		waitLog:     "vuln-node listening on :8082",
 	})
-	got := runScan(t, tgt.URL("/"),
-		"--crawl",
-		"--mode", "aggressive",
-		"--pollute",
-	)
-	assertChecksFired(t, got, "proto-pollution")
+	cfgPath, checks := materializeContainerConfig(t, "vuln-node", tgt)
+	got := runScan(t, "--config", cfgPath)
+	assertChecksFired(t, got, checks...)
 }
 
 // TestVulnSmuggling exercises request-smuggling against a CL/TE
@@ -169,25 +111,21 @@ func TestVulnSmuggling(t *testing.T) {
 		dir:         "vuln-smuggling",
 		exposedPort: 80,
 	})
-	got := runScan(t, tgt.URL("/"),
-		"--mode", "aggressive",
-		"--pollute",
-	)
-	assertChecksFired(t, got, "request-smuggling")
+	cfgPath, checks := materializeContainerConfig(t, "vuln-smuggling", tgt)
+	got := runScan(t, "--config", cfgPath)
+	assertChecksFired(t, got, checks...)
 }
 
 // TestVulnRace exercises race-condition against a TOCTOU balance
-// deduction. Single-packet attack on /spend triggers multiple 2xx
-// responses where only one should succeed.
+// deduction. The seed URL (with its ?amount=60 query) lives in the
+// YAML so the test stub stays uniform with every other container.
 func TestVulnRace(t *testing.T) {
 	tgt := startTarget(t, targetSpec{
 		dir:         "vuln-race",
 		exposedPort: 8084,
 		waitLog:     "vuln-race on :8084",
 	})
-	got := runScan(t, tgt.URL("/spend?amount=60"),
-		"--mode", "aggressive",
-		"--pollute",
-	)
-	assertChecksFired(t, got, "race-condition")
+	cfgPath, checks := materializeContainerConfig(t, "vuln-race", tgt)
+	got := runScan(t, "--config", cfgPath)
+	assertChecksFired(t, got, checks...)
 }

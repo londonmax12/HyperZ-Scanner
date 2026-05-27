@@ -1,20 +1,25 @@
 //go:build integration
 
 // Package testcontainers builds vulnerable Docker images on demand,
-// runs the hyperz binary against them, and asserts which checks
-// fired. Each target image lives in its own subdirectory (vuln-app/,
-// vuln-static/, ...) with a Dockerfile + sources; the harness
-// rebuilds them lazily so a sourcechange forces a rebuild on the
-// next test run.
+// runs the hyperz scan in-process against them, and asserts which
+// checks fired. Each target image lives in its own subdirectory
+// (vuln-app/, vuln-static/, ...) with a Dockerfile + sources; the
+// harness rebuilds them lazily so a source change forces a rebuild
+// on the next test run.
 //
-// The harness is intentionally separate from the main scanner module:
-// testcontainers-go pulls in a sprawling dep tree that has no place
-// in the scanner's binary. We invoke hyperz via os/exec to keep that
-// boundary clean and to exercise the same code path operators use.
+// The harness used to be its own Go module that fork/exec'd a
+// freshly-built hyperz binary - the boundary kept testcontainers-go's
+// dep tree out of the scanner's go.mod. That stopped working on
+// Windows once Smart App Control / Application Control started
+// blocking the unsigned scanner binary at process-creation time
+// ("Malicious binary reputation"), so we fold the harness into the
+// main module and call internal/cli.Run directly. Same code path
+// the operator gets via `hyperz scan ...`, just without the
+// fork/exec a hostile App Control policy can veto. The integration
+// build tag still keeps `go test ./...` Docker-free.
 package testcontainers
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -25,13 +30,15 @@ import (
 	"runtime"
 	"sort"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/docker/go-connections/nat"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
+	"gopkg.in/yaml.v3"
+
+	"github.com/londonmax12/hyperz/internal/cli"
 )
 
 // repoRoot resolves to the scanner project root regardless of where
@@ -44,70 +51,6 @@ func repoRoot(t *testing.T) string {
 		t.Fatalf("cannot resolve caller for repo root")
 	}
 	return filepath.Dir(filepath.Dir(here))
-}
-
-// hyperzBinary returns the path to a freshly-built hyperz binary,
-// building it lazily and caching across tests in the same package
-// run. The build output deliberately lives in a package-scoped
-// os.MkdirTemp directory (not t.TempDir, which is reaped after the
-// first test that asked for it) so every later test can reuse the
-// same binary. TestMain removes the dir at the end of the run.
-var (
-	hyperzBinaryOnce sync.Once
-	hyperzBinaryPath string
-	hyperzBinaryDir  string
-	hyperzBinaryErr  error
-)
-
-func hyperzBinary(t *testing.T) string {
-	t.Helper()
-	hyperzBinaryOnce.Do(func() {
-		root := repoRootDir()
-		dir, err := os.MkdirTemp("", "hyperz-build-")
-		if err != nil {
-			hyperzBinaryErr = err
-			return
-		}
-		out := filepath.Join(dir, "hyperz")
-		if runtime.GOOS == "windows" {
-			out += ".exe"
-		}
-		cmd := exec.Command("go", "build", "-o", out, "./cmd/hyperz")
-		cmd.Dir = root
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
-			hyperzBinaryErr = err
-			return
-		}
-		hyperzBinaryDir = dir
-		hyperzBinaryPath = out
-	})
-	if hyperzBinaryErr != nil {
-		t.Fatalf("build hyperz: %v", hyperzBinaryErr)
-	}
-	return hyperzBinaryPath
-}
-
-// repoRootDir resolves the scanner project root without needing a
-// *testing.T - used by code paths that run inside sync.Once or
-// TestMain where no test context is in scope.
-func repoRootDir() string {
-	_, here, _, ok := runtime.Caller(0)
-	if !ok {
-		return "."
-	}
-	return filepath.Dir(filepath.Dir(here))
-}
-
-// TestMain owns the lifecycle of the cached hyperz binary so the
-// build dir survives across tests but doesn't leak past the run.
-func TestMain(m *testing.M) {
-	code := m.Run()
-	if hyperzBinaryDir != "" {
-		_ = os.RemoveAll(hyperzBinaryDir)
-	}
-	os.Exit(code)
 }
 
 // target describes one running vulnerable container the harness owns
@@ -164,10 +107,10 @@ func (t *target) HTTPSURL(path string) string {
 // TCP listen check on exposedPort.
 type targetSpec struct {
 	dir         string
-	exposedPort int     // primary port; mapped and tracked
-	httpsPort   int     // optional second port for TLS
-	waitLog     string  // optional readiness log substring
-	scheme      string  // http or https
+	exposedPort int    // primary port; mapped and tracked
+	httpsPort   int    // optional second port for TLS
+	waitLog     string // optional readiness log substring
+	scheme      string // http or https
 	startupWait time.Duration
 }
 
@@ -197,6 +140,12 @@ func ensureDockerReachable(t *testing.T) {
 
 func startTarget(t *testing.T, spec targetSpec) *target {
 	t.Helper()
+	// progress() bypasses `go test` output capture so the operator
+	// running the suite sees which container is being exercised even
+	// without -v. Anchored here because every test goes through
+	// startTarget; placing it in the per-test stubs would duplicate
+	// the line and let it drift away from the dir name.
+	progress(fmt.Sprintf("testing: %s", spec.dir))
 	ensureDockerReachable(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -219,8 +168,8 @@ func startTarget(t *testing.T, spec targetSpec) *target {
 
 	req := testcontainers.ContainerRequest{
 		FromDockerfile: testcontainers.FromDockerfile{
-			Context:    buildContext,
-			KeepImage:  true,
+			Context:       buildContext,
+			KeepImage:     true,
 			PrintBuildLog: true,
 		},
 		ExposedPorts: exposedSpec,
@@ -288,18 +237,17 @@ type finding struct {
 	Target   string `json:"target"`
 }
 
-// scanOpts overrides the subprocess invocation runScan uses. Set CAFile
-// to make the hyperz process trust a custom CA bundle when scanning
-// HTTPS targets with self-signed certs - threaded into the scanner as
-// --ca-file so the trust is wired into the actual http.Transport
-// (SSL_CERT_FILE is honored only on Unix; the flag works everywhere).
+// scanOpts overrides the per-call scan invocation. Set CAFile to make
+// the in-process scan trust a custom CA bundle when scanning HTTPS
+// targets with self-signed certs - threaded into the scanner as
+// --ca-file so the trust is wired into the actual http.Transport.
 type scanOpts struct {
 	CAFile string
 }
 
 // extractCAFromContainer reads a CA cert out of a running container
 // at the given path and writes it to a fresh temp file. Returns the
-// path, suitable for the hyperz --ca-file flag.
+// path, suitable for the --ca-file flag.
 func extractCAFromContainer(t *testing.T, c testcontainers.Container, srcPath string) string {
 	t.Helper()
 	rc, err := c.CopyFileFromContainer(context.Background(), srcPath)
@@ -320,25 +268,30 @@ func extractCAFromContainer(t *testing.T, c testcontainers.Container, srcPath st
 
 // runScanWith is the env-aware variant of runScan. runScan delegates
 // to it with an empty scanOpts so the simple call site stays terse.
-func runScanWith(t *testing.T, opts scanOpts, url string, extra ...string) []finding {
-	return runScanImpl(t, opts, url, extra...)
+//
+// Callers supply every target-specific arg (--url, --config, --mode,
+// ...) via extra. The harness only injects the scan-machinery flags
+// (format/output/log-level/timeout/rate/burst) that should be uniform
+// across the suite; everything that varies per container lives in
+// the test or in the container's hyperz.yaml.
+func runScanWith(t *testing.T, opts scanOpts, extra ...string) []finding {
+	return runScanImpl(t, opts, extra...)
 }
 
-// runScan invokes the hyperz binary against url with the given extra
-// args (e.g. --mode aggressive --pollute) and returns parsed
-// findings. JSON output goes through a temp file so any human-style
-// progress lines hyperz writes to stdout don't break the parser.
-func runScan(t *testing.T, url string, extra ...string) []finding {
-	return runScanImpl(t, scanOpts{}, url, extra...)
+// runScan invokes the in-process hyperz scan with the given extra
+// args (e.g. --config or --url, plus --mode aggressive --pollute)
+// and returns parsed findings. JSON output goes through a temp file
+// because cli.Run takes ownership of its stdout - the file path
+// matches what an operator would see using -o on the CLI.
+func runScan(t *testing.T, extra ...string) []finding {
+	return runScanImpl(t, scanOpts{}, extra...)
 }
 
-func runScanImpl(t *testing.T, opts scanOpts, url string, extra ...string) []finding {
+func runScanImpl(t *testing.T, opts scanOpts, extra ...string) []finding {
 	t.Helper()
-	bin := hyperzBinary(t)
 	out := filepath.Join(t.TempDir(), "scan.json")
 	args := []string{
 		"scan",
-		"--url", url,
 		"--format", "json",
 		"-o", out,
 		"--log-level", "warn",
@@ -354,19 +307,15 @@ func runScanImpl(t *testing.T, opts scanOpts, url string, extra ...string) []fin
 	}
 	args = append(args, extra...)
 
-	var stdout, stderr bytes.Buffer
-	cmd := exec.Command(bin, args...)
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	t.Logf("running hyperz scan: %s", strings.Join(args, " "))
+	t.Logf("running hyperz scan (in-process): %s", strings.Join(args, " "))
 	scanStart := time.Now()
-	err := cmd.Run()
-	if err != nil {
-		t.Logf("hyperz stdout: %s", stdout.String())
-		t.Logf("hyperz stderr: %s", stderr.String())
-		// Exit code 1 means findings >= --fail-on, which we set to
-		// none so it shouldn't happen; treat any non-zero as fatal.
-		t.Fatalf("hyperz scan: %v", err)
+	// cli.Run is the same entry point cmd/hyperz/main.go drives, so
+	// the test exercises the same orchestration an operator gets.
+	// --fail-on=none above keeps exit 1 (findings-at-threshold) out
+	// of the picture; any non-zero is a tool failure we want to
+	// surface as a test failure.
+	if code := cli.Run(args); code != 0 {
+		t.Fatalf("hyperz scan exited %d", code)
 	}
 	raw, err := os.ReadFile(out)
 	if err != nil {
@@ -380,40 +329,111 @@ func runScanImpl(t *testing.T, opts scanOpts, url string, extra ...string) []fin
 	return r.Findings
 }
 
+// containerConfigPlaceholderHTTP / HTTPS are the textual markers each
+// vuln-*/hyperz.yaml uses in place of the runtime origin. They are
+// substituted by materializeContainerConfig before the file reaches
+// the in-process scan.
+const (
+	containerConfigPlaceholderHTTP  = "${ORIGIN_HTTP}"
+	containerConfigPlaceholderHTTPS = "${ORIGIN_HTTPS}"
+)
+
+// containerConfigView is the slice of hyperz config the harness reads
+// for itself. The check-list is the test's assertion contract; the
+// URL list is parsed only so a test can sanity-log what it is about
+// to scan. Everything else in the file is opaque to the harness and
+// flows through to hyperz unchanged via --config.
+type containerConfigView struct {
+	URL    []string `yaml:"url"`
+	Checks struct {
+		Enable []string `yaml:"enable"`
+	} `yaml:"checks"`
+}
+
+// materializeContainerConfig reads testcontainers/<dir>/hyperz.yaml,
+// substitutes the dynamic-origin placeholders with tgt's running URL,
+// writes the result to t.TempDir(), and returns:
+//
+//   - configPath: the absolute path of the materialized file, ready
+//     to hand to `hyperz scan --config`.
+//   - checks: the parsed checks.enable list, used as the assertion
+//     contract by assertChecksFired so the YAML is the one source of
+//     truth for "what this container exercises".
+//
+// The substitution is plain text replacement (not YAML-aware): every
+// occurrence of ${ORIGIN_HTTP} becomes tgt.URL("") and every
+// ${ORIGIN_HTTPS} becomes tgt.HTTPSURL(""). Tests that do not need
+// the HTTPS placeholder simply omit it; an absent HTTPSURL on a
+// target with no httpsExtra port leaves the placeholder unsubstituted
+// and the strict YAML decoder will reject it, which is the failure
+// shape we want (silently scanning the wrong scheme would be worse).
+func materializeContainerConfig(t *testing.T, dir string, tgt *target) (configPath string, checks []string) {
+	t.Helper()
+	root := repoRoot(t)
+	src := filepath.Join(root, "testcontainers", dir, "hyperz.yaml")
+	raw, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatalf("read %s: %v", src, err)
+	}
+
+	originHTTP := tgt.URL("")
+	originHTTPS := tgt.HTTPSURL("")
+	substituted := strings.ReplaceAll(string(raw), containerConfigPlaceholderHTTP, originHTTP)
+	if originHTTPS != "" {
+		substituted = strings.ReplaceAll(substituted, containerConfigPlaceholderHTTPS, originHTTPS)
+	}
+
+	var view containerConfigView
+	if err := yaml.Unmarshal([]byte(substituted), &view); err != nil {
+		t.Fatalf("parse materialized config (%s): %v\n---\n%s", src, err, substituted)
+	}
+
+	out := filepath.Join(t.TempDir(), "hyperz.yaml")
+	if err := os.WriteFile(out, []byte(substituted), 0o600); err != nil {
+		t.Fatalf("write materialized config: %v", err)
+	}
+	t.Logf("[%s] materialized config -> %s (seeds=%v, enable=%d)",
+		dir, out, view.URL, len(view.Checks.Enable))
+	return out, view.Checks.Enable
+}
+
 // assertChecksFired fails the test when any name in want is missing
-// from the findings set. Reports the missing set + the full set of
-// checks that did fire so debugging is one log line away.
+// from the findings set. Every enabled check is announced via
+// progress() as "<name>: triggered" or "<name>: not triggered" so the
+// operator can watch each check's outcome without -v, and any bonus
+// checks that fired outside the enable list are announced too.
 func assertChecksFired(t *testing.T, got []finding, want ...string) {
 	t.Helper()
-	seen := map[string]bool{}
+	fired := map[string]bool{}
 	for _, f := range got {
-		seen[f.Check] = true
+		fired[f.Check] = true
 	}
-	keys := make([]string, 0, len(seen))
-	for k := range seen {
-		keys = append(keys, k)
+	firedSorted := make([]string, 0, len(fired))
+	for k := range fired {
+		firedSorted = append(firedSorted, k)
 	}
-	sort.Strings(keys)
+	sort.Strings(firedSorted)
 
-	var missing, present []string
+	// Report status in the order the test declared its expectations
+	// (which is the same as the YAML's checks.enable order) so the
+	// terminal output reads top-down without surprises.
+	var missing []string
 	for _, w := range want {
-		if seen[w] {
-			present = append(present, w)
+		if fired[w] {
+			progress(fmt.Sprintf("%s: triggered", w))
 		} else {
+			progress(fmt.Sprintf("%s: not triggered", w))
 			missing = append(missing, w)
 		}
 	}
-	sort.Strings(missing)
-	sort.Strings(present)
-
-	t.Logf("required checks fired (%d/%d): %v", len(present), len(want), present)
-	if extra := diff(keys, want); len(extra) > 0 {
-		t.Logf("bonus checks also fired (not required): %v", extra)
+	for _, extra := range diff(firedSorted, want) {
+		progress(fmt.Sprintf("%s: triggered (bonus, not in enable list)", extra))
 	}
+
 	if len(missing) == 0 {
 		return
 	}
-	t.Fatalf("missing checks: %v\nfired: %v", missing, keys)
+	t.Fatalf("missing checks: %v\nfired: %v", missing, firedSorted)
 }
 
 // diff returns elements present in a but not in b.

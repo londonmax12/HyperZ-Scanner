@@ -8,23 +8,33 @@ expected set of check names appears in the JSON report.
 
 ## Run
 
-Requires Docker and Go 1.22+. The harness is its own Go module, so
-run it from inside this directory (not via `./testcontainers/...`
-from the repo root, which `go test` won't follow across modules):
+Requires Docker and Go 1.22+. From the repo root:
 
 ```bash
-cd testcontainers
-go test -tags integration -v -timeout 20m ./...
+go test -tags integration -v -timeout 20m ./testcontainers/...
 ```
 
 `-v` is recommended so you see per-phase progress: image build, container
-start, hyperz invocation, finding count, and which required checks
-fired. Without `-v`, `go test` buffers all `t.Logf` output until a test
-fails - the suite looks idle even when it's working.
+start, scan invocation, finding count, and which required checks fired.
+Without `-v`, `go test` buffers all `t.Logf` output until a test fails -
+the suite looks idle even when it's working. The `progress()` helper
+in `progress.go` also writes "testing: <dir>" and "<check>:
+triggered/not triggered" lines straight to the terminal so the run is
+observable without `-v` too.
 
-The separate module keeps testcontainers-go's transitive deps out of
-the scanner's `go.mod`. The `integration` build tag keeps
-`go test ./...` in the parent module Docker-free.
+The `integration` build tag keeps `go test ./...` (no tag) Docker-free.
+
+The harness calls the scanner in-process via `internal/cli.Run` rather
+than fork/exec'ing a freshly-built `hyperz` binary. The subprocess
+approach used to live in its own Go module to keep testcontainers-go's
+transitive deps out of the scanner's `go.mod`, but Windows Smart App
+Control routinely flags the unsigned scanner binary with "Malicious
+binary reputation" and blocks every fork/exec on hosts where SAC is
+enabled - making the suite unrunnable. Calling `cli.Run` in-process
+exercises the same orchestration an operator gets via
+`hyperz scan ...` without creating a new process for SAC to veto.
+The build tag still keeps testcontainers-go out of the compiled
+scanner binary; only the integration suite sees it.
 
 ## Coverage map
 
@@ -61,7 +71,7 @@ subdirectory + `Test*` case rather than overloading an existing image.
 and `form-action-insecure` have something to bite on. Self-signed
 certs would fail the scanner's default trust-store check, so the
 image generates a build-time CA and exposes it at `/export/ca.crt`.
-The harness copies it out via `CopyFileFromContainer` and points the
-hyperz subprocess at it with `SSL_CERT_FILE` (the standard Go env
-var). Server cert SANs cover `localhost` + `127.0.0.1`, which are
-the only addresses testcontainers-go ever maps `:443` to.
+The harness copies it out via `CopyFileFromContainer` and threads it
+into the in-process scan as `--ca-file`. Server cert SANs cover
+`localhost` + `127.0.0.1`, which are the only addresses
+testcontainers-go ever maps `:443` to.
