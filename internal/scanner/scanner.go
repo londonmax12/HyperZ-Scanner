@@ -16,6 +16,7 @@ import (
 	"github.com/londonmax12/hyperz/internal/oob"
 	"github.com/londonmax12/hyperz/internal/page"
 	"github.com/londonmax12/hyperz/internal/scope"
+	"github.com/londonmax12/hyperz/internal/target"
 )
 
 // phase2BodyCap bounds the re-fetched body the scanner reads during phase 2.
@@ -182,6 +183,49 @@ func (s *Scanner) ScanAll(ctx context.Context, pages <-chan page.Page, out chan<
 		visited = map[string]struct{}{}
 	}
 
+	// The worklist mediates dispatch: the crawler's pages channel feeds a
+	// single producer goroutine that pushes KindPage targets onto the
+	// queue, and N workers pull targets and call scanOne. PR 1 ships a
+	// single-tier streaming queue so externally observable behavior
+	// matches the pre-worklist channel fanout; tier ordering, per-host
+	// budgets, and discovery emission land in follow-up PRs.
+	//
+	// pageByKey bridges the worklist's target.Target payload back to the
+	// page.Page artifact the crawler captured. The producer stores under
+	// the canonical key before pushing, so a happens-before edge through
+	// the channel send guarantees the worker's load sees the entry. On
+	// push rejection (cancel / scope / budget) the producer deletes the
+	// entry so dropped pushes don't leak map slots for the scan lifetime.
+	queue := newWorklist(s.scope, s.concurrency*2)
+	var pageByKey sync.Map
+
+	go func() {
+		defer queue.Close()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case p, ok := <-pages:
+				if !ok {
+					return
+				}
+				if visited != nil {
+					if key := visitedKey(p.URL); key != "" && s.scopeAllowsURL(key) {
+						visitedMu.Lock()
+						visited[key] = struct{}{}
+						visitedMu.Unlock()
+					}
+				}
+				t := target.Page(p.URL, "crawler")
+				key := t.CanonicalKey()
+				pageByKey.Store(key, p)
+				if !queue.Push(ctx, t) {
+					pageByKey.Delete(key)
+				}
+			}
+		}
+	}()
+
 	var wg sync.WaitGroup
 	for i := 0; i < s.concurrency; i++ {
 		wg.Add(1)
@@ -191,17 +235,21 @@ func (s *Scanner) ScanAll(ctx context.Context, pages <-chan page.Page, out chan<
 				select {
 				case <-ctx.Done():
 					return
-				case p, ok := <-pages:
+				case t, ok := <-queue.Out():
 					if !ok {
 						return
 					}
-					if visited != nil {
-						if key := visitedKey(p.URL); key != "" && s.scopeAllowsURL(key) {
-							visitedMu.Lock()
-							visited[key] = struct{}{}
-							visitedMu.Unlock()
-						}
+					raw, loaded := pageByKey.LoadAndDelete(t.CanonicalKey())
+					if !loaded {
+						// A KindPage target without a bridged page.Page
+						// means a producer dropped the side-map entry
+						// before the worker pulled (cancel race), or a
+						// future-PR discovery emission slipped in
+						// before its bridge was wired. Skip rather
+						// than dispatching with an empty page.
+						continue
 					}
+					p, _ := raw.(page.Page)
 					s.scanOne(ctx, p, out)
 				}
 			}

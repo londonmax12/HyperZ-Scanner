@@ -18,6 +18,7 @@ import (
 	"github.com/londonmax12/hyperz/internal/oob"
 	"github.com/londonmax12/hyperz/internal/page"
 	"github.com/londonmax12/hyperz/internal/scope"
+	"github.com/londonmax12/hyperz/internal/target"
 )
 
 type Severity string
@@ -579,6 +580,72 @@ const DefaultBudget = 60 * time.Second
 // its worker slot for longer before the deadline reclaims it.
 type Budgeted interface {
 	Budget() time.Duration
+}
+
+// Tier classifies a check by where it sits in the worklist dispatch
+// pipeline. Constants are spaced so future intermediate tiers (e.g. a
+// "deferred / end-of-scan" pass that absorbs the legacy TwoPhaseCheck
+// dispatch) can slot in without renumbering.
+//
+// Tiers drain in increasing order: every TierFingerprint check on a
+// host's targets runs before any TierPassive check on the same targets,
+// passive before discovery, discovery before active. A discovery
+// emission re-enters the worklist at the appropriate prefix tier so an
+// endpoint surfaced during active probing still gets fingerprint and
+// passive coverage before active checks fire against it.
+//
+// Checks that do not implement Targeted default to TierActive consuming
+// target.KindPage; that matches the pre-worklist single-tier dispatch
+// behavior and is what every check in the catalog gets until it opts
+// in to Targeted.
+type Tier int
+
+const (
+	TierFingerprint Tier = iota + 1
+	TierPassive
+	TierDiscovery
+	TierActive
+)
+
+func (t Tier) String() string {
+	switch t {
+	case TierFingerprint:
+		return "fingerprint"
+	case TierPassive:
+		return "passive"
+	case TierDiscovery:
+		return "discovery"
+	case TierActive:
+		return "active"
+	default:
+		return fmt.Sprintf("tier(%d)", int(t))
+	}
+}
+
+// Targeted is optionally implemented by checks that want to declare
+// where they sit in the dispatch pipeline and which target.Kind values
+// they consume. Checks that do not implement Targeted are dispatched
+// at TierActive against target.KindPage, matching the pre-worklist
+// behavior.
+//
+// Consumes() returning nil or empty is equivalent to a single
+// target.KindPage entry; the dispatcher treats the empty case as
+// permissive rather than as "consumes nothing".
+type Targeted interface {
+	Tier() Tier
+	Consumes() []target.Kind
+}
+
+// RunResult is the future emission shape of a check: zero or more
+// findings, plus zero or more discoveries to fan back into the
+// worklist. Existing checks continue to satisfy Check via Run() and
+// the dispatcher treats their return value as RunResult{Findings:
+// returned}. RunResult is wired through the worklist when discovery
+// emission lands; PR 1 ships the type so the contract is visible and
+// future-PR consumers do not need to grow the public API.
+type RunResult struct {
+	Findings    []Finding
+	Discoveries []target.Target
 }
 
 type Check interface {
