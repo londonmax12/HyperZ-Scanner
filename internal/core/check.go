@@ -636,18 +636,6 @@ type Targeted interface {
 	Consumes() []target.Kind
 }
 
-// RunResult is the future emission shape of a check: zero or more
-// findings, plus zero or more discoveries to fan back into the
-// worklist. Existing checks continue to satisfy Check via Run() and
-// the dispatcher treats their return value as RunResult{Findings:
-// returned}. RunResult is wired through the worklist when discovery
-// emission lands; PR 1 ships the type so the contract is visible and
-// future-PR consumers do not need to grow the public API.
-type RunResult struct {
-	Findings    []Finding
-	Discoveries []target.Target
-}
-
 type Check interface {
 	Name() string
 	Level() Level
