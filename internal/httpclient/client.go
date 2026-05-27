@@ -15,7 +15,6 @@ import (
 
 type Client struct {
 	http         *http.Client
-	httpNoFollow *http.Client // shares transport/jar/timeout with http; CheckRedirect short-circuits the chain
 	userAgent    string
 	limiter      *HostLimiter
 	budget       *Budget
@@ -134,14 +133,6 @@ func New(cfg Config) *Client {
 			Transport: transport,
 			Jar:       cfg.Jar,
 		},
-		httpNoFollow: &http.Client{
-			Timeout:   cfg.Timeout,
-			Transport: transport,
-			Jar:       cfg.Jar,
-			CheckRedirect: func(*http.Request, []*http.Request) error {
-				return http.ErrUseLastResponse
-			},
-		},
 		userAgent:    cfg.UserAgent,
 		limiter:      cfg.Limiter,
 		budget:       cfg.Budget,
@@ -206,7 +197,7 @@ func ProbeClient(cfg Config) *http.Client {
 // penalize the host limiter, since they say nothing about target pushback.
 // ctx cancellation short-circuits the loop.
 func (c *Client) Do(ctx context.Context, req *http.Request) (*http.Response, error) {
-	return c.doWith(ctx, req, c.http)
+	return c.doWith(ctx, req, c.http.Do)
 }
 
 // DoNoFollow is like Do but returns the first response verbatim instead of
@@ -214,13 +205,49 @@ func (c *Client) Do(ctx context.Context, req *http.Request) (*http.Response, err
 // redirect target - open redirect, SSRF guards, auth-bypass probes - want
 // the original response, not the destination it points at.
 //
+// Dispatches via the underlying Transport.RoundTrip rather than
+// http.Client.Do so a malformed Location header on a 3xx response
+// doesn't fail the request. http.Client.Do parses Location before
+// calling CheckRedirect, so a CheckRedirect=ErrUseLastResponse can't
+// rescue probes whose payload (SSTI <%= %>, CRLF, etc.) reflects into
+// Location unparseable. Cookie jar and middleware/header/auth shims
+// are preserved by routing through doWith with a custom send.
+//
 // All other behavior (UA, extra headers, auth, host rate limiter,
 // retry-on-429/503) is identical to Do.
 func (c *Client) DoNoFollow(ctx context.Context, req *http.Request) (*http.Response, error) {
-	return c.doWith(ctx, req, c.httpNoFollow)
+	return c.doWith(ctx, req, c.sendRoundTrip)
 }
 
-func (c *Client) doWith(ctx context.Context, req *http.Request, h *http.Client) (*http.Response, error) {
+// sendRoundTrip is the no-redirect send for DoNoFollow. It mirrors the
+// jar handling http.Client.Do performs (read jar cookies onto the
+// outgoing request, write Set-Cookie back) but bypasses the redirect
+// loop entirely. Per-request Timeout enforcement is NOT replicated:
+// http.Client.Timeout works by arming a goroutine that cancels the
+// request context, which would need a body-Close-aware wrapper here
+// to avoid aborting reads the caller hasn't finished. Callers that
+// need a per-request deadline pass it via ctx.
+func (c *Client) sendRoundTrip(req *http.Request) (*http.Response, error) {
+	if c.http.Jar != nil {
+		for _, cookie := range c.http.Jar.Cookies(req.URL) {
+			req.AddCookie(cookie)
+		}
+	}
+	var transport http.RoundTripper = http.DefaultTransport
+	if c.http.Transport != nil {
+		transport = c.http.Transport
+	}
+	resp, err := transport.RoundTrip(req)
+	if err != nil {
+		return nil, err
+	}
+	if c.http.Jar != nil && len(resp.Cookies()) > 0 {
+		c.http.Jar.SetCookies(req.URL, resp.Cookies())
+	}
+	return resp, nil
+}
+
+func (c *Client) doWith(ctx context.Context, req *http.Request, send func(*http.Request) (*http.Response, error)) (*http.Response, error) {
 	req = req.WithContext(ctx)
 	if c.userAgent != "" && req.Header.Get("User-Agent") == "" {
 		req.Header.Set("User-Agent", c.userAgent)
@@ -272,7 +299,7 @@ func (c *Client) doWith(ctx context.Context, req *http.Request, h *http.Client) 
 				return nil, werr
 			}
 		}
-		resp, err = h.Do(req)
+		resp, err = send(req)
 		if err != nil {
 			// Transport error (dial, TLS, RST, read timeout, etc.). On
 			// an idempotent request, give it another shot with backoff -
