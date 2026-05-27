@@ -471,6 +471,41 @@ func Discover(ctx context.Context, t target.Target) {
 	}
 }
 
+// targetKey carries the dispatched target.Target through the context
+// the scanner hands to Run. The scanner installs it on every per-check
+// ctx so checks dispatched against non-page Kinds (KindEndpoint with a
+// declared method + content-type, KindParam with a named parameter,
+// KindHost for fingerprint-tier checks) can read the metadata that
+// does not fit into page.Page.
+//
+// Page-Kind checks ignore this almost always; the page.Page they
+// receive already carries what they need. Endpoint and param checks
+// read t.Method / t.ContentType / t.Param via TargetFrom and craft
+// their own probes from those fields - the dispatcher does not fetch
+// non-safe methods on the check's behalf.
+type targetKey struct{}
+
+// WithTarget attaches t to ctx so checks running under ctx can read
+// the original Target metadata via TargetFrom. The scanner sets this
+// once per dispatch; a zero Target is allowed and means "no metadata
+// beyond the page artifact" (the default for crawler-origin
+// KindPage targets).
+func WithTarget(ctx context.Context, t target.Target) context.Context {
+	return context.WithValue(ctx, targetKey{}, t)
+}
+
+// TargetFrom returns the Target attached to ctx, or the zero Target
+// when none was attached. A check that wants to read endpoint /
+// param metadata should consult the zero return as "no information"
+// rather than treating it as a bug; tests that drive a check without
+// the scanner do not always attach a Target.
+func TargetFrom(ctx context.Context) target.Target {
+	if t, ok := ctx.Value(targetKey{}).(target.Target); ok {
+		return t
+	}
+	return target.Target{}
+}
+
 // levelKey carries the active scan level through the context the scanner
 // hands to Run. Checks may consult it to scale how invasive they are - e.g.
 // a check might probe only the high-signal inputs at LevelDefault and fan

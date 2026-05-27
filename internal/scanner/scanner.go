@@ -626,6 +626,7 @@ func (s *Scanner) scanOne(ctx context.Context, t target.Target, p page.Page, que
 			runCtx = core.WithStack(runCtx, stack)
 			runCtx = core.WithOOB(runCtx, s.oobServer)
 			runCtx = core.WithBrowser(runCtx, s.browserPool)
+			runCtx = core.WithTarget(runCtx, t)
 			if s.onError != nil {
 				runCtx = core.WithReporter(runCtx, func(err error) {
 					s.onError(targetURL, c.Name(), err)
@@ -731,41 +732,58 @@ func (s *Scanner) applies(c core.Check, stack *fingerprint.Stack, target string)
 }
 
 // materializePage produces the page.Page artifact a worker dispatches
-// against t. Two code paths:
+// against t. Several code paths:
 //
-//   - Crawler-origin target: the producer stored the captured page.Page
-//     into pageByKey under t.CanonicalKey() before pushing; we
-//     LoadAndDelete it so the entry does not leak past dispatch.
-//   - Discovery-origin KindPage target: no bridge exists in the side
-//     map (the emitting check did not pre-fetch), so we synchronously
-//     GET t.URL via the same fetcher the phase-2 detect pass uses.
-//     Fetch errors are reported through onError and the target is
-//     skipped; the worker should not pin a slot retrying a dead URL.
+//   - Crawler-origin target (any Kind): the producer stored the
+//     captured page.Page into pageByKey under t.CanonicalKey() before
+//     pushing; we LoadAndDelete it so the entry does not leak past
+//     dispatch.
+//   - Discovery-origin KindPage or KindParam target: no bridge exists
+//     in the side map, so we synchronously GET t.URL via the same
+//     fetcher the phase-2 detect pass uses. KindParam consumers read
+//     t.Param / t.ParamLocation via core.TargetFrom(ctx) to scope
+//     their probes to the named input; the fetched page.Page gives
+//     them the host artifact (forms, baseline response) they compare
+//     payloads against. Fetch errors report through onError and the
+//     target is skipped.
+//   - Discovery-origin KindEndpoint target: returns a minimal
+//     page.Page with only URL populated. The worker does NOT issue
+//     the declared method on the check's behalf - the method may be
+//     destructive (POST/PUT/DELETE) and the operator did not
+//     authorize the worker to invoke it. Endpoint-consuming checks
+//     read t.Method, t.ContentType via core.TargetFrom(ctx) and
+//     craft their own probes against the URL.
+//   - KindHost: still dropped; the fingerprint tier consumes hosts
+//     internally and per-Host check semantics need their own design
+//     in a follow-up.
 //
 // Returns (page, true) on success or (zero, false) when no page can
-// be produced. KindEndpoint / KindParam currently fall into the
-// second branch because their fetch shapes (method + content-type +
-// body for endpoints, parent URL + param injection for params) need
-// bridges that future PRs add; today the worker silently drops them.
+// be produced.
 func (s *Scanner) materializePage(ctx context.Context, t target.Target, pageByKey *sync.Map) (page.Page, bool) {
 	if raw, loaded := pageByKey.LoadAndDelete(t.CanonicalKey()); loaded {
 		p, _ := raw.(page.Page)
 		return p, true
 	}
-	if t.Kind != target.KindPage || t.URL == "" {
+	if t.URL == "" {
 		return page.Page{}, false
 	}
-	p, err := s.fetchPhase2(ctx, t.URL)
-	if err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	switch t.Kind {
+	case target.KindPage, target.KindParam:
+		p, err := s.fetchPhase2(ctx, t.URL)
+		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return page.Page{}, false
+			}
+			if s.onError != nil {
+				s.onError(t.URL, "discovery-fetch", err)
+			}
 			return page.Page{}, false
 		}
-		if s.onError != nil {
-			s.onError(t.URL, "discovery-fetch", err)
-		}
-		return page.Page{}, false
+		return p, true
+	case target.KindEndpoint:
+		return page.Page{URL: t.URL}, true
 	}
-	return p, true
+	return page.Page{}, false
 }
 
 // consumesKind reports whether c accepts dispatch against a target of
