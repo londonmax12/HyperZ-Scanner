@@ -428,6 +428,49 @@ func Report(ctx context.Context, err error) {
 	}
 }
 
+// discovererKey carries the active discovery sink through the context the
+// scanner hands to Run. Checks that surface new scan targets (a freshly-
+// found API endpoint, a page the crawler did not visit, a parameter
+// surface inside an already-known URL) call Discover to fan them back
+// into the worklist. Absence means no sink is wired and Discover is a
+// no-op, matching the permissive contract Reporter / OOB / Browser use
+// for optional dependencies.
+type discovererKey struct{}
+
+// Discoverer is the function shape the scanner installs to absorb a
+// check's emitted targets. The scanner-side implementation tags Origin
+// with the emitting check's name, runs the worklist's dedupe / scope /
+// host-budget filter, and otherwise discards quietly. Checks emit
+// liberally; the dispatcher decides what to queue.
+type Discoverer func(t target.Target)
+
+// WithDiscoverer attaches fn to ctx so checks can emit new targets
+// during Run. The scanner installs a per-check Discoverer so the
+// emitter's name can be tagged into Origin before the target reaches
+// the worklist; checks that surface a target from a sub-source
+// (e.g. an OpenAPI document) should leave Origin empty and let the
+// dispatcher fill it in. fn may be nil, in which case Discover is a
+// no-op.
+func WithDiscoverer(ctx context.Context, fn Discoverer) context.Context {
+	if fn == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, discovererKey{}, fn)
+}
+
+// Discover forwards t to the discoverer attached to ctx. Safe to call
+// when no discoverer is attached (no-op) or with a zero Target (the
+// scanner-side discoverer drops empty URLs at the worklist boundary).
+// The dispatcher dedupes by canonical key, enforces scope, applies the
+// per-host budget, and breaks self-loops; checks should not pre-filter
+// their emissions.
+func Discover(ctx context.Context, t target.Target) {
+	fn, _ := ctx.Value(discovererKey{}).(Discoverer)
+	if fn != nil {
+		fn(t)
+	}
+}
+
 // levelKey carries the active scan level through the context the scanner
 // hands to Run. Checks may consult it to scale how invasive they are - e.g.
 // a check might probe only the high-signal inputs at LevelDefault and fan

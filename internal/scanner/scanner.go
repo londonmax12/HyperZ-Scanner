@@ -32,6 +32,7 @@ type Scanner struct {
 	detector         *fingerprint.Detector
 	concurrency      int
 	checkConcurrency int
+	hostBudget       int
 	level            core.Level
 	oobServer        oob.Server
 	oobWait          time.Duration
@@ -59,6 +60,28 @@ func WithCheckConcurrency(n int) Option {
 	return func(s *Scanner) {
 		if n > 0 {
 			s.checkConcurrency = n
+		}
+	}
+}
+
+// WithHostBudget caps total scan targets queued per host across the
+// scan's lifetime. 0 (the default) means unlimited, which matches the
+// pre-worklist behavior - every crawled page enters the queue without
+// a host-level ceiling.
+//
+// The cap is the second-line defense against runaway discovery
+// fanout: a self-loop break catches the trivial "check A emits a
+// target check A then receives" case, but two distinct checks
+// bouncing emissions off each other (A emits X, B emits Y, A emits
+// Z, ...) still terminate on the host budget. Pick a value that
+// comfortably exceeds a normal crawl's per-host page count - 5000 to
+// 10000 is reasonable for most targets - so legitimate large sites
+// are not capped while a fractal discovery cycle still hits the
+// ceiling within bounded wall-clock.
+func WithHostBudget(n int) Option {
+	return func(s *Scanner) {
+		if n > 0 {
+			s.hostBudget = n
 		}
 	}
 }
@@ -183,24 +206,27 @@ func (s *Scanner) ScanAll(ctx context.Context, pages <-chan page.Page, out chan<
 		visited = map[string]struct{}{}
 	}
 
-	// The worklist mediates dispatch: the crawler's pages channel feeds a
-	// single producer goroutine that pushes KindPage targets onto the
-	// queue, and N workers pull targets and call scanOne. PR 1 ships a
-	// single-tier streaming queue so externally observable behavior
-	// matches the pre-worklist channel fanout; tier ordering, per-host
-	// budgets, and discovery emission land in follow-up PRs.
+	// The worklist mediates dispatch with quiescence-based termination:
+	// a single producer pushes crawler-origin pages, workers Pop targets
+	// and call scanOne, and the per-check Discoverer wired in scanOne
+	// pushes any emitted discoveries back onto the same queue. The queue
+	// reports itself drained when the producer signals SourceDone AND
+	// every accepted push has had a matching Done call from the worker
+	// that processed it. That terminates the scan cleanly even when
+	// discoveries fan out mid-drain.
 	//
 	// pageByKey bridges the worklist's target.Target payload back to the
 	// page.Page artifact the crawler captured. The producer stores under
-	// the canonical key before pushing, so a happens-before edge through
-	// the channel send guarantees the worker's load sees the entry. On
-	// push rejection (cancel / scope / budget) the producer deletes the
-	// entry so dropped pushes don't leak map slots for the scan lifetime.
-	queue := newWorklist(s.scope, s.concurrency*2)
+	// the canonical key before pushing; the worker's LoadAndDelete sees
+	// the entry via the happens-before edge through the worklist mutex.
+	// On push rejection (cancel / scope / dedupe / budget) the producer
+	// deletes the entry so dropped pushes do not leak map slots.
+	queue := newWorklist(s.scope, 0)
+	queue.withHostBudget(s.hostBudget)
 	var pageByKey sync.Map
 
 	go func() {
-		defer queue.Close()
+		defer queue.SourceDone()
 		for {
 			select {
 			case <-ctx.Done():
@@ -232,26 +258,15 @@ func (s *Scanner) ScanAll(ctx context.Context, pages <-chan page.Page, out chan<
 		go func() {
 			defer wg.Done()
 			for {
-				select {
-				case <-ctx.Done():
+				t, ok := queue.Pop(ctx)
+				if !ok {
 					return
-				case t, ok := <-queue.Out():
-					if !ok {
-						return
-					}
-					raw, loaded := pageByKey.LoadAndDelete(t.CanonicalKey())
-					if !loaded {
-						// A KindPage target without a bridged page.Page
-						// means a producer dropped the side-map entry
-						// before the worker pulled (cancel race), or a
-						// future-PR discovery emission slipped in
-						// before its bridge was wired. Skip rather
-						// than dispatching with an empty page.
-						continue
-					}
-					p, _ := raw.(page.Page)
-					s.scanOne(ctx, p, out)
 				}
+				p, materialized := s.materializePage(ctx, t, &pageByKey)
+				if materialized {
+					s.scanOne(ctx, t, p, queue, out)
+				}
+				queue.Done()
 			}
 		}()
 	}
@@ -545,9 +560,15 @@ func (s *Scanner) scopeAllowsURL(rawurl string) bool {
 // in place of Run - the scanner reserves Run for the legacy single-phase
 // contract and uses Plant during phase 1 so the check can carry private
 // state into Detect.
-func (s *Scanner) scanOne(ctx context.Context, p page.Page, out chan<- core.Finding) {
+//
+// queue is the worklist the per-check Discoverer pushes into when a
+// check surfaces a new scan target via core.Discover. When queue is
+// nil (the test-helper path that drives scanOne without ScanAll) the
+// discoverer is wired as a no-op so checks running without the
+// dispatcher in place do not error out on emission.
+func (s *Scanner) scanOne(ctx context.Context, t target.Target, p page.Page, queue *worklist, out chan<- core.Finding) {
 	stack := s.fingerprint(ctx, p)
-	target := p.URL
+	targetURL := p.URL
 
 	// sem caps in-flight checks per target. A nil sem means no cap.
 	var sem chan struct{}
@@ -560,7 +581,21 @@ func (s *Scanner) scanOne(ctx context.Context, p page.Page, out chan<- core.Find
 		if ctx.Err() != nil {
 			break
 		}
-		if !s.applies(c, stack, target) {
+		// Kind filter: skip checks that do not consume this target's
+		// Kind. Checks without Targeted default to KindPage only, so
+		// pre-worklist behavior (every check ran against every Page)
+		// is preserved for the existing catalog.
+		if !consumesKind(c, t.Kind) {
+			continue
+		}
+		// Self-loop break: skip the check whose own emission produced
+		// this target. Two distinct checks emitting into each other
+		// can still cycle, which is why the worklist's per-host
+		// budget is the second-line defense against runaway fanout.
+		if isSelfLoop(t, c) {
+			continue
+		}
+		if !s.applies(c, stack, targetURL) {
 			continue
 		}
 		if sem != nil {
@@ -593,7 +628,25 @@ func (s *Scanner) scanOne(ctx context.Context, p page.Page, out chan<- core.Find
 			runCtx = core.WithBrowser(runCtx, s.browserPool)
 			if s.onError != nil {
 				runCtx = core.WithReporter(runCtx, func(err error) {
-					s.onError(target, c.Name(), err)
+					s.onError(targetURL, c.Name(), err)
+				})
+			}
+			// Per-check Discoverer: tag Origin with this check's
+			// name (so the worklist's self-loop break and the
+			// scanOne kind/origin filter both have the data they
+			// need) and push to the queue. A nil queue degrades the
+			// discoverer to a no-op so test paths that bypass
+			// ScanAll do not need to wire a worklist.
+			if queue != nil {
+				checkName := c.Name()
+				runCtx = core.WithDiscoverer(runCtx, func(disc target.Target) {
+					if disc.Origin == "" {
+						disc.Origin = "check:" + checkName
+					}
+					if disc.Parent == "" {
+						disc.Parent = t.CanonicalKey()
+					}
+					queue.Push(ctx, disc)
 				})
 			}
 			// A two-phase check receives Plant during phase 1; its Run
@@ -614,7 +667,7 @@ func (s *Scanner) scanOne(ctx context.Context, p page.Page, out chan<- core.Find
 					return
 				}
 				if s.onError != nil {
-					s.onError(target, c.Name(), err)
+					s.onError(targetURL, c.Name(), err)
 				}
 				return
 			}
@@ -675,4 +728,76 @@ func (s *Scanner) applies(c core.Check, stack *fingerprint.Stack, target string)
 		s.onSkip(target, c.Name(), "stack does not match ("+stack.Summary()+")")
 	}
 	return false
+}
+
+// materializePage produces the page.Page artifact a worker dispatches
+// against t. Two code paths:
+//
+//   - Crawler-origin target: the producer stored the captured page.Page
+//     into pageByKey under t.CanonicalKey() before pushing; we
+//     LoadAndDelete it so the entry does not leak past dispatch.
+//   - Discovery-origin KindPage target: no bridge exists in the side
+//     map (the emitting check did not pre-fetch), so we synchronously
+//     GET t.URL via the same fetcher the phase-2 detect pass uses.
+//     Fetch errors are reported through onError and the target is
+//     skipped; the worker should not pin a slot retrying a dead URL.
+//
+// Returns (page, true) on success or (zero, false) when no page can
+// be produced. KindEndpoint / KindParam currently fall into the
+// second branch because their fetch shapes (method + content-type +
+// body for endpoints, parent URL + param injection for params) need
+// bridges that future PRs add; today the worker silently drops them.
+func (s *Scanner) materializePage(ctx context.Context, t target.Target, pageByKey *sync.Map) (page.Page, bool) {
+	if raw, loaded := pageByKey.LoadAndDelete(t.CanonicalKey()); loaded {
+		p, _ := raw.(page.Page)
+		return p, true
+	}
+	if t.Kind != target.KindPage || t.URL == "" {
+		return page.Page{}, false
+	}
+	p, err := s.fetchPhase2(ctx, t.URL)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return page.Page{}, false
+		}
+		if s.onError != nil {
+			s.onError(t.URL, "discovery-fetch", err)
+		}
+		return page.Page{}, false
+	}
+	return p, true
+}
+
+// consumesKind reports whether c accepts dispatch against a target of
+// kind k. Checks that do not implement core.Targeted default to
+// KindPage only, preserving pre-worklist behavior where every check
+// ran against every crawled Page. A Targeted check returning an empty
+// Consumes list is treated the same as the default (permissive on
+// KindPage); a non-empty list is the explicit allow-list.
+func consumesKind(c core.Check, k target.Kind) bool {
+	tc, ok := c.(core.Targeted)
+	if !ok {
+		return k == target.KindPage
+	}
+	kinds := tc.Consumes()
+	if len(kinds) == 0 {
+		return k == target.KindPage
+	}
+	for _, kk := range kinds {
+		if kk == k {
+			return true
+		}
+	}
+	return false
+}
+
+// isSelfLoop reports whether dispatching c against t would re-deliver
+// to the check that emitted t. The emitting Discoverer tags
+// Origin = "check:<name>" before pushing; matching that against the
+// dispatch candidate breaks the most common loop (a check whose
+// emission lands on its own consume kind). Two distinct checks
+// emitting into each other are not blocked here - the worklist's
+// per-host budget catches that runaway.
+func isSelfLoop(t target.Target, c core.Check) bool {
+	return t.Origin != "" && t.Origin == "check:"+c.Name()
 }

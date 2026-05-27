@@ -9,17 +9,21 @@ import (
 	"github.com/londonmax12/hyperz/internal/target"
 )
 
-// worklist is the dispatch queue feeding scanOne. It dedupes targets,
-// enforces scope, and respects ctx cancellation: post-cancel pushes are
-// soft-dropped and the worklist channel closes so workers exit on the
-// channel-closed path rather than via a separate cancellation select.
+// worklist is the dispatch queue feeding scanOne. It dedupes targets
+// by canonical key, enforces scope, applies the per-host budget, and
+// terminates on quiescence (input source done + zero in-flight work)
+// so checks that emit discoveries mid-scan still get drained.
 //
-// PR 1 ships a single-tier streaming queue: pushes are forwarded to the
-// out channel as fast as workers pull, preserving the pre-worklist
-// channel-fanout behavior. Tier ordering, per-tier draining, and the
-// per-host budget knob are scaffolded here (Tier field on push, a
-// budgetPerHost setting, host-count bookkeeping) but PR 1 dispatches a
-// single tier and leaves the budget at its unlimited default.
+// PR 1 used a buffered channel; that broke down once discovery
+// emission landed because a check's Push could race the producer
+// goroutine's queue.Close(). The current implementation is a
+// slice+cond queue with explicit in-flight tracking: Push increments
+// pending, Pop hands an item to a worker, Done decrements after the
+// worker finishes dispatching that target, and the queue declares
+// itself drained when SourceDone has been signalled AND pending hits
+// zero. Workers waiting on cond.Wait wake on Push, Done, SourceDone,
+// Close, or ctx-cancel (via cancelWaiting from a small watcher
+// goroutine ScanAll launches).
 //
 // The cancellation contract from project_scanner_cancel_contract is
 // preserved by construction: the worklist mediates which targets reach
@@ -27,66 +31,70 @@ import (
 // does not select on ctx.Done; in-flight findings flush even when the
 // queue has stopped accepting new pushes.
 type worklist struct {
-	mu     sync.Mutex
-	seen   map[string]struct{}
-	scope  *scope.Scope
-	out    chan target.Target
+	mu    sync.Mutex
+	cond  *sync.Cond
+	items []target.Target
+	seen  map[string]struct{}
+	scope *scope.Scope
+
+	// pending is queued + in-flight: incremented by a successful Push,
+	// decremented by Done. When pending == 0 AND sourceDone == true,
+	// no more work can ever arrive and Pop returns ("", false) so
+	// workers exit.
+	pending int
+
+	// sourceDone signals that the external producer (the crawler's
+	// pages channel reader) has finished pushing. After this, the only
+	// remaining pushes are from in-flight checks emitting discoveries.
+	sourceDone bool
+
+	// closed is a hard-stop flag set by Close. Pop returns ("", false)
+	// immediately while closed is true; Push is rejected. Independent
+	// of sourceDone / pending so test paths that want immediate
+	// termination do not have to thread the soft path.
 	closed bool
 
-	// budgetPerHost caps total targets queued per host across the scan.
-	// Zero (the default) means unlimited; PR 1 ships this default so
-	// behavior matches the pre-worklist single-tier dispatch. Later PRs
-	// tune it once discovery emissions can balloon a host's queue depth.
+	// budgetPerHost caps total accepted pushes per host across the
+	// scan. Zero (the default) means unlimited. Activated by
+	// withHostBudget; the Scanner threads its WithHostBudget option
+	// through.
 	budgetPerHost int
 	hostCount     map[string]int
-
-	// stopped signals "drop further pushes silently" once Close is
-	// called or ctx cancels at the producer. Workers still drain
-	// in-channel items; close on `out` is what tells them to exit.
-	stopped bool
 }
 
 // newWorklist constructs a worklist with the given scope (nil means
-// permissive) and channel buffer size. A non-positive bufSize defaults
-// to 1 so the producer never spins synchronously on every push.
-func newWorklist(sc *scope.Scope, bufSize int) *worklist {
-	if bufSize <= 0 {
-		bufSize = 1
-	}
-	return &worklist{
+// permissive). The second argument exists for the previous
+// channel-based implementation's buffer sizing; the slice+cond design
+// has no buffer to size, so the argument is accepted for source
+// compatibility with callers that still pass it but is ignored.
+func newWorklist(sc *scope.Scope, _ int) *worklist {
+	w := &worklist{
 		seen:      map[string]struct{}{},
 		hostCount: map[string]int{},
 		scope:     sc,
-		out:       make(chan target.Target, bufSize),
 	}
+	w.cond = sync.NewCond(&w.mu)
+	return w
 }
 
-// withHostBudget caps total queued targets per host. A non-positive
-// value disables the cap (the default). Set this once after newWorklist
-// and before the first Push; the worklist does not synchronize against
-// in-flight reads of the field.
+// withHostBudget caps total accepted pushes per host. A non-positive
+// value disables the cap (the default).
 func (w *worklist) withHostBudget(n int) {
 	if n > 0 {
 		w.budgetPerHost = n
 	}
 }
 
-// Push enqueues t for dispatch. Returns false (and does not enqueue)
-// when t is dropped for any of these reasons:
+// Push enqueues t and increments the pending count. Returns false
+// (without enqueuing) when t is dropped because:
 //
-//   - ctx already canceled at call time
-//   - the worklist has been closed or stopped
-//   - t.URL fails scope (a nil scope is permissive, matching scope.Scope's
-//     contract; PR 1 only ever pushes crawler-origin targets so scope
-//     filtering is in practice dormant)
+//   - ctx already cancelled at call time
+//   - the worklist is closed
 //   - the canonical key was already pushed (dedupe)
-//   - the per-host budget for this host is exhausted
+//   - t.URL fails scope
+//   - the per-host budget for t's host is exhausted
 //
-// On a clean push the send blocks until a worker picks up the target
-// or ctx cancels mid-send; the ctx-cancel branch returns false so the
-// caller knows the push did not land. The dispatcher is the caller, not
-// scanOne, so this select-on-ctx.Done does not violate the finding-
-// flush contract on the out channel.
+// A successful Push signals one waiting popper.
 func (w *worklist) Push(ctx context.Context, t target.Target) bool {
 	if ctx.Err() != nil {
 		return false
@@ -98,44 +106,108 @@ func (w *worklist) Push(ctx context.Context, t target.Target) bool {
 	if key == "" {
 		return false
 	}
+	host := t.Host()
 
 	w.mu.Lock()
-	if w.stopped || w.closed {
-		w.mu.Unlock()
+	defer w.mu.Unlock()
+	if w.closed {
 		return false
 	}
 	if _, dup := w.seen[key]; dup {
-		w.mu.Unlock()
 		return false
 	}
-	host := t.Host()
 	if w.budgetPerHost > 0 && host != "" && w.hostCount[host] >= w.budgetPerHost {
-		w.mu.Unlock()
 		return false
 	}
 	w.seen[key] = struct{}{}
 	if host != "" {
 		w.hostCount[host]++
 	}
-	w.mu.Unlock()
+	w.items = append(w.items, t)
+	w.pending++
+	w.cond.Signal()
+	return true
+}
 
-	select {
-	case w.out <- t:
-		return true
-	case <-ctx.Done():
-		return false
+// Pop blocks until either an item is available or the queue declares
+// itself drained. Returns (target, true) on success, (zero, false)
+// when no further items will arrive (drained, hard-closed, or ctx
+// cancelled).
+//
+// The caller MUST call Done after the dispatch for the returned
+// target completes, so the worklist can decrement pending and
+// recognize quiescence.
+//
+// Pop installs a one-shot watcher goroutine to translate ctx cancel
+// into a cond broadcast, so cond.Wait wakes on cancellation. The
+// watcher exits via the close(stopWatcher) call on every return path,
+// so it does not leak when Pop returns quickly (the common case where
+// an item was already pending).
+func (w *worklist) Pop(ctx context.Context) (target.Target, bool) {
+	stopWatcher := make(chan struct{})
+	defer close(stopWatcher)
+	go func() {
+		select {
+		case <-ctx.Done():
+			w.cancelWaiting()
+		case <-stopWatcher:
+		}
+	}()
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for {
+		if w.closed {
+			return target.Target{}, false
+		}
+		if ctx.Err() != nil {
+			return target.Target{}, false
+		}
+		if len(w.items) > 0 {
+			t := w.items[0]
+			w.items = w.items[1:]
+			return t, true
+		}
+		if w.sourceDone && w.pending == 0 {
+			return target.Target{}, false
+		}
+		w.cond.Wait()
 	}
 }
 
-// Out returns the channel workers pull from. Closed via Close once
-// the producer is done; workers ranging over Out exit naturally on
-// channel close.
-func (w *worklist) Out() <-chan target.Target { return w.out }
+// Done decrements the pending count after a worker finishes
+// dispatching the target Pop handed it. When pending reaches zero
+// after SourceDone has been signalled, every waiting popper is woken
+// so they can return (zero, false) and exit.
+func (w *worklist) Done() {
+	w.mu.Lock()
+	w.pending--
+	if w.pending == 0 && w.sourceDone {
+		w.cond.Broadcast()
+	}
+	w.mu.Unlock()
+}
 
-// Close signals "no more pushes will arrive". Subsequent Push calls
-// return false silently and the out channel is closed so workers ranging
-// over Out exit. Idempotent: a second Close is a no-op rather than
-// closing the channel twice.
+// SourceDone marks the external producer as finished. After this
+// call, the queue will close itself (signal all poppers to exit) as
+// soon as pending reaches zero. Idempotent.
+func (w *worklist) SourceDone() {
+	w.mu.Lock()
+	if w.sourceDone {
+		w.mu.Unlock()
+		return
+	}
+	w.sourceDone = true
+	if w.pending == 0 {
+		w.cond.Broadcast()
+	}
+	w.mu.Unlock()
+}
+
+// Close is the hard-stop path: subsequent Push calls return false,
+// Pop returns (zero, false), and every waiting popper wakes. Used
+// when ctx cancels or when tests want immediate termination.
+// Idempotent.
 func (w *worklist) Close() {
 	w.mu.Lock()
 	if w.closed {
@@ -143,17 +215,26 @@ func (w *worklist) Close() {
 		return
 	}
 	w.closed = true
-	w.stopped = true
 	w.mu.Unlock()
-	close(w.out)
+	w.cond.Broadcast()
+}
+
+// cancelWaiting wakes every popper currently blocked on cond.Wait so
+// they can re-check ctx.Err() and exit. Called by the small ctx
+// watcher goroutine ScanAll launches so a cancellation propagates
+// from ctx through to the workers without each popper installing
+// its own select.
+func (w *worklist) cancelWaiting() {
+	w.mu.Lock()
+	w.cond.Broadcast()
+	w.mu.Unlock()
 }
 
 // scopeAllows reports whether t.URL is in scope. A nil scope is
-// permissive, mirroring scope.Scope's documented contract and the
-// pre-worklist behavior where the scanner did not filter incoming pages
-// against scope. The caller (Push) treats a parse failure as a scope
-// failure so a malformed discovery URL is dropped rather than collapsing
-// to an empty canonical key.
+// permissive, mirroring scope.Scope's documented contract. An
+// unparseable URL fails scope: pushing a malformed discovery URL
+// would otherwise pollute the dedupe set with an entry no worker can
+// act on.
 func (w *worklist) scopeAllows(t target.Target) bool {
 	if w.scope == nil {
 		return true

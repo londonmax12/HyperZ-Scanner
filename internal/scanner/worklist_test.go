@@ -9,28 +9,30 @@ import (
 	"github.com/londonmax12/hyperz/internal/target"
 )
 
-// drainAvailable pulls every target the worklist has emitted so far,
-// without blocking. Stops when the channel has no item ready or has been
-// closed. Used by tests that want to assert "exactly N targets reached
-// workers" without dictating order or waiting for Close.
-func drainAvailable(w *worklist) []target.Target {
+// drainPending pops up to want targets, completing each one via Done
+// so quiescence semantics still work for callers that pushed and
+// immediately want to inspect what landed. Stops when a Pop would
+// block (no items + not yet drained).
+func drainPending(t *testing.T, w *worklist, want int) []target.Target {
+	t.Helper()
 	var out []target.Target
-	for {
-		select {
-		case t, ok := <-w.Out():
-			if !ok {
-				return out
-			}
-			out = append(out, t)
-		default:
+	for len(out) < want {
+		// Use a fresh ctx with a short deadline so a test bug does not
+		// hang forever; Pop returns ok=false on ctx cancel.
+		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		got, ok := w.Pop(ctx)
+		cancel()
+		if !ok {
 			return out
 		}
+		out = append(out, got)
+		w.Done()
 	}
+	return out
 }
 
 func TestWorklistPushDedupes(t *testing.T) {
-	w := newWorklist(nil, 8)
-	defer w.Close()
+	w := newWorklist(nil, 0)
 
 	ctx := context.Background()
 	a := target.Page("https://example.com/x", "crawler")
@@ -43,14 +45,14 @@ func TestWorklistPushDedupes(t *testing.T) {
 		t.Fatalf("duplicate Push must be rejected")
 	}
 
-	got := drainAvailable(w)
+	got := drainPending(t, w, 2)
 	if len(got) != 1 {
 		t.Fatalf("expected 1 target through the queue, got %d", len(got))
 	}
 }
 
 func TestWorklistPushDropsAfterClose(t *testing.T) {
-	w := newWorklist(nil, 1)
+	w := newWorklist(nil, 0)
 	w.Close()
 
 	if w.Push(context.Background(), target.Page("https://example.com/", "crawler")) {
@@ -59,8 +61,7 @@ func TestWorklistPushDropsAfterClose(t *testing.T) {
 }
 
 func TestWorklistPushDropsAfterCtxCancel(t *testing.T) {
-	w := newWorklist(nil, 1)
-	defer w.Close()
+	w := newWorklist(nil, 0)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -75,8 +76,7 @@ func TestWorklistScopeRejectsOutOfScope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("scope.New: %v", err)
 	}
-	w := newWorklist(sc, 4)
-	defer w.Close()
+	w := newWorklist(sc, 0)
 
 	ctx := context.Background()
 	if !w.Push(ctx, target.Page("https://example.com/in", "crawler")) {
@@ -86,15 +86,14 @@ func TestWorklistScopeRejectsOutOfScope(t *testing.T) {
 		t.Fatalf("out-of-scope Push must be rejected")
 	}
 
-	got := drainAvailable(w)
+	got := drainPending(t, w, 2)
 	if len(got) != 1 {
 		t.Fatalf("expected 1 target through the queue, got %d", len(got))
 	}
 }
 
 func TestWorklistScopeNilIsPermissive(t *testing.T) {
-	w := newWorklist(nil, 4)
-	defer w.Close()
+	w := newWorklist(nil, 0)
 
 	if !w.Push(context.Background(), target.Page("https://any.example.org/x", "crawler")) {
 		t.Fatalf("nil scope must accept every URL")
@@ -102,9 +101,8 @@ func TestWorklistScopeNilIsPermissive(t *testing.T) {
 }
 
 func TestWorklistHostBudgetCaps(t *testing.T) {
-	w := newWorklist(nil, 8)
+	w := newWorklist(nil, 0)
 	w.withHostBudget(2)
-	defer w.Close()
 
 	ctx := context.Background()
 	if !w.Push(ctx, target.Page("https://example.com/a", "crawler")) {
@@ -124,12 +122,11 @@ func TestWorklistHostBudgetCaps(t *testing.T) {
 }
 
 func TestWorklistCloseUnblocksReceivers(t *testing.T) {
-	w := newWorklist(nil, 1)
+	w := newWorklist(nil, 0)
 
 	done := make(chan struct{})
 	go func() {
-		for range w.Out() {
-		}
+		_, _ = w.Pop(context.Background())
 		close(done)
 	}()
 
@@ -138,13 +135,45 @@ func TestWorklistCloseUnblocksReceivers(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(time.Second):
-		t.Fatalf("Close did not unblock the receiver within 1s")
+		t.Fatalf("Close did not unblock Pop within 1s")
 	}
 }
 
-func TestWorklistOutCarriesPushedTargets(t *testing.T) {
-	w := newWorklist(nil, 4)
-	defer w.Close()
+func TestWorklistSourceDoneAndDrainedExits(t *testing.T) {
+	// Push two items, complete both via Pop+Done, then SourceDone -
+	// the next Pop must return (zero, false) because the queue is
+	// drained AND no more pushes will arrive.
+	w := newWorklist(nil, 0)
+	ctx := context.Background()
+	w.Push(ctx, target.Page("https://example.com/a", "crawler"))
+	w.Push(ctx, target.Page("https://example.com/b", "crawler"))
+
+	for i := 0; i < 2; i++ {
+		_, ok := w.Pop(ctx)
+		if !ok {
+			t.Fatalf("Pop %d should succeed", i)
+		}
+		w.Done()
+	}
+	w.SourceDone()
+
+	done := make(chan bool, 1)
+	go func() {
+		_, ok := w.Pop(ctx)
+		done <- ok
+	}()
+	select {
+	case ok := <-done:
+		if ok {
+			t.Fatalf("Pop after drain+SourceDone must return false")
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("Pop did not unblock on quiescence within 1s")
+	}
+}
+
+func TestWorklistPopReturnsPushedTargetsInOrder(t *testing.T) {
+	w := newWorklist(nil, 0)
 
 	urls := []string{
 		"https://example.com/a",
@@ -158,7 +187,7 @@ func TestWorklistOutCarriesPushedTargets(t *testing.T) {
 		}
 	}
 
-	got := drainAvailable(w)
+	got := drainPending(t, w, len(urls))
 	if len(got) != len(urls) {
 		t.Fatalf("expected %d targets, got %d", len(urls), len(got))
 	}
