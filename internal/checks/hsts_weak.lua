@@ -1,16 +1,8 @@
--- hsts-weak: Lua port of internal/checks/hsts_weak.go.
---
--- Inspects a present Strict-Transport-Security header for
+-- hsts-weak: inspects a present Strict-Transport-Security header for
 -- configurations that materially weaken or undo the downgrade
--- protection HSTS provides: short max-age, missing
--- includeSubDomains, the max-age=0 un-pin signal, malformed
--- directives, multi-header duplication, or the header being
--- delivered over plain HTTP.
---
--- Directive parsing (split, duplicate detection, quoted-string
--- handling) is delegated to the Go ctx.body.parse_hsts helper so the
--- spec-fatal duplicate-detection lives in exactly one place. The
--- per-weakness severity bands and detail text are the Lua port's job.
+-- protection HSTS provides: short max-age, missing includeSubDomains,
+-- the max-age=0 un-pin signal, malformed directives, multi-header
+-- duplication, or the header being delivered over plain HTTP.
 
 local check = {
   name        = "hsts-weak",

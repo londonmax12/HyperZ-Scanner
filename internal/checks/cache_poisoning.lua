@@ -1,6 +1,4 @@
--- cache-poisoning: Lua port of internal/checks/cache_poisoning.go.
---
--- Two arms:
+-- cache-poisoning: two arms.
 --   1. Unkeyed-header poisoning. For each curated probe header
 --      (X-Forwarded-Host / -Scheme / -Proto, X-Original-URL,
 --      X-Rewrite-URL), send the probe and look for the canary in
@@ -41,7 +39,7 @@ local function probe_unkeyed_header(ctx, target, probe, base_status, base_body, 
   -- poisoned response a vulnerable cache stores lands on a key no
   -- organic request will reach. Without it, firing the probe at the
   -- canonical (method, path, query) would poison the exact key real
-  -- users hit. See cachePoisonCachebusterParam in cache_poisoning.go.
+  -- users hit.
   local probe_target, ptu_err = ctx.body.cache_poison_probe_url(target)
   if ptu_err then return nil, ptu_err end
 

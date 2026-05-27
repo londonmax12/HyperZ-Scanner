@@ -1,8 +1,6 @@
--- dom_xss.lua: DOM-only cross-site scripting detection.
---
--- This is the Lua port of internal/checks/dom_xss.go. It detects XSS
--- that lives entirely in client JavaScript: the server never reflects
--- the payload but the page's JS reads it from a DOM source
+-- dom-xss: DOM-only cross-site scripting detection. Catches XSS that
+-- lives entirely in client JavaScript: the server never reflects the
+-- payload but the page's JS reads it from a DOM source
 -- (location.hash, location.search, document.referrer, postMessage)
 -- and pipes it into a sink (innerHTML, document.write, eval, Function,
 -- setTimeout-string, javascript: URI).
@@ -31,12 +29,10 @@ local check = {
               .. "before injection.",
 }
 
--- DOM_XSS_SETTLE_MS bounds how long visit waits for the binding to
--- fire on each probe. Long enough for typical event-loop work
--- (DOMContentLoaded handlers, framework hydration that reads
--- location.hash on mount) to finish; short enough that a 50-page
--- crawl with a handful of sinks each doesn't dominate scan time.
--- Mirrors the Go check's domXSSSettle (1500ms).
+-- Long enough for typical event-loop work (DOMContentLoaded handlers,
+-- framework hydration that reads location.hash on mount) to finish;
+-- short enough that a 50-page crawl with a handful of sinks each
+-- doesn't dominate scan time.
 local DOM_XSS_SETTLE_MS = 1500
 
 -- payloads_for(binding) returns the {payload, sink_hint} pairs the
@@ -79,10 +75,9 @@ local function substitute(template, token)
   return (string.gsub(template, "{{token}}", token))
 end
 
--- build_finding mirrors the Go DOMXSS.visit finding shape. One finding
--- per (page, source, param) - the same source firing across many
--- crawl entry points collapses to one row; two distinct vulnerable
--- params on the same page stay distinct.
+-- One finding per (page, source, param). The same source firing
+-- across many crawl entry points collapses to one row; two distinct
+-- vulnerable params on the same page stay distinct.
 local function build_finding(ctx, target, probe_url, source, param, token, payload, sink_hint)
   local title
   if param ~= "" then

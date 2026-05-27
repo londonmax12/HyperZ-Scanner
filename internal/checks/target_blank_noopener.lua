@@ -1,15 +1,8 @@
--- target-blank-noopener: Lua port of
--- internal/checks/target_blank_noopener.go.
---
--- Flags <a>, <area>, <form> with target="_blank" that omit
--- rel="noopener" / "noreferrer". The new browsing context receives a
--- live window.opener handle - reverse-tabnabbing surface. Severity
--- climbs to Medium for cross-origin destinations.
---
--- HTML tokenization is delegated to ctx.html.iter_tags; URL
--- resolution (including <base href> overrides observed in document
--- order) is in Lua so the port mirrors the Go check 1:1 on
--- finding count + dedupe scope.
+-- target-blank-noopener: flags <a>, <area>, <form> with
+-- target="_blank" that omit rel="noopener" / "noreferrer". The new
+-- browsing context receives a live window.opener handle - reverse-
+-- tabnabbing surface. Severity climbs to Medium for cross-origin
+-- destinations.
 
 local check = {
   name  = "target-blank-noopener",
@@ -21,9 +14,7 @@ local check = {
 
 local INTERESTING_TAGS = { "base", "a", "area", "form" }
 
--- rel_has_noopener_or_noreferrer mirrors the spec rel-token list
--- behavior: rel is space-separated, any of noopener / noreferrer
--- counts.
+-- rel is space-separated; any of noopener / noreferrer counts as safe.
 local function rel_has_safe_token(rel)
   for tok in string.gmatch(rel, "%S+") do
     local lo = string.lower(tok)
@@ -135,9 +126,7 @@ function check.run(ctx)
     end
   end
 
-  -- Stable order: Go sorts findings by DedupeKey at emit time so the
-  -- per-page report stays deterministic. We sort by the raw key
-  -- parts which is what feeds into the hash anyway.
+  -- Stable order so per-page reports diff cleanly across runs.
   table.sort(findings, function(a, b)
     return a.dedupe_parts[1] < b.dedupe_parts[1]
   end)

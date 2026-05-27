@@ -1,6 +1,4 @@
--- ssti: Lua port of internal/checks/ssti.go.
---
--- Three arms per probable sink:
+-- ssti: three arms per probable sink.
 --   1. Expression evaluation: canary-flanked math expressions per
 --      template engine family. A match on canary+expected+canary
 --      proves engine evaluation. A confirmation probe (different

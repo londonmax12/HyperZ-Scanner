@@ -1,8 +1,7 @@
--- subdomain-takeover: Lua port of internal/checks/subdomain_takeover.go.
---
--- Flags hostnames whose DNS still points at a third-party SaaS
--- provider (GitHub Pages, S3, Heroku, Azure, Fastly, ...) but where
--- the upstream resource is unclaimed. Two detection paths:
+-- subdomain-takeover: flags hostnames whose DNS still points at a
+-- third-party SaaS provider (GitHub Pages, S3, Heroku, Azure, Fastly,
+-- ...) but where the upstream resource is unclaimed. Two detection
+-- paths:
 --
 --   1. CNAME-confirmed: the host CNAMEs into a known provider AND
 --      the edge serves its "unclaimed" body fingerprint. High.
@@ -11,12 +10,10 @@
 --      that pin the response to the SaaS edge anyway. Medium.
 --
 -- The scanner algorithm (DNS lookups, provider-pattern matching,
--- body/header fingerprint scans, per-scan per-host cache) lives in Go
--- and is exposed by ctx.takeover.evaluate as a raw scan-facts table.
--- Every operator-visible catalog field (title, severity, detail,
--- details, CWE, OWASP, remediation, dedupe key, evidence) is composed
--- here so editing the rule's user-facing text does not require a Go
--- rebuild.
+-- body/header fingerprint scans, per-scan per-host cache) lives behind
+-- ctx.takeover.evaluate, which returns raw scan facts; everything else
+-- (title, severity, detail, remediation, dedupe key, evidence) is
+-- composed here.
 
 local check = {
   name  = "subdomain-takeover",
@@ -26,10 +23,8 @@ local check = {
   owasp = "A05:2021 Security Misconfiguration",
 }
 
--- REMEDIATION_TAIL_CNAME / REMEDIATION_TAIL_FINGERPRINT are the
--- generic suffixes appended to the per-provider guidance prefix the
--- bridge returns. Kept here rather than in Go so the prose of the
--- finding lives with the rest of the rule's catalog metadata.
+-- Generic suffixes appended to the per-provider guidance prefix the
+-- bridge returns.
 local REMEDIATION_TAIL_CNAME = " " ..
   "Before remediating, audit cookies scoped to the parent domain (Domain=.example.com) and any OAuth / SSO callbacks that trust the hostname - a successful takeover would have inherited both. " ..
   "As a longer-term control, gate DNS record creation on proof of upstream ownership and add periodic checks (or a SIEM rule) that re-resolves CNAMEs and probes the listed providers for unclaimed-resource fingerprints."
@@ -38,9 +33,7 @@ local REMEDIATION_TAIL_FINGERPRINT = " " ..
   "Confirm the hostname's DNS chain (CNAME, A, fronting proxies) before treating this as exploitable - the edge response alone proves the upstream is unclaimed, but a fronting proxy may limit claimability. " ..
   "As a longer-term control, gate DNS record creation on proof of upstream ownership and add periodic checks that probe known SaaS edges for unclaimed-resource fingerprints regardless of DNS shape."
 
--- HEADER_VALUE_CAP matches the Go composer's per-header clip so the
--- "matched headers" line is rendered identically by both
--- implementations.
+-- Per-header clip on the "matched headers" line.
 local HEADER_VALUE_CAP = 80
 
 local function matched_headers_summary(matched)
@@ -57,9 +50,7 @@ local function matched_headers_summary(matched)
 end
 
 -- compose_cname builds the High-severity finding for the CNAME-
--- confirmed path. Detail lead-in, per-bullet details, evidence
--- synthetic headers, dedupe parts - all live here so the rule's
--- text is editable without recompiling Go.
+-- confirmed path.
 local function compose_cname(ctx, facts)
   local details = {
     string.format("Hostname resolves via CNAME to %q, which matches %s's edge.",

@@ -1,10 +1,7 @@
--- ssrf: Lua port of internal/checks/ssrf.go.
---
--- Active (LevelDefault) check: for each candidate sink the probe
--- overlays an attacker-controlled URL on a reserved .example host and
--- looks for HTTP-library error signatures in the response body. A
--- match means the target's fetch primitive attempted the canary URL,
--- which is the SSRF signal.
+-- ssrf: for each candidate sink the probe overlays an attacker-
+-- controlled URL on a reserved .example host and looks for HTTP-
+-- library error signatures in the response body. A match means the
+-- target's fetch primitive attempted the canary URL.
 --
 -- Two arms ride together when an OOB listener is attached:
 --   1. In-band: plant the canary URL, scan body for error markers.
@@ -18,8 +15,7 @@
 -- webhook, ...) cover well-known URL-handling parameters; the
 -- "generic" sweep names (q, link, page, ...) are folded in when the
 -- URL path looks proxy-ish OR the operator opted into aggressive
--- scanning. The catalogue lives in Go (algorithm input); the rule's
--- finding-shape composition lives here.
+-- scanning.
 
 local check = {
   name        = "ssrf",
@@ -129,9 +125,9 @@ function check.run(ctx)
 end
 
 -- Drain emits one Critical-severity finding per OOB registration that
--- observed at least one callback. Mirrors Go SSRF.Drain verbatim:
--- callback evidence beats reflected-error evidence so the OOB-confirmed
--- finding sits at Critical while the in-band path tops out at High.
+-- observed at least one callback. Callback evidence beats reflected-
+-- error evidence, so OOB-confirmed sits at Critical while in-band
+-- tops out at High.
 function check.drain(ctx)
   if not ctx.oob:attached() then return nil end
   local findings = {}

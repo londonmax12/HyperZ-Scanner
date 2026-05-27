@@ -1,11 +1,7 @@
--- secrets-in-body: Lua port of internal/checks/secrets_in_body.go.
---
--- Scans response bodies for high-confidence credential patterns
--- (cloud keys, VCS tokens, AI provider keys, private keys, JWTs).
--- The pattern catalogue and the redaction format live in Go via
--- ctx.body.find_secrets / ctx.body.redact_secret; the Lua port owns
--- the orchestration: content-type filter, finding shape, dedupe key
--- composition.
+-- secrets-in-body: scans response bodies for high-confidence
+-- credential patterns (cloud keys, VCS tokens, AI provider keys,
+-- private keys, JWTs). Pattern catalogue and the redaction format
+-- sit behind ctx.body.find_secrets / ctx.body.redact_secret.
 
 local check = {
   name        = "secrets-in-body",

@@ -1,7 +1,5 @@
--- ws-audit: Lua port of internal/checks/ws_audit.go.
---
--- Probes WebSocket endpoints discovered on a crawled page for two
--- defects:
+-- ws-audit: probes WebSocket endpoints discovered on a crawled page
+-- for two defects:
 --
 --  1. Cross-Site WebSocket Hijacking (CSWSH): the endpoint accepts a
 --     real RFC 6455 handshake when the request carries a foreign
@@ -90,8 +88,7 @@ function check.run(ctx)
       -- Same-organization filter: trust scope when the operator
       -- pinned an allowlist, otherwise fall back to eTLD+1. Scope is
       -- re-checked here so a same-host endpoint outside the operator's
-      -- scope (e.g. port-restricted) is not probed. Probe cap matches
-      -- the Go check.
+      -- scope (e.g. port-restricted) is not probed.
       local same_host = string.lower(ep_url.hostname) == string.lower(page_url.hostname)
       local eligible = same_host or scope_pinned
           or ctx.url.same_site(ep_url.hostname, page_url.hostname)

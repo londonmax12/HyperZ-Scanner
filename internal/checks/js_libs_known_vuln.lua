@@ -1,14 +1,8 @@
--- js-libs-known-vuln: Lua port of internal/checks/js_libs_known_vuln.go.
---
--- Scans <script src> tags on an HTML response, identifies known JS
--- libraries from their URL pattern, and emits one finding per
--- (library, version) pair. A version that matches a row in the
--- per-library vulnerable-versions table escalates to medium with a
--- CVE / vuln-class list; an unmatched version stays info.
---
--- Library detection (URL pattern -> name + version) lives in Go via
--- ctx.body.scan_known_js_libs so the regex catalogue is the single
--- source of truth.
+-- js-libs-known-vuln: scans <script src> tags on an HTML response,
+-- identifies known JS libraries from their URL pattern, and emits one
+-- finding per (library, version) pair. A version that matches a row
+-- in the per-library vulnerable-versions table escalates to medium
+-- with a CVE / vuln-class list; an unmatched version stays info.
 
 local check = {
   name  = "js-libs-known-vuln",

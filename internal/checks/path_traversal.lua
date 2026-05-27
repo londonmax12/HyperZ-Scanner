@@ -1,17 +1,12 @@
--- path-traversal: Lua port of internal/checks/path_traversal.go.
---
--- Per sink: baseline probe (with a fresh canary) to record the marker
--- hits already present on the page, then sweep the traversal payload
--- catalogue. A finding fires on the first payload whose response
--- introduces a TraversalMarkers substring (root:x:0:0:, the Windows
--- hosts header) the baseline did not already carry. Baseline
--- subtraction lives in Go (ctx.body.traversal_new_markers) so the
--- marker list stays a single source of truth.
+-- path-traversal: per sink, send a baseline (with a fresh canary) to
+-- record the marker hits already present on the page, then sweep the
+-- traversal payload catalogue. A finding fires on the first payload
+-- whose response introduces a TraversalMarkers substring (root:x:0:0:,
+-- the Windows hosts header) that the baseline did not already carry.
+-- Baseline subtraction lives behind ctx.body.traversal_new_markers.
 --
 -- Sweep gating: at LevelDefault only path-ish sinks are probed
--- (name matches one of the keywords; or value carries a path-shaped
--- character). ctx.body.path_sink_candidate evaluates the same
--- heuristic the Go check uses. LevelAggressive lifts the gate and
+-- (ctx.body.path_sink_candidate); LevelAggressive lifts the gate and
 -- probes every sink.
 
 local check = {
@@ -41,7 +36,7 @@ end
 local function probe(ctx, sink)
   -- Baseline: a benign canary establishes which marker substrings the
   -- page already carries (a docs page mentioning /etc/passwd, an admin
-  -- help screen). The Go-side subtractor drops these from later hits.
+  -- help screen); the subtractor drops these from later hits.
   local canary = "hpzc" .. string.format("%012x", math.random(0, 0xffffff) * 0x1000000 + math.random(0, 0xffffff))
   local _, _, baseline_body, _, base_err = send(ctx, sink, canary)
   if base_err then return nil, base_err end

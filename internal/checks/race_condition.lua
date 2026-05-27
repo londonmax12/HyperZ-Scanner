@@ -1,34 +1,19 @@
--- race-condition: Lua port of internal/checks/race_condition.go.
+-- race-condition: probes idempotency-sensitive endpoints for time-
+-- of-check / time-of-use bugs by firing N HTTP/1.1 requests through
+-- separate TCP connections that all release their final body byte at
+-- the same instant. Variance in the resulting HTTP status histogram
+-- (>=2 distinct status codes with at least one 2xx) is the racy half
+-- of a check-then-act split.
 --
--- Probes idempotency-sensitive endpoints for time-of-check / time-
--- of-use bugs by firing N HTTP/1.1 requests through separate TCP
--- connections that all release their final body byte at the same
--- instant. Variance in the resulting HTTP status histogram (>=2
--- distinct status codes with at least one 2xx) is the racy half of
--- a check-then-act split.
---
--- Architecture mirrors jwt-vulns / takeover: the SCAN ALGORITHM
--- (raw-socket dial, single-packet barrier, status capture) lives in
--- Go and is exposed through ctx.race.scan as a raw FACTS list. Each
--- fact carries one probed target's descriptor plus the per-
--- connection probe outcomes; the Lua port iterates the facts,
--- decides which represent a race signal, composes the finding text
--- and severity, and shapes the dedupe key.
---
--- The Go bridge handles the parts of the check that would re-
--- implement at significant cost in Lua without gaining rule-level
--- expressivity: cross-page target dedupe, the per-page target cap,
--- the path-keyword filter, raw HTTP/1.1 wire bytes, and the byte-
--- barrier coordination across N goroutines. The .lua file owns every
--- operator-visible string: title, detail, details bullets,
--- remediation, dedupe-key parts.
+-- The scan algorithm (raw-socket dial, single-packet barrier, status
+-- capture) lives behind ctx.race.scan, which returns a list of raw
+-- facts; this file iterates the facts, decides which represent a
+-- race signal, composes the finding text, and shapes the dedupe key.
 --
 -- Level: Aggressive; loads only when the operator opts in via
 -- --pollute. The probe issues N parallel state-mutating requests
 -- against the target, which by construction is noisy and leaves N
--- side effects on a vulnerable endpoint. The Go bridge inherits the
--- same gate from the Go check; the Lua override stays behind it via
--- mergeLuaOverrides + the pollute branch in cmd/hyperz/checks.go.
+-- side effects on a vulnerable endpoint.
 
 local check = {
   name        = "race-condition",
@@ -49,8 +34,7 @@ local check = {
 
 -- title_path returns a short path label for the finding title. The
 -- Detail field carries the full URL; the title only needs enough
--- path to disambiguate one endpoint from another on the same host,
--- which is what the Go check's raceTitlePath does.
+-- path to disambiguate one endpoint from another on the same host.
 local function title_path(ctx, raw_url)
   local u, err = ctx.url.parse(raw_url)
   if err or not u then return raw_url end
@@ -59,9 +43,7 @@ local function title_path(ctx, raw_url)
 end
 
 -- histogram_string renders a status-count map as "200x7 409x3"
--- sorted by status code for readability. Mirrors the Go check's
--- histogramString so the evidence snippet renders identically across
--- impls.
+-- sorted by status code for readability.
 local function histogram_string(counts)
   -- counts is a table indexed by status (number). Lua's ipairs would
   -- skip non-contiguous numeric keys, so iterate via pairs and sort
@@ -77,18 +59,17 @@ local function histogram_string(counts)
   return table.concat(parts, " ")
 end
 
--- evaluate_fact applies the Go check's oracle to the raw per-target
--- probe data. Returns (vulnerable, status_counts, body_variety,
--- failures, reason). The same three gates fire:
+-- evaluate_fact applies the race oracle to the raw per-target probe
+-- data. Returns (vulnerable, status_counts, body_variety, failures,
+-- reason). Three gates fire:
 --
 --   1. At least 2 probes must have completed (Status != 0, no Err).
 --   2. The completed set must show >= 2 distinct status codes.
 --   3. At least one status in the set must be 2xx (a no-2xx batch
 --      points at a uniform rejection, not a racy success path).
 --
--- Reason is a human-readable explanation of the verdict so the .lua
--- composer can stamp it onto the per-finding bullets when the
--- verdict goes either way.
+-- Reason is human-readable so the per-finding bullets can quote it
+-- either way.
 local function evaluate_fact(fact)
   local counts = {}
   local bodies = {}
@@ -134,11 +115,7 @@ local function evaluate_fact(fact)
       fact.baseline_status, distinct)
 end
 
--- compose_finding lifts a vulnerable fact into the finding shape the
--- bridge marshals into a checks.Finding. Every operator-visible
--- field is composed here: severity, title, detail, evidence,
--- dedupe-parts. The remediation and CWE / OWASP come from the
--- module's catalog metadata.
+-- compose_finding lifts a vulnerable fact into the finding shape.
 local function compose_finding(ctx, fact, counts, body_variety, failures)
   local stat_list = histogram_string(counts)
   local title = string.format("Race condition signal in %s %s",
@@ -174,10 +151,9 @@ local function compose_finding(ctx, fact, counts, body_variety, failures)
       status  = fact.baseline_status,
       snippet = stat_list,
     },
-    -- Match the Go check's dedupe shape: scope=page, parts carry the
-    -- method tag and the body-hash key so the same target across
-    -- crawled pages collapses to one finding, but a different body
-    -- on the same URL fires its own.
+    -- Method tag + body-hash key so the same target across crawled
+    -- pages collapses, but a different body on the same URL fires its
+    -- own finding.
     dedupe_parts = {
       "method:" .. fact.method,
       "body:"   .. fact.target_key,

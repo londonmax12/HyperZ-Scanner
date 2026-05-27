@@ -1,12 +1,11 @@
--- cmd-injection: Lua port of internal/checks/cmd_injection.go.
---
--- Per sink: baseline + per-payload candidate + confirmation with a
--- DIFFERENT sleep value. Shell payloads have no universal comment
--- shape, so we cache-bust by changing the requested sleep (cand=5s,
--- conf=6s by default) rather than appending a comment-hidden canary.
--- The differing wire value defeats URL-keyed caches; the differing
--- sleep value is harmless to detection because TimingCompare is
--- parameterised on the requested sleep each time.
+-- cmd-injection: per sink, send baseline + per-payload candidate +
+-- confirmation with a DIFFERENT sleep value. Shell payloads have no
+-- universal comment shape, so we cache-bust by changing the requested
+-- sleep (cand=5s, conf=6s by default) rather than appending a
+-- comment-hidden canary. The differing wire value defeats URL-keyed
+-- caches; the differing sleep value is harmless to detection because
+-- ctx.oracle.timing_compare is parameterised on the requested sleep
+-- each time.
 
 local check = {
   name        = "cmd-injection",

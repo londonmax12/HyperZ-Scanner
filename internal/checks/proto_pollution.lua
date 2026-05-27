@@ -1,6 +1,4 @@
--- proto-pollution: Lua port of internal/checks/proto_pollution.go.
---
--- Probes server-side prototype pollution in JavaScript backends. Per
+-- proto-pollution: probes server-side prototype pollution in JS backends. Per
 -- probable sink a bundled pollution payload installs three gadgets
 -- (json-spaces, status, canary echo) on Object.prototype, then a clean
 -- observer GET against the page URL witnesses any side effect. After
@@ -78,10 +76,10 @@ local function observe(ctx, target)
   }, nil
 end
 
--- pp_judge mirrors checks.ppJudge: compares pre-pollution observer
--- (baseline) against post-pollution observer and decides whether any
--- of the three gadgets fired. Returns a verdict table with hit, gadget,
--- detail, needle fields; hit=false on no signal.
+-- pp_judge compares pre-pollution observer (baseline) against post-
+-- pollution observer and decides whether any of the three gadgets
+-- fired. Returns a verdict table with hit, gadget, detail, needle
+-- fields; hit=false on no signal.
 local function pp_judge(ctx, baseline, observer, canary_val)
   if observer.status == PROTO_STATUS and baseline.status ~= PROTO_STATUS then
     return {
@@ -172,9 +170,7 @@ local function build_json_body(canary_key, canary_val, cleanup_mode)
 end
 
 -- compose_query_url merges extra params into url's existing query
--- string and returns the rebuilt absolute URL. The Go check uses
--- url.URL.RawQuery = q.Encode(); the Lua side composes the same
--- shape by feeding ctx.url.encode_values the merged table.
+-- string and returns the rebuilt absolute URL.
 local function compose_query_url(ctx, url_str, extra)
   local u, err = ctx.url.parse(url_str)
   if err or u == nil then return nil end

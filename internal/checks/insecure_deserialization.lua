@@ -1,6 +1,4 @@
--- insecure-deserialization: Lua port of internal/checks/insecure_deserialization.go.
---
--- Two complementary arms:
+-- insecure-deserialization: two complementary arms.
 --   1. Fingerprint (passive). Scans Set-Cookie / query / form-input
 --      values for on-the-wire signatures of Java ObjectInputStream,
 --      .NET BinaryFormatter, Python pickle, Ruby Marshal, PHP
@@ -11,9 +9,8 @@
 --      format-valid payloads that trip the deserializer's parser
 --      without invoking any constructor.
 --
--- Pattern catalogue + classifier + error matchers live in Go via
+-- Pattern catalogue, classifier, and error matchers live behind
 -- ctx.deserial.{formats,classify,match_all,match_format,body_marker}.
--- The .lua port owns dedupe, finding shape, and arm orchestration.
 
 local check = {
   name        = "insecure-deserialization",
@@ -32,7 +29,6 @@ local check = {
 local FINGERPRINT_PREVIEW_CAP = 80
 
 local function new_canary()
-  -- 12 hex chars for parity with checks.NewCanary's bit count.
   local hex = "0123456789abcdef"
   local out = { "hpzc" }
   for _ = 1, 12 do
@@ -50,10 +46,8 @@ local function preview(value)
 end
 
 -- fingerprint_finding builds a "Serialized X data carried in Y"
--- finding. severity is the caller-chosen severity (high for round-
--- trip surfaces, medium for body-only leakage). The dedupe key shape
--- matches the Go check's MakeKey(name, ScopePage, target,
--- "fingerprint", "format:"+name, "location:"+location).
+-- finding. severity is high for round-trip surfaces, medium for
+-- body-only leakage.
 local function fingerprint_finding(ctx, target, location, fmt_name, fmt_label, value, severity)
   local prev = preview(value)
   return {
@@ -117,10 +111,7 @@ local function body_marker_finding(ctx, target, marker)
 end
 
 -- url_query_pairs extracts the parsed query parameters from raw as
--- an iterable list of {name, value}. ctx.url.query already returns a
--- map; we walk it deterministically (Lua tables iterate in arbitrary
--- order, but the Go side iterates u.Query() which is also arbitrary
--- and the parity test compares dedupe keys after sort).
+-- an iterable list of {name, value}.
 local function url_query_pairs(ctx, raw)
   local out = {}
   local q = ctx.url.query(raw)

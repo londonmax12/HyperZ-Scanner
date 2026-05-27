@@ -1,6 +1,4 @@
--- xxe: Lua port of internal/checks/xxe.go.
---
--- Probes XML-parsing endpoints for XML External Entity injection by
+-- xxe: probes XML-parsing endpoints for XML External Entity injection by
 -- POSTing crafted XML documents. Two detection paths run per
 -- candidate endpoint:
 --
@@ -96,8 +94,8 @@ local function page_looks_xml(ctx)
 end
 
 -- candidates assembles the deduped, sorted list of (method, url)
--- pairs to probe. Page URL, forms, and SpecOps all contribute - the
--- sort comparator matches Go's: by URL then method.
+-- pairs to probe. Page URL, forms, and SpecOps all contribute; sorted
+-- by URL then method.
 local function candidates(ctx, aggressive)
   local seen = {}
   local out = {}
@@ -303,14 +301,12 @@ function check.run(ctx)
 end
 
 -- format_drain_time renders a Unix-second timestamp in RFC3339 UTC.
--- Mirrors hit.Timestamp.Format(time.RFC3339) in the Go drain text.
 local function format_drain_time(unix_secs)
   return os.date("!%Y-%m-%dT%H:%M:%SZ", unix_secs)
 end
 
--- build_oob_finding_system mirrors checks.buildXXEOOBFinding: the
--- basic OOB-system variant fired whenever the listener observed at
--- least one callback on the canary.
+-- build_oob_finding_system fires whenever the listener observed at
+-- least one callback on the SYSTEM-entity canary.
 local function build_oob_finding_system(ctx, reg, hits)
   local hit = hits[1]
   local extra = reg.extra or {}
@@ -342,7 +338,6 @@ local function build_oob_finding_system(ctx, reg, hits)
   }
 end
 
--- build_oob_finding_dtd_exfil mirrors checks.buildXXEDTDExfilFinding.
 -- Loader-only hits surface as the High-severity "external DTD fetched"
 -- variant; loader + exfil pair surface as the Critical "exfil" variant.
 local function build_oob_finding_dtd_exfil(ctx, reg, loader_hits, exfil_hits)

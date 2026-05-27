@@ -1,6 +1,4 @@
--- stored-xss: Lua port of internal/checks/stored_xss.go.
---
--- Two-phase persistent-XSS check: phase 1 plants a fixed family of
+-- stored-xss: two-phase persistent-XSS check. Phase 1 plants a fixed family of
 -- payloads (each carrying a fresh canary) into every Sink on every
 -- in-scope page; phase 2 re-fetches every URL in visited+DetectURLs
 -- and fires a High finding when the plant's breakout bytes (canary
@@ -28,10 +26,6 @@
 -- This is a state-mutating check: plants persist on the target
 -- until the operator removes them. Loads only when the scanner
 -- ships with --pollute set, same gate ProtoPollution sits behind.
--- The Lua port and the Go check are gated by the same operator
--- flag; while both are registered, mergeLuaOverrides picks the Lua
--- port as the authoritative impl at scan time (the Go original
--- stays in the binary so its tests keep the Lua port honest).
 
 local check = {
   name        = "stored-xss",
@@ -72,10 +66,7 @@ local function contains(haystack, needle)
 end
 
 -- snippet returns a short window around the first occurrence of
--- needle in body, suitable for an evidence snippet. Mirrors the Go
--- snippet helper's behaviour: caller-supplied window size, byte-
--- bounded so a hit deep inside a long body still produces useful
--- evidence.
+-- needle in body, suitable for an evidence snippet.
 local function snippet(body, needle)
   if body == nil or needle == nil or needle == "" then return "" end
   local s = string.find(body, needle, 1, true)
@@ -210,8 +201,7 @@ end
 -- check.run is the single-phase fallback the scanner calls when
 -- phase-2 orchestration is disabled (older code paths, dry runs).
 -- Returns no findings: plants without detect would double the
--- request count without producing any report. The Go check has the
--- same shape.
+-- request count without producing any report.
 function check.run(ctx)
   return nil
 end

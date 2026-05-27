@@ -1,14 +1,7 @@
--- server-leak: pilot Lua port of internal/checks/server_leak.go.
--- Flags response headers that disclose server software or runtime
--- version. The information itself is not a vulnerability but it
--- narrows an attacker's search space (pairing "nginx/1.18.0" with
--- a public CVE list is a one-step lookup). Severity stays info to
--- reflect that.
---
--- Behavior must stay identical to the Go check: same headers
--- inspected (Server, X-Powered-By), same dedupe scope (per host +
--- header name), same severity / cwe / owasp / remediation strings.
--- The Go version's tests double as a parity check for this port.
+-- server-leak: flags response headers that disclose server software
+-- or runtime version. The leak itself is not a vulnerability, but it
+-- narrows an attacker's search space (pairing "nginx/1.18.0" with a
+-- public CVE list is a one-step lookup), so severity stays info.
 
 local check = {
   name        = "server-leak",
@@ -19,9 +12,6 @@ local check = {
   remediation = nil, -- per-finding because the header name is interpolated
 }
 
--- Closed set of headers we report. CWE-200 / OWASP A05:2021 apply
--- to both. Order matches the Go check's sort.Strings output so the
--- multi-header response produces identical finding order.
 local LEAK_HEADERS = { "Server", "X-Powered-By" }
 
 function check.run(ctx)
@@ -47,9 +37,8 @@ function check.run(ctx)
                       .. " header at the server/proxy layer so version details aren't advertised.",
         evidence    = evidence,
         -- Per-host + header: same leak across crawled pages is one
-        -- issue. Header name in the key keeps Server and X-Powered-By
-        -- distinct so a multi-header response produces two findings,
-        -- matching the Go check 1:1.
+        -- issue, but Server and X-Powered-By stay distinct so a
+        -- multi-header response produces two findings.
         dedupe_parts = { "leak-header:" .. header },
       }
     end

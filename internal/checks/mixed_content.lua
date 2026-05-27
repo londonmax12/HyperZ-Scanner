@@ -1,14 +1,8 @@
--- mixed-content: Lua port of internal/checks/mixed_content.go.
---
--- Scans the HTML body of an HTTPS page for subresources loaded over
--- plaintext http://. Active loads (script, iframe, link, form) are
--- High; passive loads (img, audio, video, ...) are Low. One finding
--- per unique URL; the same offending URL referenced N times collapses
--- to one report row.
---
--- Document tokenization is delegated to the Go ctx.html.iter_tags
--- helper so the Lua port stays free of HTML-parsing bugs and a
--- future tightening of the tokenizer behavior lands once.
+-- mixed-content: scans the HTML body of an HTTPS page for subresources
+-- loaded over plaintext http://. Active loads (script, iframe, link,
+-- form) are High; passive loads (img, audio, video, ...) are Low. One
+-- finding per unique URL; the same offending URL referenced N times
+-- collapses to one report row.
 
 local check = {
   name        = "mixed-content",
@@ -19,11 +13,9 @@ local check = {
   remediation = "Serve the referenced resource over HTTPS, host it locally on the same origin, or remove the reference.",
 }
 
--- Tag classification mirrors mixedContentTags in the Go check. The
--- two-tuple is { attribute_carrying_the_url, is_active }; <a href>
--- is intentionally absent because anchor links are navigation, not
--- subresource loads. All <link> uses are treated as active to match
--- the Go simplification.
+-- Per tag: { attribute_carrying_the_url, is_active }. <a href> is
+-- intentionally absent (anchor links are navigation, not subresource
+-- loads). All <link> uses are flagged active as a simplification.
 local TAGS = {
   script = { attr = "src",    active = true  },
   iframe = { attr = "src",    active = true  },
@@ -54,8 +46,8 @@ function check.run(ctx)
   if err then return nil, err end
 
   -- Skip non-HTML responses (image, JSON, binary). Absent CT is
-  -- treated as possibly-HTML to match the Go behavior - we'd rather
-  -- scan an unlabeled HTML page than silently miss one.
+  -- treated as possibly-HTML - we'd rather scan an unlabeled HTML
+  -- page than silently miss one.
   local ct = string.lower(snap.headers:get("Content-Type"))
   if ct ~= "" and not string.find(ct, "html", 1, true) then
     return nil

@@ -1,12 +1,7 @@
--- sri-missing: Lua port of internal/checks/sri_missing.go.
---
--- Flags <script src> / <link rel="stylesheet|preload|modulepreload|
--- prefetch" href> loaded from a different host without integrity=...
--- Same-origin loads and <iframe> (which has no SRI mechanism in any
--- browser) are deliberately excluded.
---
--- HTML tokenization delegates to ctx.html.iter_tags so the regex /
--- attribute parsing bugs only exist in one place.
+-- sri-missing: flags <script src> / <link rel="stylesheet|preload|
+-- modulepreload|prefetch" href> loaded from a different host without
+-- integrity=... Same-origin loads and <iframe> (which has no SRI
+-- mechanism in any browser) are deliberately excluded.
 
 local check = {
   name        = "sri-missing",
@@ -27,9 +22,8 @@ local LINK_RELS = {
   prefetch      = true,
 }
 
--- link_rel_is_sri_eligible mirrors linkRelIsSRIEligible: rel is a
--- space-separated token list, any one of which qualifies. Empty rel
--- is inert in browsers and skipped.
+-- rel is a space-separated token list; any one of LINK_RELS qualifies.
+-- Empty rel is inert in browsers and skipped.
 local function link_rel_is_sri_eligible(rel)
   for tok in string.gmatch(rel, "%S+") do
     if LINK_RELS[string.lower(tok)] then return true end

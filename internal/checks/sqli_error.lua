@@ -1,13 +1,11 @@
--- sqli-error: Lua port of internal/checks/sqli_error.go.
+-- sqli-error: per sink, send a baseline canary then iterate the
+-- curated SQLi-error payload list. A finding fires when a payload
+-- introduces a SQLErrorPatterns substring that was NOT present in
+-- the baseline body - the subtraction is what makes the check
+-- precise on debug pages that legitimately echo driver text.
 --
--- Per sink: baseline probe (canary), then iterate the curated SQLi-
--- error payload list. A finding fires when a payload introduces a
--- SQLErrorPatterns substring that was NOT present in the baseline
--- body - the subtraction is what makes the check precise on debug
--- pages that legitimately echo driver text.
---
--- The pattern catalogue + the new-match scanner live in Go via
--- ctx.body.sqli_error_new_matches / ctx.body.sqli_error_payloads so
+-- The pattern catalogue and new-match scanner live behind
+-- ctx.body.sqli_error_payloads / ctx.body.sqli_error_new_matches so
 -- the regex set is the single source of truth.
 
 local check = {

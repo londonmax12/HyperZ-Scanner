@@ -1,15 +1,8 @@
--- cookie-attributes: Lua port of internal/checks/cookie_attributes.go.
---
--- Parses Set-Cookie headers and emits one finding per (cookie,
--- missing attribute). Severity is fixed per attribute; the cookie
--- name + attribute are stamped into the per-finding dedupe parts so
+-- cookie-attributes: parses Set-Cookie headers and emits one finding
+-- per (cookie, missing attribute). Severity is fixed per attribute;
+-- the cookie name + attribute are stamped into the dedupe parts so
 -- two cookies missing the same flag are two findings and the same
 -- cookie missing two flags is two findings.
---
--- Set-Cookie parsing delegates to ctx.cookies.from_headers, which
--- wraps net/http's parser - matches the Go check's parse rules
--- 1:1 (including Lax/Strict/None canonicalization and "default ==
--- absent" treatment).
 
 local check = {
   name  = "cookie-attributes",
@@ -18,10 +11,9 @@ local check = {
   owasp = "A05:2021 Security Misconfiguration",
 }
 
--- attr_rules carries the per-attribute (severity, cwe, remediation)
--- triple. All three share OWASP A05:2021; per-finding cwe and
--- remediation are stamped here so the Go-original and the Lua port
--- emit identical metadata.
+-- Per-attribute (severity, cwe, remediation). All three share OWASP
+-- A05:2021, so the wrapper sets that once and these stamp cwe /
+-- remediation per finding.
 local ATTR_RULES = {
   Secure = {
     severity = "medium",
@@ -69,8 +61,6 @@ function check.run(ctx)
   }
   local cookies = ctx.cookies.from_headers(snap.headers)
 
-  -- Stable order: Go sorts by name before emitting, so the parity
-  -- test sees findings in the same sequence the Go check produces.
   table.sort(cookies, function(a, b) return a.name < b.name end)
 
   local findings = {}

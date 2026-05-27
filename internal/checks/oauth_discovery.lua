@@ -1,20 +1,16 @@
--- oauth-discovery: Lua port of internal/checks/oauth_discovery.go.
---
--- Passive audit of the OAuth 2.0 Authorization Server Metadata
--- (RFC 8414) and OpenID Connect Discovery 1.0 documents an identity
--- provider publishes at well-known paths on its issuer host. The
--- documents declare which signing algorithms, client-auth methods,
--- PKCE methods, and response types the AS accepts; misconfigurations
--- in these advertised values produce real attacker primitives even
--- before any login flow is exercised.
+-- oauth-discovery: passive audit of the OAuth 2.0 Authorization
+-- Server Metadata (RFC 8414) and OpenID Connect Discovery 1.0
+-- documents an identity provider publishes at well-known paths on its
+-- issuer host. The documents declare which signing algorithms,
+-- client-auth methods, PKCE methods, and response types the AS
+-- accepts; misconfigurations in these advertised values produce real
+-- attacker primitives even before any login flow is exercised.
 --
 -- One finding per detected weakness (alg=none, symmetric algs, only
 -- token-auth=none, missing/plain-only PKCE, implicit-flow response
--- types, plain-HTTP endpoints). Per-host caching lives in Go on
+-- types, plain-HTTP endpoints). Per-host caching lives behind
 -- ctx.oauth.discover so a 50-page crawl probes the well-known
--- endpoint once; the audit policy runs in Lua against the cached
--- facts and the finding catalog is composed here, so the rule's
--- prose / severity policy is editable without rebuilding Go.
+-- endpoint once.
 
 local check = {
   name  = "oauth-discovery",
@@ -22,16 +18,11 @@ local check = {
   scope = "host",
 }
 
--- BODY_SNIPPET_CAP matches Go's snippetJSON cap (512 bytes) so the
--- finding evidence reads identically across implementations. The full
--- body lives in the Exchange field; this is only the inline snippet.
+-- Cap on the inline snippet. The full body lives in the Exchange field.
 local BODY_SNIPPET_CAP = 512
 
 local function snippet_json(body)
   if body == nil or body == "" then return "" end
-  -- TrimSpace mirrors bytes.TrimSpace in the Go path so leading /
-  -- trailing whitespace from the JSON envelope does not appear in
-  -- the snippet.
   local trimmed = string.gsub(body, "^%s+", "")
   trimmed = string.gsub(trimmed, "%s+$", "")
   if #trimmed > BODY_SNIPPET_CAP then
@@ -87,8 +78,7 @@ local function implicit_flow_types(types)
   local out = {}
   -- "code id_token" is a hybrid that includes the code path and is
   -- not strictly implicit, but the fragment leak applies whenever
-  -- id_token rides in the URL response, so it gets flagged too. Mirrors
-  -- the Go ordering verbatim so finding details render identically.
+  -- id_token rides in the URL response, so it gets flagged too.
   for _, rt in ipairs({"token", "id_token", "id_token token", "token id_token"}) do
     if types[rt] then
       out[#out + 1] = rt
@@ -115,11 +105,8 @@ local function plain_http_endpoints(ctx, facts)
   return out
 end
 
--- format_string_array mirrors Go's `fmt.Sprintf("%v", []string{...})`
--- which produces "[a b c]" for the finding detail prose. The Go
--- check folds the advertised values straight into the Sprintf with
--- %v; we replicate that bracketed-space-joined form so the Lua
--- finding text byte-matches the Go one.
+-- Renders a string list as "[a b c]" (Go-style %v) in the finding
+-- detail prose.
 local function format_string_array(arr)
   if arr == nil or #arr == 0 then return "[]" end
   return "[" .. table.concat(arr, " ") .. "]"
@@ -302,10 +289,10 @@ local function finding_plain_http_endpoint(ctx, facts, endpoints)
   }
 end
 
--- restamp_to_page mirrors the Go restampFindings pass: the audit
--- builds each finding against the discovery probe URL (so the dedupe
--- key keys off the canonical resource) but we re-stamp Target / URL
--- to the current page so the report ties to a URL the operator saw.
+-- The audit builds each finding against the discovery probe URL (so
+-- the dedupe key keys off the canonical resource); restamp Target /
+-- URL to the current page so the report ties to a URL the operator
+-- actually saw.
 local function restamp_to_page(findings, page_url)
   for _, f in ipairs(findings) do
     f.target = page_url

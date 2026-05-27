@@ -1,7 +1,6 @@
--- cors-reflection: Lua port of internal/checks/cors_reflection.go.
---
--- Active probe complementing cors-config. Sends crafted Origin
--- headers and inspects Access-Control-Allow-Origin for echoes:
+-- cors-reflection: active probe complementing cors-config. Sends
+-- crafted Origin headers and inspects Access-Control-Allow-Origin for
+-- echoes:
 --
 --   * "verbatim" canary on https://hyperz-canary.invalid - the
 --     baseline probe, fired at every active level. RFC 2606 .invalid

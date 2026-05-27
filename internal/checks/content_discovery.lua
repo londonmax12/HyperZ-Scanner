@@ -1,9 +1,6 @@
--- content-discovery: Lua port of internal/checks/content_discovery.go.
---
--- Probes a curated wordlist of high-signal paths against the target
--- host. The wordlist itself lives in Go (ctx.discovery.entries) so
--- catalog edits land once; the .lua port owns sweep orchestration,
--- baseline + classify, and finding-shape composition.
+-- content-discovery: probes a curated wordlist of high-signal paths
+-- against the target host. The wordlist lives behind
+-- ctx.discovery.entries so catalog edits land once.
 --
 -- Per-host once: ctx.discovery.claim_host enforces a single sweep per
 -- (scheme://host, check) tuple regardless of how many pages on this
@@ -18,9 +15,7 @@
 -- False-positive defense: two random canary probes per host establish
 -- the soft-404 signature (status, body length, body hash, content
 -- type, redirect target). A candidate that looks shape-equivalent to
--- the baseline is silently dropped. The classify_response branches
--- mirror Go's classifyDiscovery (auth-gated, marker-match,
--- 200-distinct, redirects).
+-- the baseline is silently dropped.
 
 local check = {
   name        = "content-discovery",
@@ -31,10 +26,6 @@ local check = {
   remediation = "Restrict admin / debug / VCS metadata paths at the web server or CDN layer; "
                 .. "produce deploy artifacts that exclude editor backups, lockfiles, and VCS dirs.",
 }
-
--- body_hash_prefix / content_type_family / length_close_to live in
--- Go (ctx.discovery surface). The .lua side stays at the orchestration
--- layer where the rule logic lives.
 
 local function get_status(resp)
   if resp == nil then return 0 end
@@ -55,10 +46,7 @@ end
 
 -- baseline_for_host sends two canary probes and accumulates the
 -- distinct response shapes the host produces for known-missing paths.
--- statuses is a set of integers; body_hashes is a set of hex
--- prefixes; body_lens is an array of observed lengths; content_type
--- and location track the most recently observed values (last-write-
--- wins matches the Go check).
+-- content_type and location are last-write-wins.
 local function baseline_for_host(ctx, host_root)
   local b = {
     statuses     = {},
@@ -86,10 +74,10 @@ local function baseline_for_host(ctx, host_root)
   return b, nil
 end
 
--- looks_like_miss mirrors discoveryBaseline.looksLikeMiss: same status
--- AND ( (3xx => same Location) OR (2xx => body hash match OR (same CT
--- family AND body length close to one of the baselines)) OR (4xx /
--- 5xx => status match alone) ).
+-- looks_like_miss returns true when the response shape matches the
+-- baseline: same status AND ( 3xx => same Location | 2xx => body
+-- hash match OR (same CT family AND body length close to one of the
+-- baselines) | 4xx/5xx => status match alone ).
 local function looks_like_miss(ctx, b, status, body, ct, loc)
   if b.statuses[status] == nil then return false end
   if status >= 300 and status < 400 then
@@ -113,9 +101,7 @@ end
 
 -- discovery_snippet renders the body excerpt for a finding's evidence.
 -- Marker-bearing entries center the window on the first marker hit;
--- markerless entries return the leading bytes. Mirrors Go's
--- discoverySnippet at the byte level for entries that share the same
--- response.
+-- markerless entries return the leading bytes.
 local function discovery_snippet(body, marker)
   if marker ~= nil and marker ~= "" then
     local i = body:find(marker, 1, true)
@@ -130,8 +116,8 @@ local function discovery_snippet(body, marker)
   return (body:gsub("^%s+", ""):gsub("%s+$", ""))
 end
 
--- classify_response mirrors Go's classifyDiscovery. Returns
--- (verdict, evidence_line, severity) or ("", "", "") on a non-hit.
+-- classify_response returns (verdict, evidence_line, severity) on a
+-- hit, or ("", "", "") on a non-hit.
 local function classify_response(ctx, entry, baseline, status, body, ct, loc)
   if status == 401 or status == 403 then
     return "auth-gated",

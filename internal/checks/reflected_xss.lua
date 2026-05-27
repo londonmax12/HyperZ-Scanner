@@ -1,18 +1,15 @@
--- reflected-xss: Lua port of internal/checks/reflected_xss.go.
---
--- Per sink:
---   1. Send a bare canary. FindReflections classifies the surrounding
---      HTML / JS context. Non-reflecting sinks are dropped here so
---      the per-page request count stays bounded.
+-- reflected-xss: per sink:
+--   1. Send a bare canary. ctx.body.find_reflections classifies the
+--      surrounding HTML / JS context. Non-reflecting sinks are dropped
+--      here so the per-page request count stays bounded.
 --   2. For each reflection context, render the curated XSS payload
 --      variant whose breakout shape matches. A finding fires only
 --      when the rendered payload bytes round-trip intact - that is
 --      the discriminator between "reflected unescaped" (exploitable)
 --      and "reflected with HTML-encoding" (safe).
 --
--- The Go-side helper xss_payloads_for_contexts owns the
--- context-to-payload mapping + level-based ordering so the Lua port
--- iterates payloads in the same order the Go check uses.
+-- The context-to-payload mapping and level-based ordering live behind
+-- ctx.body.xss_payloads_for_contexts.
 
 local check = {
   name        = "reflected-xss",
@@ -62,10 +59,8 @@ local function probe(ctx, sink)
     return nil
   end
 
-  -- Flatten the reflection-context list (every entry's `context`
-  -- field) for the Go-side payload selector. context_summary collapses
-  -- duplicates and preserves source order, same as the Go check's
-  -- contextSummary helper.
+  -- Flatten the reflection-context list for the payload selector;
+  -- xss_context_summary collapses duplicates while preserving order.
   local context_strings = {}
   for i, r in ipairs(reflections) do
     context_strings[i] = r.context

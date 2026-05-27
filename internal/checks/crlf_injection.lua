@@ -1,14 +1,13 @@
--- crlf-injection: Lua port of internal/checks/crlf_injection.go.
+-- crlf-injection: probes query / form sinks for CR/LF header
+-- injection (HTTP response splitting, CWE-113). The payload embeds a
+-- uniquely-named header (X-Hyperz-CRLF) carrying a fresh canary; if
+-- that header appears on the parsed response, the server must have
+-- decoded the request bytes and rendered the CR/LF into the response
+-- stream verbatim.
 --
--- Probes query / form sinks for CR/LF header injection (HTTP response
--- splitting, CWE-113). The payload embeds a uniquely-named header
--- (X-Hyperz-CRLF) carrying a fresh canary; if that header appears on
--- the parsed response, the server must have decoded the request
--- bytes and rendered the CR/LF into the response stream verbatim.
---
--- Only LocQuery and LocForm sinks are probed - Go's net/http
--- transport rejects CR/LF in outbound header values, so a header /
--- cookie sink cannot carry the payload from a Go client.
+-- Only LocQuery and LocForm sinks are probed - net/http rejects
+-- CR/LF in outbound header values, so header / cookie sinks cannot
+-- carry the payload from this client.
 
 local check = {
   name        = "crlf-injection",
@@ -24,10 +23,9 @@ local check = {
 local CANARY_HEADER = "X-Hyperz-CRLF"
 local BODY_CAP      = 4 * 1024
 
--- variants returns the line-terminator sequences to try, in the same
--- order the Go check does. Full CRLF first (textbook), then LF-only
--- and CR-only to catch filters that strip one byte but not the other;
--- aggressive scans add the multi-byte aliasing trick.
+-- Full CRLF first (textbook), then LF-only and CR-only to catch
+-- filters that strip one byte but not the other; aggressive scans add
+-- the multi-byte aliasing trick.
 local function variants(ctx)
   local v = { "\r\n", "\n", "\r" }
   if ctx:level_at_least("aggressive") then
@@ -54,7 +52,6 @@ local function sep_label(sep)
 end
 
 local function new_canary()
-  -- 12 hex chars for parity with checks.NewCanary's bit count.
   local hex = "0123456789abcdef"
   local out = { "hpzc" }
   for _ = 1, 12 do
@@ -126,10 +123,6 @@ function check.run(ctx)
           ctx:report(string.format("probe param %q (%s): %s", sink.name, sink.loc, probe_err))
           if not first_err then first_err = probe_err end
         elseif found then
-          -- Per (page, loc, param): MakeKey will fold these parts in
-          -- so finding the same param from multiple crawl entries
-          -- collapses to one row, while distinct params on the same
-          -- page stay distinct.
           local key = "loc:" .. sink.loc .. "|param:" .. sink.name
           if not seen[key] then
             seen[key] = true

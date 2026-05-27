@@ -1,21 +1,14 @@
--- tls-audit: Lua port of internal/checks/tls_audit.go.
---
--- Performs a single, passive TLS handshake against the target host
--- and reports on the negotiated protocol version, negotiated cipher
--- suite, OCSP stapling, SCT (Certificate Transparency) presence, the
--- validity windows of every certificate in the chain, and hostname
--- coverage. Issues no HTTP request.
+-- tls-audit: performs a single, passive TLS handshake against the
+-- target host and reports on the negotiated protocol version,
+-- negotiated cipher suite, OCSP stapling, SCT (Certificate
+-- Transparency) presence, the validity windows of every certificate
+-- in the chain, and hostname coverage. Issues no HTTP request.
 --
 -- Detection logic lives here; the bridge owns the bytes-side concerns
 -- (dialing the socket, parsing x509 extensions, computing the cipher
--- name + insecure-cipher classification). Every severity band /
--- finding shape / dedupe-key part is composed in this file so a Lua
--- author can adjust the thresholds without going back into Go.
---
--- The Go check's tests are the parity oracle. The Lua parity tests in
--- this package run both implementations against the same TLS listeners
--- (and the same frozen-now clock for expiry edge cases) and compare
--- finding shape.
+-- name + insecure-cipher classification). Every severity band,
+-- finding shape, and dedupe-key part is composed in this file so a
+-- Lua author can adjust the thresholds without leaving Lua.
 
 local check = {
   name  = "tls-audit",
@@ -23,10 +16,6 @@ local check = {
   scope = "host",
   owasp = "A02:2021 Cryptographic Failures",
 }
-
--- The cipher / version detail strings hard-code the same wording the
--- Go check uses, so a parity test on Detail / Title / Remediation
--- byte-matches across implementations.
 
 local function version_finding(ctx, target, version_name)
   local sev
@@ -52,7 +41,6 @@ end
 
 -- High when the cipher name contains one of the broken-by-default
 -- tokens; medium for the rest of the insecure set (CBC, static-RSA).
--- Mirrors the Go check's switch on strings.Contains(upper, ...).
 local function cipher_severity(name)
   local upper = string.upper(name)
   if string.find(upper, "RC4", 1, true)
@@ -257,8 +245,8 @@ function check.run(ctx)
   local target = ctx.page.url
   local u, perr = ctx.url.parse(target)
   if perr then
-    -- Unparseable URL: same shape as the Go check (parse error
-    -- surfaces as a check-level error, not a silent miss).
+    -- Unparseable URL surfaces as a check-level error, not a silent
+    -- miss.
     return nil, perr
   end
   -- http:// has no TLS to inspect; security-headers covers the

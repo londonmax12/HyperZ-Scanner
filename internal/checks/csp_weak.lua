@@ -1,16 +1,11 @@
--- csp-weak: Lua port of internal/checks/csp_weak.go.
---
--- Inspects a present Content-Security-Policy header value (enforcing
--- first, Report-Only fallback) and emits one consolidated finding
--- listing every weakness in the policy: missing object-src / base-uri,
--- 'unsafe-inline' / 'unsafe-eval' in script-src, wildcard sources,
--- scheme-only allowlists, Report-Only-without-enforcement, and so on.
---
--- The directive parsing + the per-directive weakness rules live in Go
--- via ctx.body.analyze_csp so the spec-fatal duplicate-detection and
--- the keyword / hash / nonce matchers stay in exactly one place. The
--- Lua port owns the orchestration: header gathering, severity climb,
--- title shape, dedupe key composition.
+-- csp-weak: inspects a present Content-Security-Policy header value
+-- (enforcing first, Report-Only fallback) and emits one consolidated
+-- finding listing every weakness in the policy: missing object-src /
+-- base-uri, 'unsafe-inline' / 'unsafe-eval' in script-src, wildcard
+-- sources, scheme-only allowlists, Report-Only-without-enforcement,
+-- and so on. Directive parsing and matchers live behind
+-- ctx.body.analyze_csp so the spec-fatal duplicate-detection and the
+-- keyword / hash / nonce matchers stay in exactly one place.
 
 local check = {
   name        = "csp-weak",

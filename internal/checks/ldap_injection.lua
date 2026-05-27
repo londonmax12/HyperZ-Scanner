@@ -1,6 +1,4 @@
--- ldap-injection: Lua port of internal/checks/ldap_injection.go.
---
--- Two arms per probable sink:
+-- ldap-injection: two arms per probable sink:
 --   1. Filter-break (boolean): append truthy / falsy suffixes that
 --      close the value literal and inject an LDAP filter operator.
 --      BooleanCompare verdicts the canonical truthy~baseline /

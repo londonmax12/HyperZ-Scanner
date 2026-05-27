@@ -1,8 +1,7 @@
--- openapi-audit: Lua port of internal/checks/openapi_audit.go.
---
--- Discovers OpenAPI / Swagger documents at well-known per-host paths
--- and audits the document itself for three classes of exposure that
--- ship in the spec long before any request hits a real endpoint:
+-- openapi-audit: discovers OpenAPI / Swagger documents at well-known
+-- per-host paths and audits the document itself for three classes of
+-- exposure that ship in the spec long before any request hits a real
+-- endpoint:
 --
 --   1. Embedded credentials. Every secrets_in_body pattern fires
 --      against the spec body; specs are published alongside the code
@@ -18,11 +17,8 @@
 --      inherit no global default, those operations are publicly
 --      reachable.
 --
--- Per-host caching of the probe + parsed body lives in Go via
--- ctx.openapi.discover (one fetch per host per scan); the audit
--- policy runs in Lua against the cached facts and composes the
--- finding catalog here so prose / severity / dedupe shape is editable
--- without rebuilding Go.
+-- Per-host caching of the probe + parsed body lives behind
+-- ctx.openapi.discover (one fetch per host per scan).
 
 local check = {
   name  = "openapi-audit",
@@ -30,8 +26,6 @@ local check = {
   scope = "host",
 }
 
--- BODY_SNIPPET_CAP matches Go's snippetJSON cap (512 bytes) so the
--- finding evidence reads identically across implementations.
 local BODY_SNIPPET_CAP = 512
 
 local function snippet_json(body)
@@ -55,19 +49,16 @@ local function build_evidence(ctx, facts)
   }
 end
 
--- finding_embedded_credentials reuses ctx.body.find_secrets so the
--- Lua port runs the same pattern catalogue, applies the same nearby-
--- context filter, and gets back the same (id, label, severity, raw,
--- redacted, count) hit shape the secrets_in_body port consumes. The
--- audit-side composition (sort by severity desc / id / redacted,
--- max-severity, dedupe parts) lives here.
+-- finding_embedded_credentials reuses ctx.body.find_secrets so this
+-- check runs the same pattern catalogue and nearby-context filter as
+-- secrets_in_body, then composes its own audit-side report (sort by
+-- severity desc, max-severity, dedupe parts).
 local function finding_embedded_credentials(ctx, facts)
   local hits = ctx.body.find_secrets(facts.body)
   if #hits == 0 then return nil end
 
-  -- find_secrets already returns hits sorted (severity desc, id asc,
-  -- redacted asc) - mirrors the Go check's sort.SliceStable shape
-  -- verbatim so the first hit's label feeds the single-hit title.
+  -- find_secrets returns hits pre-sorted (severity desc, id asc,
+  -- redacted asc) so the first hit's label feeds the single-hit title.
 
   local max_sev = "info"
   local details = {}
@@ -132,9 +123,7 @@ end
 
 -- finding_example_auth_tokens consumes the raw regex hits from
 -- ctx.openapi.scan_example_auth_matches and applies the audit policy
--- (dedup by scheme+redacted, sort by scheme asc / redacted asc). The
--- regex + nearby-context filter live in Go for re2 power; everything
--- else lives here.
+-- (dedup by scheme+redacted, sort by scheme asc / redacted asc).
 local function finding_example_auth_tokens(ctx, facts)
   local raw = ctx.openapi.scan_example_auth_matches(facts.body)
   if #raw == 0 then return nil end
@@ -285,10 +274,10 @@ local function finding_authless_operations(ctx, facts)
   }
 end
 
--- restamp_to_page mirrors Go's restampFindings: the audit builds each
--- finding against the discovery probe URL (so the dedupe key keys off
--- the canonical resource) but we re-stamp Target / URL to the current
--- page so the report ties to a URL the operator visited.
+-- The audit builds each finding against the discovery probe URL (so
+-- the dedupe key keys off the canonical resource); restamp Target /
+-- URL to the current page so the report ties to a URL the operator
+-- visited.
 local function restamp_to_page(findings, page_url)
   for _, f in ipairs(findings) do
     f.target = page_url

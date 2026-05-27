@@ -1,6 +1,4 @@
--- graphql-audit: Lua port of internal/checks/graphql_audit.go.
---
--- Two probe families per discovered GraphQL endpoint:
+-- graphql-audit: two probe families per discovered GraphQL endpoint.
 --
 -- Configuration exposures (LevelDefault):
 --   1. Introspection enabled (Medium): __schema query returns the full
@@ -119,9 +117,8 @@ local function post_json(ctx, target, payload)
   return body, resp:status(), req, resp, truncated, nil
 end
 
--- snippet_json returns a trimmed-and-capped rendering of body for
--- finding evidence. Matches the Go check's 512-byte cap so report
--- text byte-aligns across implementations.
+-- snippet_json returns a trimmed-and-capped (512 byte) rendering of
+-- body for finding evidence.
 local function snippet_json(body)
   if body == nil then return "" end
   local out = body:gsub("^%s+", ""):gsub("%s+$", "")
@@ -194,9 +191,8 @@ local function alias_response_count(ctx, body)
 end
 
 -- per_alias_resolve_count counts data keys first, then falls back to
--- counting unique leading errors[].path segments. Mirrors the Go
--- perAliasResolveCount: a single global validation error has empty
--- path and does not count.
+-- counting unique leading errors[].path segments. A single global
+-- validation error has empty path and does not count.
 local function per_alias_resolve_count(ctx, body)
   local doc = ctx.json.decode(body)
   if type(doc) ~= "table" then return 0 end
@@ -242,9 +238,9 @@ local function element_references_field(elem, field)
   return false
 end
 
--- batch_mutations_executed mirrors the Go batchMutationsExecuted:
--- array of >= 2 elements where every elem has data / errors AND >= 2
--- reference field by data key or errors[].path.
+-- batch_mutations_executed returns true when body is an array of
+-- >= 2 elements where every elem has data / errors AND >= 2 reference
+-- field by data key or errors[].path.
 local function batch_mutations_executed(ctx, body, field)
   local arr = ctx.json.decode(body)
   if not is_json_array(arr) or #arr < 2 then return false end
@@ -292,9 +288,9 @@ local function depth_resolved(ctx, body, requested)
   return count >= requested
 end
 
--- build_alias_auth_query mirrors checks.buildAliasAuthQuery: a mutation
--- that aliases count calls of field with a __typename sub-selection
--- (works for both object-return and scalar-return resolvers).
+-- build_alias_auth_query renders a mutation that aliases count calls
+-- of field with a __typename sub-selection (works for both object-
+-- return and scalar-return resolvers).
 local function build_alias_auth_query(field, count)
   local parts = { "mutation AuthBypass {" }
   for i = 0, count - 1 do
@@ -564,9 +560,9 @@ local function probe_depth(ctx, target)
   }
 end
 
--- run_probe wraps a probe function with the report-on-error pattern
--- the Go check uses. Returns the finding table (with _status stripped)
--- or nil; errors get reported via ctx:report rather than propagated.
+-- run_probe wraps a probe with the report-on-error pattern. Returns
+-- the finding table (with _status stripped) or nil; errors report via
+-- ctx:report rather than propagating.
 local function run_probe(ctx, target, name, fn, findings)
   local f, err = fn(ctx, target)
   if err then

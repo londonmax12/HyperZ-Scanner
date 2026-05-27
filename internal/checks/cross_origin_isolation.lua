@@ -1,16 +1,9 @@
--- cross-origin-isolation: Lua port of
--- internal/checks/cross_origin_isolation.go.
---
--- Inspects COOP / COEP headers on HTML responses and flags every
--- configuration that prevents the document from reaching the cross-
--- origin isolated state. The check fires only when at least one of
--- the two headers is present - the author was reaching for isolation
--- - and surfaces the ways that goal is undone (wrong values, multi-
--- header confusion, COEP without matching COOP, ...).
---
--- Parity contract: every weakness, dedupe id, and severity must
--- match internal/checks/cross_origin_isolation.go exactly. The Go
--- test cases double as a parity oracle.
+-- cross-origin-isolation: inspects COOP / COEP headers on HTML
+-- responses and flags configurations that prevent the document from
+-- reaching the cross-origin isolated state. The check fires only when
+-- at least one of the two headers is present (the author was reaching
+-- for isolation) and surfaces the ways that goal is undone: wrong
+-- values, multi-header confusion, COEP without matching COOP, etc.
 
 local check = {
   name        = "cross-origin-isolation",
@@ -35,9 +28,9 @@ local COEP_VALID = {
   ["credentialless"] = true,
 }
 
--- coi_policy_of mirrors coiPolicyOf in the Go check. Returns the
--- lower-cased token, the original value (for human-readable text),
--- and whether any non-empty value was seen.
+-- coi_policy_of returns the lower-cased policy token, the original
+-- value (for human-readable text), and whether any non-empty value
+-- was seen.
 local function coi_policy_of(values)
   for _, v in ipairs(values) do
     local trimmed = (v:gsub("^%s+", ""):gsub("%s+$", ""))
@@ -56,10 +49,8 @@ function check.run(ctx)
   local snap, err = ctx:ensure_response()
   if err then return nil, err end
 
-  -- COOP / COEP only meaningful on top-level HTML 200s. The Go
-  -- check applies the same gate to keep findings tracking real
-  -- attack surface and not non-document responses that happen to
-  -- carry the header.
+  -- COOP / COEP only meaningful on top-level HTML 200s; skip non-
+  -- document responses that happen to carry the header.
   if snap.status ~= 200 or not ctx.body.is_html_ct(snap.headers:get("Content-Type")) then
     return nil
   end

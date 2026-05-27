@@ -1,10 +1,7 @@
--- host-header-injection: Lua port of
--- internal/checks/host_header_injection.go.
---
--- Probes whether the Host header is reflected in the response body
--- or used to generate absolute URLs. A reflected Host is the root
--- primitive behind cache poisoning, password reset link hijacking,
--- and host-routing-based SSRF.
+-- host-header-injection: probes whether the Host header is reflected
+-- in the response body or used to generate absolute URLs. A reflected
+-- Host is the root primitive behind cache poisoning, password reset
+-- link hijacking, and host-routing-based SSRF.
 --
 -- One canary probe per page: GET the page URL with Host overridden
 -- to a reserved (.example) host and search the response body for any

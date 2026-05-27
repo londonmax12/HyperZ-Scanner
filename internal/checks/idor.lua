@@ -1,9 +1,7 @@
--- idor: Lua port of internal/checks/idor.go.
---
--- Probes identifier-shaped sinks for Insecure Direct Object Reference
--- flaws by tampering with values whose shape suggests a resource
--- reference (numeric, UUID, mongoid, slug, email, username, hex,
--- base64ish, or a learned cross-scan shape) and watching for a
+-- idor: probes identifier-shaped sinks for Insecure Direct Object
+-- Reference flaws by tampering with values whose shape suggests a
+-- resource reference (numeric, UUID, mongoid, slug, email, username,
+-- hex, base64ish, or a learned cross-scan shape) and watching for a
 -- response divergence that survives the false-positive backstop.
 --
 -- Per sink, three probes in series:
@@ -21,16 +19,14 @@
 --      verdict ends the sink's probe loop.
 --
 -- The corpus is scan-lifetime: ctx.idor.corpus() returns the same
--- *checks.Corpus instance for every Run on this LuaCheck (held in
--- the LuaCheck's aux map by AuxOrCreate), mirroring how the Go
--- check's `&checks.IDOR{}` registration keeps one Corpus alive
+-- instance for every Run on this LuaCheck so one Corpus stays alive
 -- across the whole scan. Pages ingest their values before any probe
 -- runs so the page's own values are available as tampering
 -- candidates for sibling sinks on the same page.
 --
 -- All findings ship at Severity High - cross-tenant confirmation
--- requires a second authenticated context which hyperz doesn't
--- have today, so the check tops out below Critical.
+-- requires a second authenticated context which hyperz doesn't have
+-- today, so the check tops out below Critical.
 
 local check = {
   name        = "idor",
@@ -52,7 +48,7 @@ local MAX_SINKS_PER_PAGE = 8
 local MIN_BASELINE_BODY = 64
 
 -- Params that look identifier-shaped on the wire but never carry
--- resource references. Mirrors idorParamDenylist in the Go check.
+-- resource references.
 local PARAM_DENYLIST = {
   q = true, query = true, search = true, s = true,
   page = true, limit = true, offset = true, count = true, size = true, per_page = true,
@@ -89,9 +85,9 @@ local function send(ctx, sink, payload)
 end
 
 -- candidate_for evaluates a sink against the corpus and returns a
--- candidate descriptor or nil. Mirrors the Go check's filter set:
--- header/cookie sinks skipped (not yet covered), denylist applied,
--- pattern classification gates.
+-- candidate descriptor or nil. Header/cookie sinks are skipped (not
+-- yet covered); denylist and pattern classification gate everything
+-- else.
 local function candidate_for(corpus, sink)
   if sink.loc == "header" or sink.loc == "cookie" then return nil end
   if PARAM_DENYLIST[string.lower(sink.name)] then return nil end
@@ -107,9 +103,8 @@ local function candidate_for(corpus, sink)
 end
 
 -- collect_candidates returns the ordered, capped candidate list a
--- single Run probes. Sort precedence-desc, name-asc matches
--- identifierSinks in the Go check so cap-trim drops the same low-
--- value candidates on both impls.
+-- single Run probes. Sort precedence-desc, name-asc so cap-trim drops
+-- the lowest-value candidates first.
 local function collect_candidates(ctx, corpus)
   local out = {}
   for _, sink in ipairs(ctx.sinks.for_page{}) do

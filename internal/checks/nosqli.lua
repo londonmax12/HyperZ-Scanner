@@ -1,12 +1,9 @@
--- nosqli: Lua port of internal/checks/nosqli.go.
---
--- Two arms per probable sink:
+-- nosqli: two arms per probable sink.
 --   1. Operator injection (boolean): rewrite the sink's name with a
 --      Mongo operator suffix (`name[$eq]`, `name[$in][0]`) or
 --      equivalent nested-JSON shape, oscillating the value between
---      sink.value (truthy) and a fresh canary (falsy). The Go-side
---      buildOperatorRequest produces the wire-shape rewrite; the Lua
---      port consumes the resulting request.
+--      sink.value (truthy) and a fresh canary (falsy). The wire-shape
+--      rewrite is produced by ctx.body.nosqli_build_operator_request.
 --   2. Error-based: append payloads engineered to break Mongo /
 --      Mongoose driver parsing. A driver-error pattern not already
 --      in baseline body fires the finding.

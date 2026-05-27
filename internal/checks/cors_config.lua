@@ -1,6 +1,4 @@
--- cors-config: Lua port of internal/checks/cors_config.go.
---
--- Passive inspection of Access-Control-Allow-Origin /
+-- cors-config: passive inspection of Access-Control-Allow-Origin /
 -- Access-Control-Allow-Credentials on the cached response. Three
 -- shapes fire findings:
 --
@@ -31,9 +29,9 @@ local function cred_suffix(acac)
   return ""
 end
 
--- same_origin_as mirrors sameOriginAs: scheme + host (case-insensitive)
--- must match. Default-port mismatches are intentionally treated as
--- distinct because url.Parse keeps the explicit port in u.Host.
+-- scheme + host (case-insensitive) must match. Default-port mismatches
+-- are intentionally distinct because url.parse keeps the explicit port
+-- in u.host.
 local function same_origin_as(ctx, acao, target_url)
   local a, aerr = ctx.url.parse(acao)
   local t, terr = ctx.url.parse(target_url)

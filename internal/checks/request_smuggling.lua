@@ -1,26 +1,20 @@
--- request-smuggling: Lua port of internal/checks/request_smuggling.go.
+-- request-smuggling: probes the target's front-end / back-end parser
+-- pair for HTTP request-framing desynchronization (CL.TE, TE.CL,
+-- H2.CL). All probes are timing-only: the connection-level hang IS
+-- the signal, so no smuggled suffix lands on another user's
+-- connection and the only state disturbed is the single connection
+-- the probe rode in on.
 --
--- Probes the target's front-end / back-end parser pair for HTTP
--- request-framing desynchronization (CL.TE, TE.CL, H2.CL). All
--- probes are timing-only: the connection-level hang IS the signal,
--- so no smuggled suffix lands on another user's connection and the
--- only state disturbed is the single connection the probe rode in on.
---
--- Architecture mirrors jwt-vulns / race-condition: the SCAN
--- ALGORITHM (raw-socket HTTP/1.1 framing, hand-rolled HPACK + h2
--- frames, baseline measurement, timing oracle) lives in Go and is
--- exposed through ctx.smuggling.scan as a raw FACTS shape. The Lua
--- port reads per-variant timings + the timing-oracle's confirmed
--- bool, picks the first confirmed variant to surface (or returns
--- nothing on a clean host), and composes severity / title / detail /
--- remediation / dedupe-key here. Per-host caching keeps multi-page
--- scans cheap; the Lua port consults ctx.smuggling.scan().from_cache
--- to decide whether to re-emit on subsequent pages.
+-- The scan algorithm (raw-socket HTTP/1.1 framing, hand-rolled HPACK
+-- + h2 frames, baseline measurement, timing oracle) sits behind
+-- ctx.smuggling.scan, which returns raw per-variant facts. This file
+-- picks the first confirmed variant and composes the finding. Per-
+-- host caching keeps multi-page scans cheap; ctx.smuggling.scan().from_cache
+-- tells us whether to re-emit on later pages.
 --
 -- Level: Aggressive. The probes are deliberately malformed and many
 -- production WAFs will log or block the source IP; loads only when
--- the operator opts in via --pollute, alongside the other state-
--- mutating / disruptive checks.
+-- the operator opts in via --pollute.
 
 local check = {
   name        = "request-smuggling",
@@ -39,11 +33,9 @@ local check = {
   pollute = true,
 }
 
--- first_confirmed_variant returns the first variant entry with
--- confirmed=true, or nil when the scan produced no confirmed
--- variants. Mirrors the Go check's per-host emit policy: one
--- finding per host, attributed to the first variant that crossed
--- the timing oracle's threshold on both probes.
+-- One finding per host, attributed to the first variant that crossed
+-- the timing oracle's threshold on both probes. Returns nil when no
+-- variant confirmed.
 local function first_confirmed_variant(variants)
   for _, v in ipairs(variants) do
     if v.confirmed then return v end
@@ -51,19 +43,14 @@ local function first_confirmed_variant(variants)
   return nil
 end
 
--- format_ms renders a millisecond integer as the "1.234s"-style
--- string the Go check stamps via time.Duration.Round(time.Millisecond).
--- Sub-second values stay in ms; second-scale and beyond render as
--- seconds with three decimal places. Centralised so the Lua composer
--- and the Go-side text agree on the units we surface.
+-- format_ms renders a millisecond integer as a human-readable
+-- duration. Sub-second stays in ms; second-scale and beyond render as
+-- seconds with up to three decimals, trailing zeros stripped.
 local function format_ms(ms)
   if ms < 1000 then
     return string.format("%dms", ms)
   end
   local secs = ms / 1000.0
-  -- Strip trailing zeros to match the Go duration formatter ("1s",
-  -- "1.5s", "1.234s") without writing a parser. Format with 3 dp,
-  -- then trim "0+$" and the dangling dot.
   local s = string.format("%.3fs", secs)
   s = s:gsub("0+s$", "s")
   s = s:gsub("%.s$", "s")
@@ -71,11 +58,8 @@ local function format_ms(ms)
 end
 
 -- compose_finding lifts a confirmed variant into the finding shape.
--- Every operator-visible field is composed here: severity (High,
--- since confirmed front/back parser disagreement is reliably
--- exploitable for cache poisoning + auth bypass), title, detail,
--- evidence, dedupe parts. The remediation, CWE / OWASP come from
--- the module's catalog metadata.
+-- Severity is High: confirmed front/back parser disagreement is
+-- reliably exploitable for cache poisoning + auth bypass.
 local function compose_finding(ctx, host_key, page_url, v)
   local baseline_label = format_ms(v.baseline_ms)
   local probe1_label   = format_ms(v.probe1_ms)
@@ -109,13 +93,9 @@ local function compose_finding(ctx, host_key, page_url, v)
       url     = host_key,
       snippet = snippet,
     },
-    -- Match the Go check's dedupe shape: scope=host, parts carry the
-    -- variant label so a single host with two confirmed variants
-    -- (rare but possible) collapses to one finding per variant.
-    -- We honour the per-host emit policy by picking just one variant
-    -- in first_confirmed_variant, but the key shape stays variant-
-    -- specific in case a future tweak surfaces every confirmed
-    -- variant per host.
+    -- Variant label in the dedupe key keeps the shape future-proof if
+    -- we ever surface every confirmed variant per host; today
+    -- first_confirmed_variant only picks one.
     dedupe_parts = { v.label },
   }
 end

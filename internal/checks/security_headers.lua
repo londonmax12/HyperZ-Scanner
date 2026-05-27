@@ -1,14 +1,9 @@
--- security-headers: Lua port of internal/checks/security_headers.go.
---
--- Flags HTML responses that omit one or more of the five canonical
--- response-side security headers (CSP, HSTS, X-Content-Type-Options,
--- X-Frame-Options, Referrer-Policy). Every missing header on the same
--- page collapses into a single finding with one bullet per header so
--- the report carries one configuration defect with several facets
--- rather than five near-duplicate rows.
---
--- The per-header severity / CWE / remediation strings track the Go
--- check 1:1; the Go check's tests are the parity oracle.
+-- security-headers: flags HTML responses that omit one or more of the
+-- five canonical response-side security headers (CSP, HSTS,
+-- X-Content-Type-Options, X-Frame-Options, Referrer-Policy). Every
+-- missing header on the same page collapses into a single finding
+-- with one bullet per header so the report carries one configuration
+-- defect with several facets rather than five near-duplicate rows.
 
 local check = {
   name  = "security-headers",
@@ -47,9 +42,8 @@ local HEADER_RULES = {
   },
 }
 
--- HEADER_NAMES is the iteration order used by the Go check (sort.Strings).
--- Driving the loop by this sorted list keeps the resulting `missing`
--- list and any composite text deterministic across runs.
+-- Sorted iteration order keeps the resulting `missing` list and any
+-- composite text deterministic across runs.
 local HEADER_NAMES = {
   "Content-Security-Policy",
   "Referrer-Policy",

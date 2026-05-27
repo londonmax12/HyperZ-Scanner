@@ -1,14 +1,10 @@
--- cache-control-sensitive: Lua port of
--- internal/checks/cache_control_sensitive.go.
---
--- Flags HTML responses that lack a cache-control directive
--- (private / no-store / no-cache) that would prevent storage in
--- shared caches or browser history. Sensitive data leaks via cached
--- copies are silent and persistent, so the check is conservative -
--- only HTML responses are inspected, and a single host-wide finding
--- is emitted rather than one per crawled page.
---
--- Parity oracle: internal/checks/cache_control_sensitive_test.go.
+-- cache-control-sensitive: flags HTML responses that lack a cache-
+-- control directive (private / no-store / no-cache) that would
+-- prevent storage in shared caches or browser history. Sensitive
+-- data leaks via cached copies are silent and persistent, so the
+-- check is conservative: only HTML responses are inspected, and a
+-- single host-wide finding is emitted rather than one per crawled
+-- page.
 
 local check = {
   name        = "cache-control-sensitive",
@@ -41,8 +37,7 @@ function check.run(ctx)
       return nil
     end
   end
-  -- Older Pragma: no-cache equivalent. Pre-HTTP/1.1 path; kept for
-  -- compatibility with the Go check's accepted-set.
+  -- Pre-HTTP/1.1 Pragma: no-cache still suffices.
   if string.lower(pragma) == "no-cache" then
     return nil
   end

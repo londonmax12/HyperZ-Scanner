@@ -1,9 +1,7 @@
--- form-autocomplete: Lua port of internal/checks/form_autocomplete.go.
---
--- Detects sensitive <input> fields that allow browser autocomplete.
--- The threat model is narrow (attacker with browser access), so the
--- severity tops out at Low / Info - this is a hardening hint, not an
--- exploitable bug. Same per-page dedupe by field name as the Go check.
+-- form-autocomplete: detects sensitive <input> fields that allow
+-- browser autocomplete. The threat model is narrow (attacker with
+-- browser access), so the severity tops out at Low / Info - this is
+-- a hardening hint, not an exploitable bug.
 
 local check = {
   name  = "form-autocomplete",
@@ -13,9 +11,9 @@ local check = {
   owasp = "A05:2021 Security Misconfiguration",
 }
 
--- input type -> severity. The Go check ranks every entry Info; the
--- duplicate entries exist so an author can extend the list with a
--- different severity per type without rewriting the lookup.
+-- input type -> severity. Every entry is Info today; the per-type
+-- map exists so an author can override individual types without
+-- rewriting the lookup.
 local SENSITIVE_INPUTS = {
   password = "info",
   email    = "info",
@@ -26,7 +24,7 @@ local SENSITIVE_INPUTS = {
 }
 
 -- Name-substring patterns that bump a plain text input to sensitive
--- (credit card, SSN, ...). Matches the Go check's detectBySensitivePattern.
+-- (credit card, SSN, ...).
 local SENSITIVE_NAME_PATTERNS = {
   card     = "low",
   cvv      = "low",

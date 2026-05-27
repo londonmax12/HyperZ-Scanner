@@ -1,25 +1,10 @@
--- open-redirect: pilot Lua port of internal/checks/open_redirect.go.
--- Probes whether a target reflects an attacker-controlled URL
--- parameter into its redirect Location (header), into a JavaScript
--- navigation API (location.assign / .href / .replace, window.location),
--- or into a meta-refresh tag. A canary on the reserved .example
--- domain serves as the probe target; any 3xx Location pointing at
--- the canary host - or any body sink pointing at it - means the
--- input is unvalidated.
---
--- Behavior parity targets:
---   * Same canary URL + host as the Go check.
---   * Same canonical parameter list ("continue", "dest", ...).
---   * Same path-keyword gating (login/logout/auth/sso/redirect)
---     for the sweep.
---   * Same dedupe scope: per (page, loc, param). Header + body
---     sinks for the same param collapse on purpose - it's one bug
---     surfacing through two channels.
---   * Same severity (high), CWE-601, OWASP A01:2021.
---
--- The Go check's tests (internal/checks/open_redirect_test.go) are
--- the parity oracle; the Lua-side tests in this package run the
--- same scenarios through the bridge and compare findings shape.
+-- open-redirect: probes whether a target reflects an attacker-
+-- controlled URL parameter into its redirect Location (header), into
+-- a JavaScript navigation API (location.assign / .href / .replace,
+-- window.location), or into a meta-refresh tag. A canary on the
+-- reserved .example domain serves as the probe target; any 3xx
+-- Location pointing at the canary host - or any body sink pointing
+-- at it - means the input is unvalidated.
 
 local check = {
   name        = "open-redirect",

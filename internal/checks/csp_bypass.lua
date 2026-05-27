@@ -1,7 +1,5 @@
--- csp-bypass: Lua port of internal/checks/csp_bypass.go.
---
--- Actively probes the three bypass paths the passive csp-weak port can
--- only theorize about:
+-- csp-bypass: actively probes the three bypass paths the passive
+-- csp-weak check can only theorize about:
 --
 --   1. Nonce reuse: re-fetch the page with cache-busting and compare
 --      the nonces in script-src / style-src across the two responses.
@@ -21,10 +19,6 @@
 -- Each sub-probe is independent; a transient failure in one does not
 -- suppress findings from the others. Only when no findings come out
 -- and at least one probe errored does the wholesale error propagate.
---
--- The Go check's tests are the parity oracle. The Lua port consumes
--- the Go-side parser / matchers / probe catalogue so any future
--- tightening of the rules lands once.
 
 local check = {
   name  = "csp-bypass",
@@ -34,8 +28,7 @@ local check = {
 }
 
 -- Forward declarations so check.run can call the per-probe helpers
--- before they're defined (probe order in the file mirrors the Go
--- check's source order: nonce-reuse, JSONP, base-uri).
+-- before they're defined.
 local probe_nonce_reuse, probe_jsonp_whitelist, probe_base_uri_hijack
 
 function check.run(ctx)
@@ -86,8 +79,7 @@ function check.run(ctx)
 end
 
 -- quoted joins a list of strings into a comma-separated `"a", "b"`
--- list. Mirrors quoteStrings + strings.Join in the Go check so the
--- per-finding detail text is byte-aligned.
+-- list for the per-finding detail text.
 local function quoted(list)
   local out = {}
   for i, s in ipairs(list) do

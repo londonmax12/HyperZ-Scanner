@@ -1,18 +1,11 @@
--- source-map-exposure: Lua port of
--- internal/checks/source_map_exposure.go.
---
--- Detects publicly-served JS/CSS source maps. Chains two signals so
--- the check stays high-confidence:
+-- source-map-exposure: detects publicly-served JS/CSS source maps.
+-- Chains two signals so the check stays high-confidence:
 --
 --   1) The JS/CSS response advertises a source map (header or
 --      `//# sourceMappingURL=` trailing comment for JS,
 --      `/*# sourceMappingURL=... */` for CSS).
 --   2) The referenced URL fetches successfully AND the body parses
 --      as a Source Map v3 document.
---
--- Header/body/regex parsing all live in Go via ctx.body helpers so
--- the Lua port stays free of regex divergence; the orchestration
--- (resolve, scope re-check, probe, finding shape) is the Lua side.
 
 local check = {
   name        = "source-map-exposure",

@@ -1,19 +1,12 @@
--- form-action-insecure: Lua port of
--- internal/checks/form_action_insecure.go.
---
--- Flags <form action=...> (or <button formaction=...> / <input
--- formaction=...> overrides) that resolve to a plaintext http:// URL
--- when the containing page is served over HTTPS. Any value the user
--- submits is then trivially recoverable by anyone on the network
--- path despite the page looking secure.
+-- form-action-insecure: flags <form action=...> (or <button
+-- formaction=...> / <input formaction=...> overrides) that resolve to
+-- a plaintext http:// URL when the containing page is served over
+-- HTTPS. Any value the user submits is then trivially recoverable by
+-- anyone on the network path despite the page looking secure.
 --
 -- Severity escalates to Critical when the affected form carries a
 -- credential-shaped field (password / token / payment); plaintext
 -- submits without credentials stay High.
---
--- The HTML walk (form / formaction tokenization, base-href, input
--- inventory) lives in Go via ctx.html.scan_form_actions so the
--- tokenizer behavior is the single source of truth.
 
 local check = {
   name        = "form-action-insecure",
@@ -106,9 +99,8 @@ function check.run(ctx)
   local findings = {}
   local seen = {}
   for _, cand in ipairs(cands) do
-    -- ctx.url.scheme would re-parse; cheaper to substring-match the
-    -- resolved string the Go side already produced. http:// only -
-    -- the same heuristic the Go check uses (EqualFold-on-scheme).
+    -- ctx.html.scan_form_actions already resolved the action, so a
+    -- substring match on the lowercased scheme avoids a re-parse.
     local lower = string.lower(cand.resolved)
     if string.sub(lower, 1, 7) == "http://" then
       local key = "action:" .. cand.resolved

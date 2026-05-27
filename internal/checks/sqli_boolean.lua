@@ -1,11 +1,9 @@
--- sqli-boolean: Lua port of internal/checks/sqli_boolean.go.
---
--- Per sink: baseline + truthy/falsy pair sweep. The Go-side
--- BooleanCompare oracle decides whether the differential evidence
--- (truthy ~ baseline AND falsy != baseline) is vulnerability-shaped.
--- Per-pair bodies are stripped of the literal pair suffix before the
--- oracle runs so an echo-heavy page doesn't artificially diverge
--- truthy from falsy.
+-- sqli-boolean: per sink, send a baseline plus a truthy/falsy pair
+-- sweep. ctx.oracle.boolean_compare decides whether the differential
+-- evidence (truthy ~ baseline AND falsy != baseline) is vulnerability-
+-- shaped. Per-pair bodies are stripped of the literal pair suffix
+-- before the oracle runs so an echo-heavy page doesn't artificially
+-- diverge truthy from falsy.
 
 local check = {
   name        = "sqli-boolean",

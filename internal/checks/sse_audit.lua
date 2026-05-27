@@ -1,6 +1,4 @@
--- sse-audit: Lua port of internal/checks/sse_audit.go.
---
--- Probes Server-Sent Events (text/event-stream) endpoints for cross-
+-- sse-audit: probes Server-Sent Events (text/event-stream) endpoints for cross-
 -- origin disclosure. SSE is a long-lived GET that browsers expose to
 -- JS via EventSource and which is subject to CORS, so an endpoint
 -- that returns ACAO: * (or echoes a foreign Origin alongside
@@ -34,12 +32,11 @@ local SSE_PROBE_BODY_CAP = 4 * 1024
 local SSE_ATTACKER_ORIGIN = "https://hyperz-attacker.example"
 local SSE_MAX_ENDPOINTS_PER_PAGE = 5
 
--- discover_sse_endpoints mirrors checks.discoverSSEEndpoints: scans
--- the page response for an SSE content-type, scans the body for
--- EventSource literals, resolves both against the page URL, and
--- returns a deduped + sorted list. Body-derived URLs are dropped when
--- they cannot be resolved (no host) or when they ride a non-http(s)
--- scheme.
+-- discover_sse_endpoints scans the page response for an SSE content-
+-- type, scans the body for EventSource literals, resolves both
+-- against the page URL, and returns a deduped + sorted list. Body-
+-- derived URLs are dropped when they cannot be resolved (no host) or
+-- when they ride a non-http(s) scheme.
 local function discover_sse_endpoints(ctx, page_url)
   local seen = {}
   local function add(raw)
@@ -71,11 +68,9 @@ local function discover_sse_endpoints(ctx, page_url)
   return out
 end
 
--- classify_sse_cors returns severity, title, detail tuple for the
+-- classify_sse_cors returns (severity, title, detail) for the
 -- observed CORS posture on an SSE endpoint, or three empty strings
--- when the posture does not expose the stream cross-origin. Mirrors
--- checks.classifySSECors verbatim so byte-for-byte parity holds with
--- the Go check.
+-- when the posture does not expose the stream cross-origin.
 local function sse_cred_suffix(acac)
   if acac then
     return " (Access-Control-Allow-Credentials: true compounds the impact by exposing the authenticated stream)"
@@ -140,7 +135,7 @@ end
 -- severity_cors_key collapses the relevant ACAO/ACAC posture into a
 -- stable dedupe component. Two findings with different CORS shapes on
 -- the same endpoint are genuinely different issues; identical shapes
--- collapse. Lowercase + bool-as-"1"/"0" mirrors the Go shape.
+-- collapse.
 local function severity_cors_key(acao, acac)
   local creds = "0"
   if acac then creds = "1" end
@@ -148,9 +143,8 @@ local function severity_cors_key(acao, acac)
 end
 
 -- build_sse_snippet renders the response summary used in Evidence
--- snippets. Order of headers and the "HTTP/1.1 STATUS TEXT" line
--- mirrors checks.buildSSESnippet verbatim so the rendered evidence
--- byte-matches the Go path.
+-- snippets: an "HTTP/1.1 STATUS TEXT" line followed by the relevant
+-- CORS / cache headers.
 local function build_sse_snippet(ctx, status, headers, body)
   local lines = {}
   lines[#lines + 1] = string.format("HTTP/1.1 %d %s", status, ctx.body.status_text(status))

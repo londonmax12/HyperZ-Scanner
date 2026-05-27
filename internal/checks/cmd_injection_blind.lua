@@ -1,7 +1,5 @@
--- cmd-injection-blind: Lua port of internal/checks/cmd_injection_blind.go.
---
--- Two arms, both per-sink:
---   1. In-band: send each PayloadCmdInjectBlind payload (e.g. `;
+-- cmd-injection-blind: two arms, both per-sink:
+--   1. In-band: send each blind cmd-inject payload (e.g. `;
 --      <CANARY> nonexistent_cmd_xyzabc`); a finding fires when the
 --      response carries BOTH the canary (proves the injection
 --      reached the shell) AND a shell-error signature (proves the

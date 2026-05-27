@@ -1,12 +1,10 @@
--- sqli-time: Lua port of internal/checks/sqli_time.go.
---
--- Per sink: baseline timing + candidate + confirmation. Each {{SLEEP}}
--- placeholder resolves to the active tuning (5s by default; tests dial
--- it to 1s via SetSQLiTimeTuningForTest in the checks package). A
--- finding fires only when BOTH the candidate AND the confirmation
--- cross TimingCompare's threshold: one slow request is
--- indistinguishable from network jitter; two confirming requests on
--- the same payload collapse that false-positive surface dramatically.
+-- sqli-time: per sink, send baseline timing + candidate +
+-- confirmation. Each {{SLEEP}} placeholder resolves to the active
+-- tuning (5s by default). A finding fires only when BOTH the
+-- candidate AND the confirmation cross ctx.oracle.timing_compare's
+-- threshold: one slow request is indistinguishable from network
+-- jitter; two confirming requests on the same payload collapse that
+-- false-positive surface dramatically.
 
 local check = {
   name        = "sqli-time",
