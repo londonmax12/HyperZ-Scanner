@@ -37,10 +37,17 @@ local function new_canary()
   return table.concat(out)
 end
 
+-- do_no_follow: SSTI probes ride into query / form / header params,
+-- and some of those reflect into the Location header on a 3xx (open-
+-- redirect / crlf-style endpoints). Following a redirect whose
+-- Location is our raw `<%= 7*7 %>` payload would not only fail to
+-- parse but also send a second request to a meaningless URL. The
+-- immediate response is the only thing the evaluation oracle cares
+-- about.
 local function send(ctx, sink, wire_value)
   local req, mut_err = sink:mutate_request(wire_value)
   if mut_err then return nil, nil, nil, false, mut_err end
-  local resp, do_err = ctx.client["do"](ctx.client, req)
+  local resp, do_err = ctx.client:do_no_follow(req)
   if do_err then return req, nil, nil, false, do_err end
   local body, truncated, rerr = resp:read_body_capped(BODY_CAP)
   if rerr then return req, resp, nil, false, rerr end
@@ -163,7 +170,7 @@ local function probe_oob(ctx, sink)
         ctx:report(string.format("ssti oob mutate %s %s=%s engine=%s: %s",
           sink.loc, sink.name, sink.url, pld.engine, mut_err))
       else
-        local resp, do_err = ctx.client["do"](ctx.client, req)
+        local resp, do_err = ctx.client:do_no_follow(req)
         if do_err then
           ctx:report(string.format("oob probe %s %s=%s engine=%s: %s",
             sink.loc, sink.name, sink.url, pld.engine, do_err))
@@ -182,7 +189,9 @@ function check.run(ctx)
 
   local sinks = ctx.sinks.for_page{}
   if ctx:level_at_least("aggressive") then
-    for _, h in ipairs(ctx.payloads.ssti_header_sinks(ctx.page.url)) do
+    local hdrs = ctx.sinks.for_headers(ctx.page.url,
+      { "User-Agent", "Referer", "X-Forwarded-For", "X-Forwarded-Host" })
+    for _, h in ipairs(hdrs) do
       sinks[#sinks + 1] = h
     end
   end

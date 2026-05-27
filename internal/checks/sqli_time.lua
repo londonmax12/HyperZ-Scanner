@@ -31,10 +31,15 @@ local function new_canary()
   return table.concat(out)
 end
 
+-- do_no_follow_timed: time-based SQLi payloads land in query / form
+-- sinks. Endpoints that reflect into Location (open-redirect / crlf
+-- shapes) drop the payload verbatim into a 302; following adds an
+-- extra round-trip whose latency would be attributed to the SQL
+-- delay. The immediate response is the only data the oracle needs.
 local function send(ctx, sink, wire_value)
   local req, mut_err = sink:mutate_request(wire_value)
   if mut_err then return nil, nil, nil, false, 0, mut_err end
-  local resp, latency_seconds, do_err = ctx.client:do_timed(req)
+  local resp, latency_seconds, do_err = ctx.client:do_no_follow_timed(req)
   if do_err then return req, nil, nil, false, latency_seconds or 0, do_err end
   local body, truncated, rerr = resp:read_body_capped(BODY_CAP)
   if rerr then return req, resp, nil, false, latency_seconds, rerr end

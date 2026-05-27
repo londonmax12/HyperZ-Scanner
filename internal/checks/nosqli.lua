@@ -51,10 +51,15 @@ local function strip_all(body, needle)
   return table.concat(out)
 end
 
+-- do_no_follow: NoSQL operator payloads ({"$gt":""} and friends) ride
+-- into query / form sinks, and reflective endpoints (open-redirect /
+-- crlf shapes) drop them verbatim into Location on a 302. Following
+-- through would not only fail to parse but also issue a wasted
+-- request; the boolean oracle wants the immediate response anyway.
 local function send_value(ctx, sink, wire_value)
   local req, mut_err = sink:mutate_request(wire_value)
   if mut_err then return nil, nil, nil, false, mut_err end
-  local resp, do_err = ctx.client["do"](ctx.client, req)
+  local resp, do_err = ctx.client:do_no_follow(req)
   if do_err then return req, nil, nil, false, do_err end
   local body, truncated, rerr = resp:read_body_capped(BODY_CAP)
   if rerr then return req, resp, nil, false, rerr end
@@ -64,7 +69,7 @@ end
 local function send_operator(ctx, sink, op_name, op_value)
   local req, build_err = ctx.body.nosqli_build_operator_request(sink, op_name, op_value)
   if build_err then return nil, nil, nil, false, build_err end
-  local resp, do_err = ctx.client["do"](ctx.client, req)
+  local resp, do_err = ctx.client:do_no_follow(req)
   if do_err then return req, nil, nil, false, do_err end
   local body, truncated, rerr = resp:read_body_capped(BODY_CAP)
   if rerr then return req, resp, nil, false, rerr end
