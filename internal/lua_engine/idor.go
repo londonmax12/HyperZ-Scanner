@@ -214,13 +214,35 @@ func (c *IDOR) pathSinks(rawURL string) []idorCandidate {
 		placeholderSegs := make([]string, len(segs))
 		copy(placeholderSegs, segs)
 		placeholderSegs[i] = "{" + segName + "}"
-		placeholderURL := *u
-		placeholderURL.RawPath = strings.Join(placeholderSegs, "/")
-		placeholderURL.Path = placeholderURL.RawPath
+		// Assemble the URL by hand: url.URL.String() would percent-encode
+		// the braces around {segN}, leaving the sink with a URL like
+		// /user/%7Bseg2%7D that Sink.MutateRequest's literal-placeholder
+		// lookup can't match. Path segments other than ours are already
+		// in escaped form (they came from EscapedPath); ours is intended
+		// to round-trip verbatim until MutateRequest substitutes a value.
+		var sb strings.Builder
+		if u.Scheme != "" {
+			sb.WriteString(u.Scheme)
+			sb.WriteString("://")
+		}
+		if u.User != nil {
+			sb.WriteString(u.User.String())
+			sb.WriteByte('@')
+		}
+		sb.WriteString(u.Host)
+		sb.WriteString(strings.Join(placeholderSegs, "/"))
+		if u.RawQuery != "" {
+			sb.WriteByte('?')
+			sb.WriteString(u.RawQuery)
+		}
+		if u.Fragment != "" {
+			sb.WriteByte('#')
+			sb.WriteString(u.EscapedFragment())
+		}
 		out = append(out, idorCandidate{
 			sink: Sink{
 				Method: http.MethodGet,
-				URL:    placeholderURL.String(),
+				URL:    sb.String(),
 				Loc:    LocPath,
 				Name:   segName,
 				Value:  decoded,

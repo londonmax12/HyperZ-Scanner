@@ -271,12 +271,9 @@ func idorPathSinks(L *lua.LState) int {
 		placeholderSegs := make([]string, len(segs))
 		copy(placeholderSegs, segs)
 		placeholderSegs[i] = "{" + segName + "}"
-		placeholderURL := *u
-		placeholderURL.RawPath = strings.Join(placeholderSegs, "/")
-		placeholderURL.Path = placeholderURL.RawPath
 		s := &Sink{
 			Method: http.MethodGet,
-			URL:    placeholderURL.String(),
+			URL:    joinPathPlaceholderURL(u, placeholderSegs),
 			Loc:    LocPath,
 			Name:   segName,
 			Value:  decoded,
@@ -296,6 +293,37 @@ func idorPathSinks(L *lua.LState) int {
 
 func pathSegName(i int) string {
 	return "seg" + intToStr(i)
+}
+
+// joinPathPlaceholderURL re-serializes u with its path segments replaced by
+// segs. The URL is assembled by hand because url.URL.String() would
+// percent-encode the braces around any `{segN}` placeholder in segs,
+// leaving the resulting sink with a URL like /user/%7Bseg2%7D that
+// Sink.MutateRequest's literal-placeholder lookup can't match. Segs other
+// than the placeholder are already in escaped form (they came from
+// EscapedPath); the placeholder is intended to round-trip verbatim until
+// MutateRequest substitutes a value.
+func joinPathPlaceholderURL(u *url.URL, segs []string) string {
+	var sb strings.Builder
+	if u.Scheme != "" {
+		sb.WriteString(u.Scheme)
+		sb.WriteString("://")
+	}
+	if u.User != nil {
+		sb.WriteString(u.User.String())
+		sb.WriteByte('@')
+	}
+	sb.WriteString(u.Host)
+	sb.WriteString(strings.Join(segs, "/"))
+	if u.RawQuery != "" {
+		sb.WriteByte('?')
+		sb.WriteString(u.RawQuery)
+	}
+	if u.Fragment != "" {
+		sb.WriteByte('#')
+		sb.WriteString(u.EscapedFragment())
+	}
+	return sb.String()
 }
 
 func intToStr(i int) string {
