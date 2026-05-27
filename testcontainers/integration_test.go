@@ -35,8 +35,16 @@
 package testcontainers
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
+
+	"github.com/londonmax12/hyperz/internal/lua_engine"
 )
 
 // vulnCase describes one container suite. spec is forwarded to
@@ -163,6 +171,53 @@ var vulnSuites = []vulnCase{
 		},
 		notes: "drupal-changelog-disclosure (real Drupal 7 install + /CHANGELOG.txt at docroot)",
 	},
+}
+
+// TestCatalogCoverage names every check in the shipped catalog that
+// no container in vulnSuites enables, so a new check added without a
+// matching vuln-*/hyperz.yaml entry is visible in the suite output
+// rather than silently uncovered. It does not fail the suite: not
+// every check is meaningfully exercisable from a single container
+// (some need the operator-mode-only OOB listener, some are gated by a
+// fingerprint that no fixture mimics), and the operator decides what
+// to do with the gap. Docker-free; safe to run via
+//
+//	go test -tags integration -run TestCatalogCoverage ./testcontainers/...
+//
+// pollute=true on the catalog load so disruptive checks count too:
+// vuln-app opts into pollute, so pollute-gated checks are reachable
+// and a missing entry there is the same kind of gap as elsewhere.
+func TestCatalogCoverage(t *testing.T) {
+	catalog, _ := lua_engine.All(true, nil)
+	covered := map[string]bool{}
+	root := repoRoot(t)
+	for _, tc := range vulnSuites {
+		path := filepath.Join(root, "testcontainers", tc.spec.dir, "hyperz.yaml")
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		var view containerConfigView
+		if err := yaml.Unmarshal(raw, &view); err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+		for _, name := range view.Checks.Enable {
+			covered[name] = true
+		}
+	}
+	var untested []string
+	for _, c := range catalog {
+		if !covered[c.Name()] {
+			untested = append(untested, c.Name())
+		}
+	}
+	sort.Strings(untested)
+	progress(fmt.Sprintf("catalog coverage: %d/%d checks exercised, %d untested",
+		len(catalog)-len(untested), len(catalog), len(untested)))
+	for _, name := range untested {
+		progress(fmt.Sprintf("untested: %s", name))
+	}
+	t.Logf("untested checks (%d): %v", len(untested), untested)
 }
 
 // TestVuln drives every container in vulnSuites as a t.Run subtest
