@@ -59,6 +59,16 @@ type discoveryEntry struct {
 	Languages            []string
 	Frameworks           []string
 	CMSes                []string
+
+	// Emit signals that a hit on this entry should also fan out as a
+	// new KindPage scan target so downstream checks (XSS, SQLi, IDOR,
+	// reflected-XSS, ...) probe the discovered URL. Only admin panels
+	// and other interactive surfaces are worth emitting: file
+	// disclosures (env files, VCS metadata, server info pages) are
+	// already the finding the operator cares about and have nothing
+	// useful to feed an active checker. Default false: most entries
+	// stay finding-only.
+	Emit bool
 }
 
 // appliesTo reports whether this entry should run against a host with
@@ -483,6 +493,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 		Remediation: "Disable introspection in production (e.g. NoSchemaIntrospectionCustomRule for graphql-js, Spring's GraphQlSourceBuilder.configure schemaResources etc.) and gate the endpoint behind authentication where possible.",
 		Marker:      "GraphiQL",
 		Aggressive:  true,
+		Emit:        true,
 	},
 	{
 		Path:        "/swagger.json",
@@ -596,6 +607,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 		OWASP:       "A01:2021 Broken Access Control",
 		Remediation: "Restrict admin endpoints to trusted network ranges (VPN or SSO bastion) where possible, and enforce MFA on the underlying accounts.",
 		Aggressive:  true,
+		Emit:        true,
 	},
 	{
 		Path:        "/administrator/",
@@ -607,6 +619,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 		Remediation: "Restrict /administrator/ to trusted ranges; enforce MFA on admin accounts.",
 		Aggressive:  true,
 		CMSes:       []string{"joomla"},
+		Emit:        true,
 	},
 	{
 		Path:        "/wp-admin/",
@@ -618,6 +631,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 		Remediation: "Restrict /wp-admin/ to trusted ranges; enforce MFA on admin accounts.",
 		Aggressive:  true,
 		CMSes:       []string{"wordpress"},
+		Emit:        true,
 	},
 	{
 		Path:        "/phpmyadmin/",
@@ -629,6 +643,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 		Remediation: "Move phpMyAdmin off the public web or restrict it to admin IPs only.",
 		Aggressive:  true,
 		Languages:   []string{"php"},
+		Emit:        true,
 	},
 	{
 		Path:        "/adminer.php",
@@ -640,6 +655,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 		Remediation: "Remove adminer.php from production; if a DB UI is required, gate it behind a network ACL.",
 		Aggressive:  true,
 		Languages:   []string{"php"},
+		Emit:        true,
 	},
 	{
 		Path:        "/manager/html",
@@ -649,6 +665,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 		CWE:         "CWE-284",
 		OWASP:       "A01:2021 Broken Access Control",
 		Remediation: "Disable /manager/html on production Tomcat, or restrict it by IP and enforce strong unique credentials.",
+		Emit:        true,
 		Aggressive:  true,
 		Languages:   []string{"java"},
 	},

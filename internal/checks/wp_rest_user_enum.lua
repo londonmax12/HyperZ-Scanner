@@ -60,6 +60,23 @@ local function collect_slugs(doc, cap)
   return out
 end
 
+-- all_slugs returns every string slug from doc, in document order, no
+-- cap. Used by the discovery emission path so downstream checks (XSS,
+-- SQLi, IDOR on profile fields) reach every disclosed author profile,
+-- not just the truncated subset that appears in the finding detail.
+-- The worklist's host budget is the only ceiling on how many emissions
+-- land.
+local function all_slugs(doc)
+  local out = {}
+  for i = 1, #doc do
+    local entry = doc[i]
+    if type(entry) == "table" and type(entry.slug) == "string" and entry.slug ~= "" then
+      out[#out + 1] = entry.slug
+    end
+  end
+  return out
+end
+
 function check.run(ctx)
   local u, perr = ctx.url.parse(ctx.page.url)
   if perr or u == nil or u.scheme == "" or u.host == "" then return nil end
@@ -95,6 +112,17 @@ function check.run(ctx)
     else
       slug_line = slug_line .. "."
     end
+  end
+
+  -- Emit each disclosed author's public profile page as a follow-on
+  -- KindPage discovery so the rest of the check catalog (reflected
+  -- XSS on profile fields, open-redirect on bio links, content
+  -- discovery on author archive sub-paths) probes them automatically.
+  -- The worklist deduplicates by canonical key, applies scope, and
+  -- caps total per-host pushes via WithHostBudget, so a site with
+  -- many authors is bounded on both axes.
+  for _, slug in ipairs(all_slugs(doc)) do
+    ctx:discover{ kind = "page", url = host_root .. "/author/" .. slug .. "/" }
   end
 
   return {

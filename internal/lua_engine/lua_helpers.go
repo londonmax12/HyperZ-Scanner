@@ -1637,6 +1637,7 @@ type ContentDiscoveryEntryLua struct {
 	Remediation          string
 	Marker               string
 	ExpectedContentTypes []string
+	Emit                 bool
 }
 
 // ContentDiscoveryEntriesLua returns the wordlist entries the main
@@ -1724,6 +1725,7 @@ func toContentDiscoveryEntryLua(e discoveryEntry) ContentDiscoveryEntryLua {
 		Remediation:          e.Remediation,
 		Marker:               e.Marker,
 		ExpectedContentTypes: cts,
+		Emit:                 e.Emit,
 	}
 }
 

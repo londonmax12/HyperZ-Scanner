@@ -7,13 +7,16 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/londonmax12/hyperz/internal/checks"
+	"github.com/londonmax12/hyperz/internal/core"
 	"github.com/londonmax12/hyperz/internal/fingerprint"
 	"github.com/londonmax12/hyperz/internal/httpclient"
 	"github.com/londonmax12/hyperz/internal/page"
+	"github.com/londonmax12/hyperz/internal/target"
 )
 
 // loadCatalogCheck reads filename from the embedded check catalog and
@@ -181,4 +184,76 @@ func TestWPRestUserEnumOncePerHost(t *testing.T) {
 	if hits != 1 {
 		t.Errorf("upstream hits = %d, want 1 (claim_once must short-circuit later pages)", hits)
 	}
+}
+
+// TestWPRestUserEnumEmitsAuthorProfileDiscoveries verifies the check
+// emits /author/<slug>/ KindPage discoveries for every disclosed user.
+// The downstream effect (those URLs being fetched and dispatched to
+// other checks) is covered by the scanner-level discovery tests; this
+// test just confirms the emission shape is correct.
+func TestWPRestUserEnumEmitsAuthorProfileDiscoveries(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/wp-json/wp/v2/users" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`[
+			{"id": 1, "name": "Admin", "slug": "admin"},
+			{"id": 2, "name": "Author One", "slug": "author1"},
+			{"id": 3, "name": "Author Two", "slug": "author2"}
+		]`))
+	}))
+	defer srv.Close()
+
+	c := loadCatalogCheck(t, "wp_rest_user_enum.lua")
+
+	var mu sync.Mutex
+	var emitted []target.Target
+	ctx := core.WithDiscoverer(context.Background(), func(t target.Target) {
+		mu.Lock()
+		emitted = append(emitted, t)
+		mu.Unlock()
+	})
+	ctx = WithStack(ctx, &fingerprint.Stack{CMS: "wordpress"})
+
+	client := httpclient.New(httpclient.Config{Timeout: 5 * time.Second, UserAgent: "hyperz-test"})
+	if _, err := c.Run(ctx, client, nil, page.Page{URL: srv.URL + "/"}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(emitted) != 3 {
+		t.Fatalf("emitted = %d targets, want 3 (one per author); got URLs: %s", len(emitted), summarizeURLs(emitted))
+	}
+	wantSuffixes := []string{"/author/admin/", "/author/author1/", "/author/author2/"}
+	for _, want := range wantSuffixes {
+		found := false
+		for _, e := range emitted {
+			if strings.HasSuffix(e.URL, want) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected discovery for %q, got URLs: %s", want, summarizeURLs(emitted))
+		}
+	}
+	for _, e := range emitted {
+		if e.Kind != target.KindPage {
+			t.Errorf("emitted target kind = %v, want KindPage", e.Kind)
+		}
+	}
+}
+
+// summarizeURLs renders a comma-separated URL list for test
+// diagnostics.
+func summarizeURLs(ts []target.Target) string {
+	parts := make([]string, 0, len(ts))
+	for _, t := range ts {
+		parts = append(parts, t.URL)
+	}
+	return strings.Join(parts, ", ")
 }

@@ -143,6 +143,7 @@ func pushDiscoveryEntry(L *lua.LState, e ContentDiscoveryEntryLua) *lua.LTable {
 	t.RawSetString("remediation", lua.LString(e.Remediation))
 	t.RawSetString("marker", lua.LString(e.Marker))
 	t.RawSetString("expected_content_types", pushStringList(L, e.ExpectedContentTypes))
+	t.RawSetString("emit", lua.LBool(e.Emit))
 	return t
 }
 

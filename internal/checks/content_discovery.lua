@@ -152,12 +152,23 @@ local function classify_response(ctx, entry, baseline, status, body, ct, loc)
 end
 
 -- probe issues a GET against the entry path and folds the verdict
--- into a finding (or nil on non-hit / error).
+-- into a finding (or nil on non-hit / error). When the entry is
+-- flagged emit=true (admin panels, GraphQL endpoints, management
+-- consoles - interactive surfaces worth further probing), the hit
+-- also fans out as a new KindPage scan target via ctx:discover so
+-- downstream checks (XSS, SQLi, IDOR, ...) run against the freshly-
+-- found URL. File-disclosure entries (env files, VCS metadata, info
+-- pages) leave emit=false: the response IS the finding and there is
+-- nothing useful to hand an active checker.
 local function probe(ctx, host_root, baseline, entry, probe_url)
   local resp, body, ct, loc, err = fetch(ctx, probe_url)
   if err then return nil, err end
   local verdict, evidence_line, severity = classify_response(ctx, entry, baseline, resp:status(), body, ct, loc)
   if verdict == "" then return nil end
+
+  if entry.emit then
+    ctx:discover{ kind = "page", url = probe_url }
+  end
 
   local detail = entry.detail
   if evidence_line ~= "" then detail = (entry.detail .. " " .. evidence_line):gsub("^%s+", ""):gsub("%s+$", "") end
