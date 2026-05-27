@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"github.com/spf13/cobra"
@@ -21,7 +21,9 @@ const (
 	exitCanceled   = 130
 )
 
-// version is overridable at build time via -ldflags "-X main.version=...".
+// version is overridable at build time via:
+//
+//	-ldflags "-X github.com/londonmax12/hyperz/internal/cli.version=..."
 var version = "dev"
 
 func newRootCmd() *cobra.Command {

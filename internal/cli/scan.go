@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"context"
@@ -175,14 +175,14 @@ Modes:
 			case exitOK:
 				return nil
 			case exitCanceled:
-				// cobra strips RunE errors and main.go exits 2; override the
-				// exit code in main.go's deferred path is awkward, so call
-				// os.Exit directly to preserve 130 for shells that look at it.
-				os.Exit(exitCanceled)
-				return nil
+				// Return a typed error carrying the real exit code so
+				// cli.Run can surface 130 to the OS. We used to call
+				// os.Exit here directly, but that broke in-process
+				// callers (the integration test harness) by killing
+				// their parent process too.
+				return &exitErr{code: exitCanceled, cause: errors.New("scan canceled")}
 			case exitFindings:
-				os.Exit(exitFindings)
-				return nil
+				return &exitErr{code: exitFindings, cause: errors.New("findings at or above --fail-on threshold")}
 			default:
 				return fmt.Errorf("scan failed")
 			}

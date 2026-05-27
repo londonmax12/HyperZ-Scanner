@@ -1,18 +1,15 @@
+// Package main is the hyperz CLI entry point. The actual command tree
+// and scan orchestration live under internal/cli so the integration
+// test harness can invoke Run in-process without fork/exec'ing the
+// hyperz binary; see internal/cli/run.go for the rationale.
 package main
 
 import (
-	"context"
-	"fmt"
 	"os"
-	"os/signal"
+
+	"github.com/londonmax12/hyperz/internal/cli"
 )
 
 func main() {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
-
-	if err := newRootCmd().ExecuteContext(ctx); err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
-		os.Exit(exitScanError)
-	}
+	os.Exit(cli.Run(os.Args[1:]))
 }
