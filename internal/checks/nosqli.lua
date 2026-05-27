@@ -14,18 +14,18 @@
 
 local check = {
   name        = "nosqli",
-  level       = "default",
-  scope       = "param",
+  level       = levels.default,
+  scope       = scopes.param,
   cwe         = "CWE-943",
   owasp       = "A03:2021 Injection",
   remediation = "Treat client-supplied values as strings, not as structured query fragments. Reject inputs "
                 .. "whose type does not match the schema - a username field that arrives as an object should fail "
                 .. "validation before reaching the database driver. In Express/Node, sanitize keys starting with `$` "
                 .. "(e.g. via express-mongo-sanitize) or disable bracket-object expansion in the body parser / qs.",
-  consumes    = {"page", "param"},
+  consumes    = { kinds.page, kinds.param },
 }
 
-local BODY_CAP = 64 * 1024
+local BODY_CAP = body_caps.probe
 
 local function new_canary()
   local hex = "0123456789abcdef"
@@ -110,7 +110,7 @@ local function probe(ctx, sink)
         if result.decision == "vulnerable" then
           local probe_url = f_req:url()
           return {
-            severity = ctx.severity.high,
+            severity = severity.high,
             url      = probe_url,
             title    = string.format('NoSQL injection (operator injection) in %s parameter "%s"', sink.loc, sink.name),
             detail   = string.format(
@@ -144,7 +144,7 @@ local function probe(ctx, sink)
       if #new_hits > 0 then
         local probe_url = req:url()
         return {
-          severity = ctx.severity.high,
+          severity = severity.high,
           url      = probe_url,
           title    = string.format('NoSQL injection (error-based) in %s parameter "%s"', sink.loc, sink.name),
           detail   = string.format(

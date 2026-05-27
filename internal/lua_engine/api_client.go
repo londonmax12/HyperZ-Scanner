@@ -250,6 +250,7 @@ func ensureClientMT(L *lua.LState) *lua.LTable {
 	methods.RawSetString("do_detached", L.NewFunction(clientDoDetached))
 	methods.RawSetString("do_parallel", L.NewFunction(clientDoParallel))
 	methods.RawSetString("new_request", L.NewFunction(clientNewRequest))
+	methods.RawSetString("fetch", L.NewFunction(clientFetch))
 	mt.RawSetString("__index", methods)
 	L.G.Registry.RawSetString(mtClient, mt)
 	return mt
@@ -481,6 +482,116 @@ func clientDispatch(L *lua.LState, noFollow bool) int {
 	}
 	L.Push(pushResponse(L, resp, nil, false))
 	return 1
+}
+
+// clientFetch is the one-shot convenience that collapses the three-
+// call new_request -> do_no_follow -> read_body_capped sequence ~30
+// checks repeat verbatim into a single call. Mirrors clientNewRequest's
+// opts shape with two additions:
+//
+//	body_cap (number)        - read up to N bytes of body. 0 / omitted
+//	                           skips read_body_capped and returns body="".
+//	follow_redirects (bool)  - default false (DoNoFollow); set true to
+//	                           dispatch via Client.Do instead. Passive
+//	                           probes overwhelmingly want no-follow.
+//
+// Returns (response_userdata, body_string, err). The err slot already
+// carries the active check name as a prefix ("wp-rest-user-enum: ..."),
+// so Lua callers can `return nil, err` without prefixing it themselves.
+// A status-code-only probe sets body_cap=0 and ignores the body slot.
+func clientFetch(L *lua.LState) int {
+	c := clientFromArg(L, 1)
+	opts := L.CheckTable(2)
+	env := currentEnv(L)
+	if env == nil {
+		L.RaiseError("client:fetch called outside a check run")
+	}
+
+	method := strings.ToUpper(lvalString(opts.RawGetString("method")))
+	if method == "" {
+		method = http.MethodGet
+	}
+	rawurl := lvalString(opts.RawGetString("url"))
+	if rawurl == "" {
+		return fetchFail(L, env, "missing url")
+	}
+	if _, err := url.Parse(rawurl); err != nil {
+		return fetchFail(L, env, err.Error())
+	}
+	bodyStr := lvalString(opts.RawGetString("body"))
+	var req *http.Request
+	var err error
+	if bodyStr != "" {
+		req, err = http.NewRequestWithContext(env.ctx, method, rawurl, strings.NewReader(bodyStr))
+	} else {
+		req, err = http.NewRequestWithContext(env.ctx, method, rawurl, nil)
+	}
+	if err != nil {
+		return fetchFail(L, env, err.Error())
+	}
+	if hv, ok := opts.RawGetString("headers").(*lua.LTable); ok {
+		hv.ForEach(func(k, v lua.LValue) {
+			name := lvalString(k)
+			if name == "" {
+				return
+			}
+			switch val := v.(type) {
+			case lua.LString:
+				req.Header.Set(name, string(val))
+			case *lua.LTable:
+				val.ForEach(func(_, vv lua.LValue) {
+					req.Header.Add(name, lvalString(vv))
+				})
+			default:
+				req.Header.Set(name, lvalString(v))
+			}
+		})
+	}
+	// host override goes onto req.Host (not Header) for the same reason
+	// clientNewRequest documents: net/http's transport reads the Host
+	// header from req.Host, not req.Header.
+	if hv := opts.RawGetString("host"); hv != lua.LNil {
+		if hostStr := lvalString(hv); hostStr != "" {
+			req.Host = hostStr
+		}
+	}
+
+	follow := lua.LVAsBool(opts.RawGetString("follow_redirects"))
+	var resp *http.Response
+	if follow {
+		resp, err = c.c.Do(env.ctx, req)
+	} else {
+		resp, err = c.c.DoNoFollow(env.ctx, req)
+	}
+	if err != nil {
+		return fetchFail(L, env, err.Error())
+	}
+
+	cap := int64(lvalInt(opts.RawGetString("body_cap")))
+	var body []byte
+	var truncated bool
+	if cap > 0 {
+		body, truncated, err = httpclient.ReadBodyCapped(resp, cap)
+		if err != nil {
+			_ = resp.Body.Close()
+			return fetchFail(L, env, err.Error())
+		}
+	}
+	L.Push(pushResponse(L, resp, body, truncated))
+	L.Push(lua.LString(string(body)))
+	L.Push(lua.LNil)
+	return 3
+}
+
+// fetchFail emits the (nil, "", "<check-name>: <msg>") return tuple
+// every clientFetch error path uses. The check-name prefix removes
+// the boilerplate `return nil, "<name>: " .. err` lines callers
+// previously wrote on every error site.
+func fetchFail(L *lua.LState, env *runEnv, msg string) int {
+	L.Push(lua.LNil)
+	L.Push(lua.LString(""))
+	L.Push(lua.LString(env.check.name + ": " + msg))
+	return 3
 }
 
 // clientNewRequest builds an http.Request from a Lua table. Used by

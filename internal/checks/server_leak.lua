@@ -5,12 +5,12 @@
 
 local check = {
   name        = "server-leak",
-  level       = "passive",
-  scope       = "host",
+  level       = levels.passive,
+  scope       = scopes.host,
   cwe         = "CWE-200",
   owasp       = "A05:2021 Security Misconfiguration",
   remediation = nil, -- per-finding because the header name is interpolated
-  tier        = "fingerprint",
+  tier        = tiers.fingerprint,
 }
 
 local LEAK_HEADERS = { "Server", "X-Powered-By" }
@@ -20,7 +20,7 @@ function check.run(ctx)
   if err then return nil, err end
 
   local evidence = ctx.evidence.build {
-    method  = "GET",
+    method  = methods.get,
     url     = ctx.page.url,
     status  = snap.status,
     headers = snap.headers,
@@ -31,7 +31,7 @@ function check.run(ctx)
     local value = snap.headers:get(header)
     if value ~= "" then
       findings[#findings + 1] = {
-        severity    = ctx.severity.info,
+        severity    = severity.info,
         title       = "server software disclosed via " .. header,
         detail      = ctx.page.url .. " responded with " .. header .. ": " .. value,
         remediation = "Suppress or generalize the " .. header

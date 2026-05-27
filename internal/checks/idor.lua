@@ -30,8 +30,8 @@
 
 local check = {
   name        = "idor",
-  level       = "aggressive",
-  scope       = "param",
+  level       = levels.aggressive,
+  scope       = scopes.param,
   cwe         = "CWE-639",
   owasp       = "A01:2021 Broken Access Control",
   remediation = "Enforce object-level authorization on every request: verify the requesting principal owns or is "
@@ -40,10 +40,10 @@ local check = {
                 .. "supplied IDs. Add automated tests that swap identifiers across users in CI so regressions cannot reach "
                 .. "production unnoticed.",
   budget_seconds = 180,
-  consumes    = {"page", "param"},
+  consumes    = { kinds.page, kinds.param },
 }
 
-local BODY_CAP = 64 * 1024
+local BODY_CAP = body_caps.probe
 local MAX_TAMPERED_PROBES = 3
 local MAX_SINKS_PER_PAGE = 8
 local MIN_BASELINE_BODY = 64
@@ -202,7 +202,7 @@ local function probe_sink(ctx, corpus, cand)
             truncated = tamp_trunc,
           }
           return {
-            severity     = ctx.severity.high,
+            severity     = severity.high,
             target       = ctx.page.url,
             url          = ctx.page.url,
             title        = title,

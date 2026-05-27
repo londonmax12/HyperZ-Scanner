@@ -16,11 +16,14 @@ import (
 // flows in through the dynamic fields buildCtxUserdata sets on the
 // ctx table for each invocation.
 func bindHyperzAPI(L *lua.LState) {
+	// Constant vocabularies (cms, framework, methods, severity, ...)
+	// live in Lua globals so meta-table fields evaluated at module-load
+	// time (applies_to, patched_in, tier, level, ...) can reference
+	// them. Pure-helper namespaces with functions on them stay on ctx,
+	// installed via the staticHelpers below.
+	installConstGlobals(L)
+
 	h := &staticHelpers{
-		severity:  buildSeverityTable(L),
-		scopes:    buildScopesTable(L),
-		levels:    buildLevelsTable(L),
-		locs:      buildLocsTable(L),
 		evidence:  buildEvidenceTable(L),
 		dedupe:    buildDedupeTable(L),
 		url:       buildURLTable(L),

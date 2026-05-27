@@ -8,14 +8,14 @@
 
 local check = {
   name        = "cache-control-sensitive",
-  level       = "passive",
-  scope       = "host",
+  level       = levels.passive,
+  scope       = scopes.host,
   cwe         = "CWE-524",
   owasp       = "A05:2021 Security Misconfiguration",
   remediation = "Set Cache-Control: private, no-store, no-cache (or at minimum private) for authenticated or sensitive pages. "
                 .. "Use public, max-age=<seconds> only for cacheable, non-sensitive content. "
                 .. "For dynamic pages, prefer private to prevent caching in shared proxies.",
-  tier        = "passive",
+  tier        = tiers.passive,
 }
 
 local SAFE_DIRECTIVES = { "private", "no-store", "no-cache" }
@@ -53,11 +53,11 @@ function check.run(ctx)
   end
 
   return {{
-    severity = ctx.severity.medium,
+    severity = severity.medium,
     title    = "HTML response lacks cache-control security directives",
     detail   = detail,
     evidence = ctx.evidence.build {
-      method  = "GET",
+      method  = methods.get,
       url     = ctx.page.url,
       status  = snap.status,
       headers = snap.headers,

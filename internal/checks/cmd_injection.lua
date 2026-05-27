@@ -9,8 +9,8 @@
 
 local check = {
   name        = "cmd-injection",
-  level       = "default",
-  scope       = "param",
+  level       = levels.default,
+  scope       = scopes.param,
   cwe         = "CWE-78",
   owasp       = "A03:2021 Injection",
   budget_seconds = 300,
@@ -18,10 +18,10 @@ local check = {
                 .. "Go's exec.Command(name, args...), Python's subprocess with shell=False) so arguments are passed as "
                 .. "separate elements rather than concatenated into a shell-parsed string. When a shell is unavoidable, "
                 .. "strictly allowlist the permitted argument shape - blocklists of metacharacters are routinely bypassed.",
-  consumes    = {"page", "param"},
+  consumes    = { kinds.page, kinds.param },
 }
 
-local BODY_CAP = 4 * 1024
+local BODY_CAP = body_caps.small
 local FILLER_VALUE = "1"
 
 local function send(ctx, sink, wire_value)
@@ -72,7 +72,7 @@ local function probe(ctx, sink)
           if conf_result.vulnerable then
             local probe_url = conf_req:url()
             return {
-              severity = ctx.severity.critical,
+              severity = severity.critical,
               url      = probe_url,
               title    = string.format('OS command injection in %s parameter "%s"', sink.loc, sink.name),
               detail   = string.format(

@@ -6,14 +6,14 @@
 
 local check = {
   name        = "hsts-weak",
-  level       = "passive",
-  scope       = "host",
+  level       = levels.passive,
+  scope       = scopes.host,
   cwe         = "CWE-319",
   owasp       = "A05:2021 Security Misconfiguration",
   remediation = "Aim for Strict-Transport-Security: max-age=63072000; includeSubDomains; preload. "
                 .. "Confirm every subdomain serves HTTPS before enabling includeSubDomains. "
                 .. "Once max-age >= 31536000, includeSubDomains, and preload are in place, submit the host at https://hstspreload.org so first-visit downgrade is also defeated.",
-  tier        = "passive",
+  tier        = tiers.passive,
 }
 
 local HSTS_MAX_AGE_RECOMMENDED = 31536000  -- 1 year
@@ -125,12 +125,12 @@ function check.run(ctx)
     ctx.page.url)
 
   return {{
-    severity = ctx.severity[max_sev],
+    severity = severity[max_sev],
     title    = title,
     detail   = lead_in,
     details  = details,
     evidence = ctx.evidence.build {
-      method  = "GET",
+      method  = methods.get,
       url     = ctx.page.url,
       status  = snap.status,
       headers = snap.headers,

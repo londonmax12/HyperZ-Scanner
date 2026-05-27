@@ -5,11 +5,11 @@
 
 local check = {
   name  = "form-autocomplete",
-  level = "passive",
-  scope = "page",
+  level = levels.passive,
+  scope = scopes.page,
   cwe   = "CWE-1021",
   owasp = "A05:2021 Security Misconfiguration",
-  tier  = "passive",
+  tier  = tiers.passive,
 }
 
 -- input type -> severity. Every entry is Info today; the per-type
@@ -61,7 +61,7 @@ function check.run(ctx)
   local findings = {}
   local seen = {}
   local evidence = ctx.evidence.build {
-    method  = "GET",
+    method  = methods.get,
     url     = ctx.page.url,
     status  = ctx.page.status,
     headers = ctx.page.headers,
@@ -72,17 +72,17 @@ function check.run(ctx)
     local type_attr     = string.lower(tag.attr["type"] or "")
     local autocomplete  = string.lower(tag.attr["autocomplete"] or "")
     if name_attr ~= "" then
-      local severity = SENSITIVE_INPUTS[type_attr]
-      local is_sensitive = severity ~= nil
+      local sev_key = SENSITIVE_INPUTS[type_attr]
+      local is_sensitive = sev_key ~= nil
       if not is_sensitive then
-        severity, is_sensitive = detect_by_pattern(name_attr)
+        sev_key, is_sensitive = detect_by_pattern(name_attr)
       end
       if is_sensitive and not SAFE_AUTOCOMPLETE[autocomplete] then
         local key = "field:" .. name_attr
         if not seen[key] then
           seen[key] = true
           findings[#findings + 1] = {
-            severity = ctx.severity[severity],
+            severity = severity[sev_key],
             title    = string.format('sensitive form field "%s" allows browser autocomplete', name_attr),
             detail   = string.format(
               'Input field "%s" (type="%s") at %s does not disable autocomplete. An attacker with access to the browser (malware, physical theft) can retrieve previously entered values from browser history or password manager integration.',

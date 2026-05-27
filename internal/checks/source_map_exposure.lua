@@ -9,11 +9,11 @@
 
 local check = {
   name        = "source-map-exposure",
-  level       = "passive",
-  scope       = "host",
+  level       = levels.passive,
+  scope       = scopes.host,
   cwe         = "CWE-540",
   owasp       = "A05:2021 Security Misconfiguration",
-  tier        = "passive",
+  tier        = tiers.passive,
 }
 
 local SOURCE_MAP_PROBE_BODY_CAP = 64 * 1024
@@ -22,7 +22,7 @@ local function inline_finding(ctx, snap, data_uri)
   local preview = data_uri
   if #preview > 80 then preview = string.sub(preview, 1, 80) .. "..." end
   return {
-    severity = ctx.severity.medium,
+    severity = severity.medium,
     title    = "inline source map embedded in deployed bundle",
     detail   = string.format(
       "%s carries an inline `sourceMappingURL=data:...` declaration. The full pre-minified source (original file paths, comments, variable names, and any literals the minifier preserved) is base64-embedded in the bundle every visitor downloads.",
@@ -30,7 +30,7 @@ local function inline_finding(ctx, snap, data_uri)
     remediation = "Disable inline source maps in the production build (webpack `devtool: 'hidden-source-map'` or false, Vite `build.sourcemap: false` or 'hidden', Rollup `sourcemap: false`, esbuild `--sourcemap=external` paired with deploy-time exclusion). "
                   .. "If maps are needed for crash deobfuscation, upload them to a private symbol service (Sentry, Datadog, Bugsnag) at build time and ship the bundle without the embedded copy.",
     evidence = ctx.evidence.build {
-      method  = "GET",
+      method  = methods.get,
       url     = ctx.page.url,
       status  = snap.status,
       headers = snap.headers,
@@ -42,7 +42,7 @@ end
 
 local function external_finding(ctx, resp, map_url)
   return {
-    severity = ctx.severity.medium,
+    severity = severity.medium,
     url      = map_url,
     title    = "source map exposed at " .. map_url,
     detail   = string.format(
@@ -52,7 +52,7 @@ local function external_finding(ctx, resp, map_url)
                   .. "If maps must remain on disk for tooling, add a web-server rule that returns 404 for `*.map` requests and strip the `sourceMappingURL` reference from the bundle (webpack/Vite `'hidden-source-map'`). "
                   .. "Before remediating, audit the leaked map for hardcoded API keys, internal hostnames, and unreleased feature names; rotate or remove anything sensitive.",
     evidence = ctx.evidence.build {
-      method  = "GET",
+      method  = methods.get,
       url     = map_url,
       status  = resp:status(),
       headers = resp:headers(),

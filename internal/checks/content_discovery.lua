@@ -19,13 +19,13 @@
 
 local check = {
   name        = "content-discovery",
-  level       = "default",
-  scope       = "host",
+  level       = levels.default,
+  scope       = scopes.host,
   cwe         = "CWE-538",
   owasp       = "A05:2021 Security Misconfiguration",
   remediation = "Restrict admin / debug / VCS metadata paths at the web server or CDN layer; "
                 .. "produce deploy artifacts that exclude editor backups, lockfiles, and VCS dirs.",
-  tier        = "discovery",
+  tier        = tiers.discovery,
 }
 
 local function get_status(resp)
@@ -34,7 +34,7 @@ local function get_status(resp)
 end
 
 local function fetch(ctx, target)
-  local req, mut_err = ctx.client:new_request{ method = "GET", url = target }
+  local req, mut_err = ctx.client:new_request{ method = methods.get, url = target }
   if mut_err then return nil, "", "", "", mut_err end
   local resp, do_err = ctx.client:do_no_follow(req)
   if do_err then return nil, "", "", "", do_err end
@@ -164,18 +164,18 @@ end
 local function probe(ctx, host_root, baseline, entry, probe_url)
   local resp, body, ct, loc, err = fetch(ctx, probe_url)
   if err then return nil, err end
-  local verdict, evidence_line, severity = classify_response(ctx, entry, baseline, resp:status(), body, ct, loc)
+  local verdict, evidence_line, sev_key = classify_response(ctx, entry, baseline, resp:status(), body, ct, loc)
   if verdict == "" then return nil end
 
   if entry.emit then
-    ctx:discover{ kind = "page", url = probe_url }
+    ctx:discover{ kind = kinds.page, url = probe_url }
   end
 
   local detail = entry.detail
   if evidence_line ~= "" then detail = (entry.detail .. " " .. evidence_line):gsub("^%s+", ""):gsub("%s+$", "") end
 
   return {
-    severity    = ctx.severity[severity],
+    severity    = severity[sev_key],
     target      = host_root,
     url         = probe_url,
     title       = string.format("%s (%s)", entry.title, verdict),
@@ -184,7 +184,7 @@ local function probe(ctx, host_root, baseline, entry, probe_url)
     owasp       = entry.owasp,
     remediation = entry.remediation,
     evidence = ctx.evidence.build {
-      method  = "GET",
+      method  = methods.get,
       url     = probe_url,
       status  = resp:status(),
       headers = resp:headers(),

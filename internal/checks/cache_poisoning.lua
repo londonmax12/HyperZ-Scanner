@@ -15,17 +15,17 @@
 
 local check = {
   name        = "cache-poisoning",
-  level       = "default",
-  scope       = "host",
+  level       = levels.default,
+  scope       = scopes.host,
   cwe         = "CWE-444",
   owasp       = "A05:2021 Security Misconfiguration",
   remediation = "Add the header to the cache key (Vary or the CDN's surrogate-key config) so a poisoned response can't be served back to other users. "
                 .. "Better: stop reflecting reverse-proxy hints into generated URLs - derive absolute URLs from configuration, not from request headers. "
                 .. "For X-Original-URL / X-Rewrite-URL specifically, ignore the header at the application layer and rely solely on the routed path.",
-  tier        = "active",
+  tier        = tiers.active,
 }
 
-local BODY_CAP = 16 * 1024
+local BODY_CAP = body_caps.passive
 
 local function vary_keyed(vary_set, header_name)
   local lower = string.lower(header_name)
@@ -45,7 +45,7 @@ local function probe_unkeyed_header(ctx, target, probe, base_status, base_body, 
   if ptu_err then return nil, ptu_err end
 
   local req, mut_err = ctx.client:new_request{
-    method  = "GET",
+    method  = methods.get,
     url     = probe_target,
     headers = { [probe.header] = probe.value },
   }
@@ -72,7 +72,7 @@ local function probe_unkeyed_header(ctx, target, probe, base_status, base_body, 
   local vary_desc = "none"
   if base_vary_header and base_vary_header ~= "" then vary_desc = base_vary_header end
   return {
-    severity = ctx.severity.high,
+    severity = severity.high,
     url      = probe_url,
     title    = string.format("Web cache poisoning via unkeyed header %s", probe.header),
     detail   = string.format(
@@ -98,7 +98,7 @@ local function probe_cache_deception(ctx, target, base_status, base_body, base_c
   if durl_err then return nil, durl_err end
   if deceived == "" then return nil end
 
-  local req, mut_err = ctx.client:new_request{ method = "GET", url = deceived }
+  local req, mut_err = ctx.client:new_request{ method = methods.get, url = deceived }
   if mut_err then return nil, mut_err end
   local resp, do_err = ctx.client:do_no_follow(req)
   if do_err then return nil, do_err end
@@ -112,16 +112,16 @@ local function probe_cache_deception(ctx, target, base_status, base_body, base_c
 
   if not ctx.body.cache_poison_bodies_match(body, base_body) then return nil end
 
-  local severity = ctx.severity.high
+  local sev = severity.high
   if ctx.body.cache_poison_cc_forbids_storage(resp_headers:get("Cache-Control")) then
-    severity = ctx.severity.medium
+    sev = severity.medium
   end
 
   local suffix = ctx.payloads.cache_poison_deception_suffix()
   local u = ctx.url.parse(target)
   local base_path = (u and u.path) or "/"
   return {
-    severity = severity,
+    severity = sev,
     url      = deceived,
     title    = "Web cache deception via static-asset path suffix",
     detail   = string.format(
@@ -136,7 +136,7 @@ local function probe_cache_deception(ctx, target, base_status, base_body, base_c
       body      = body,
       truncated = truncated,
     },
-    dedupe_scope = "page",
+    dedupe_scope = scopes.page,
     dedupe_parts = { "cache-deception" },
   }
 end

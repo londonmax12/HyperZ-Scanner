@@ -17,8 +17,8 @@
 
 local check = {
   name        = "race-condition",
-  level       = "aggressive",
-  scope       = "page",
+  level       = levels.aggressive,
+  scope       = scopes.page,
   cwe         = "CWE-362",
   owasp       = "A04:2021 Insecure Design",
   remediation = "Wrap the racy operation in a transaction with a unique constraint or row-level lock so the "
@@ -29,7 +29,7 @@ local check = {
     .. "response. For account-creation flows, lean on the database's uniqueness constraint rather than an "
     .. "application-level SELECT-then-INSERT.",
   budget_seconds = 300,
-  tier = "active",
+  tier = tiers.active,
   pollute = true,
 }
 
@@ -140,7 +140,7 @@ local function compose_finding(ctx, fact, counts, body_variety, failures)
     "reproduce with Burp's Repeater + Send group in parallel (single-packet attack), or any HTTP/2 client that supports parallel streams on one connection",
   }
   return {
-    severity     = ctx.severity.medium,
+    severity     = severity.medium,
     target       = ctx.page.url,
     url          = fact.url,
     title        = title,

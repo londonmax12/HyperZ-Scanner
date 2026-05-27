@@ -18,16 +18,14 @@
 
 local check = {
   name        = "wp-rest-user-enum",
-  level       = "default",
-  scope       = "host",
+  level       = levels.default,
+  scope       = scopes.host,
   cwe         = "CWE-200",
   owasp       = "A01:2021 Broken Access Control",
   remediation = "Restrict /wp-json/wp/v2/users to authenticated requests via a security plugin (Wordfence, iThemes Security) or a custom permission_callback on the route. Sites that do not need the endpoint should disable it entirely.",
-  tier        = "passive",
-  applies_to  = { cms = {"wordpress"} },
+  tier        = tiers.passive,
+  applies_to  = { cms = { cms.wordpress } },
 }
-
-local BODY_CAP = 32 * 1024
 
 -- looks_like_user_array confirms doc is a JSON array of objects that
 -- each carry id + slug (the marker fields WordPress emits even when
@@ -79,26 +77,20 @@ local function all_slugs(doc)
 end
 
 function check.run(ctx)
-  local u, perr = ctx.url.parse(ctx.page.url)
-  if perr or u == nil or u.scheme == "" or u.host == "" then return nil end
-  local host_root = u.scheme .. "://" .. u.host
-  if not ctx.scope:allows(host_root) then return nil end
-  if not ctx.host.claim_once(host_root) then return nil end
+  local host_root, ok = ctx.host:claim_from_page()
+  if not ok then return nil end
 
   local probe_url = host_root .. "/wp-json/wp/v2/users"
-
-  local req, mut_err = ctx.client:new_request{ method = "GET", url = probe_url }
-  if mut_err then return nil, "wp-rest-user-enum: " .. mut_err end
-  local resp, do_err = ctx.client:do_no_follow(req)
-  if do_err then return nil, "wp-rest-user-enum: " .. do_err end
-
+  local resp, body, err = ctx.client:fetch{
+    method   = methods.get,
+    url      = probe_url,
+    body_cap = body_caps.passive,
+  }
+  if err then return nil, err end
   if resp:status() ~= 200 then return nil end
 
   local ct = resp:headers():get("Content-Type") or ""
-  if ct:lower():find("application/json", 1, true) == nil then return nil end
-
-  local body, _, rerr = resp:read_body_capped(BODY_CAP)
-  if rerr then return nil, "wp-rest-user-enum: " .. rerr end
+  if ct:lower():find(content_types.json, 1, true) == nil then return nil end
 
   local doc = ctx.json.decode(body)
   if not looks_like_user_array(doc) then return nil end
@@ -123,12 +115,12 @@ function check.run(ctx)
   -- caps total per-host pushes via WithHostBudget, so a site with
   -- many authors is bounded on both axes.
   for _, slug in ipairs(all_slugs(doc)) do
-    ctx:discover{ kind = "page", url = host_root .. "/author/" .. slug .. "/" }
+    ctx:discover{ kind = kinds.page, url = host_root .. "/author/" .. slug .. "/" }
   end
 
   return {
     {
-      severity    = ctx.severity.medium,
+      severity    = severity.medium,
       target      = host_root,
       url         = probe_url,
       title       = "WordPress REST API exposes user list to anonymous requests",
@@ -136,13 +128,12 @@ function check.run(ctx)
         "GET %s returned %d user object(s) without authentication. Each entry includes the user id, name, and slug, giving an attacker valid login names for credential stuffing or targeted phishing.%s",
         probe_url, count, slug_line),
       evidence = ctx.evidence.build{
-        method  = "GET",
+        method  = methods.get,
         url     = probe_url,
         status  = resp:status(),
         headers = resp:headers(),
         body    = body,
       },
-      dedupe_parts = { "wp-rest-user-enum" },
     },
   }
 end

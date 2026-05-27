@@ -13,17 +13,17 @@
 
 local check = {
   name        = "reflected-xss",
-  level       = "default",
-  scope       = "param",
+  level       = levels.default,
+  scope       = scopes.param,
   cwe         = "CWE-79",
   owasp       = "A03:2021 Injection",
   remediation = "Context-aware output encoding: HTML-encode user input rendered into HTML text, "
                 .. "attribute-encode for values placed in tag attributes, and JavaScript-encode (or hand off via JSON) for values "
                 .. "placed inside <script>. Prefer templating engines that auto-escape by default; never concatenate user input into HTML.",
-  consumes    = {"page", "param"},
+  consumes    = { kinds.page, kinds.param },
 }
 
-local BODY_CAP = 64 * 1024
+local BODY_CAP = body_caps.probe
 
 local function new_canary()
   local hex = "0123456789abcdef"
@@ -81,7 +81,7 @@ local function probe(ctx, sink)
       local probe_url = req:url()
       local context_summary = ctx.body.xss_context_summary(context_strings)
       return {
-        severity = ctx.severity.high,
+        severity = severity.high,
         url      = probe_url,
         title    = string.format('Reflected XSS in %s parameter "%s"', sink.loc, sink.name),
         detail   = string.format(

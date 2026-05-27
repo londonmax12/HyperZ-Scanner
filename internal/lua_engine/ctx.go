@@ -38,15 +38,12 @@ func buildCtxUserdata(L *lua.LState, env *runEnv) *lua.LTable {
 	t.RawSetString("client", pushClient(L, env.client))
 
 	// Active scan level surfaces as a string. Authors compare with
-	// ctx.levels.aggressive (table constant) rather than the bare
-	// string so a typo at the use site fails as nil-not-equal-string.
+	// the `levels` global (e.g. `if ctx.level == levels.aggressive`)
+	// rather than the bare string so a typo at the use site fails as
+	// nil-not-equal-string.
 	t.RawSetString("level", lua.LString(LevelFrom(env.ctx).String()))
 
 	if helpers := staticFor(L); helpers != nil {
-		t.RawSetString("severity", helpers.severity)
-		t.RawSetString("scopes", helpers.scopes)
-		t.RawSetString("levels", helpers.levels)
-		t.RawSetString("locs", helpers.locs)
 		t.RawSetString("evidence", helpers.evidence)
 		t.RawSetString("dedupe", helpers.dedupe)
 		t.RawSetString("url", helpers.url)

@@ -32,16 +32,14 @@
 
 local check = {
   name        = "wp-xmlrpc-enabled",
-  level       = "default",
-  scope       = "host",
+  level       = levels.default,
+  scope       = scopes.host,
   cwe         = "CWE-200",
   owasp       = "A05:2021 Security Misconfiguration",
   remediation = "Disable /xmlrpc.php at the web server or via a security plugin (e.g. WordPress filter `xmlrpc_enabled = false` or a server-level deny). If XML-RPC is required for a specific integration, restrict it to the integration's source IPs. Even when kept, disable pingback.ping (which is the SSRF / DDoS amplification vector) via the `xmlrpc_methods` filter.",
-  tier        = "passive",
-  applies_to  = { cms = {"wordpress"} },
+  tier        = tiers.passive,
+  applies_to  = { cms = { cms.wordpress } },
 }
-
-local BODY_CAP = 16 * 1024
 
 local LIST_METHODS_BODY = [[<?xml version="1.0"?>
 <methodCall>
@@ -72,28 +70,19 @@ local function has_pingback(body)
 end
 
 function check.run(ctx)
-  local u, perr = ctx.url.parse(ctx.page.url)
-  if perr or u == nil or u.scheme == "" or u.host == "" then return nil end
-  local host_root = u.scheme .. "://" .. u.host
-  if not ctx.scope:allows(host_root) then return nil end
-  if not ctx.host.claim_once(host_root) then return nil end
+  local host_root, ok = ctx.host:claim_from_page()
+  if not ok then return nil end
 
   local probe_url = host_root .. "/xmlrpc.php"
-
-  local req, mut_err = ctx.client:new_request{
-    method  = "POST",
-    url     = probe_url,
-    body    = LIST_METHODS_BODY,
-    headers = { ["Content-Type"] = "text/xml" },
+  local resp, body, err = ctx.client:fetch{
+    method   = methods.post,
+    url      = probe_url,
+    body     = LIST_METHODS_BODY,
+    headers  = { ["Content-Type"] = content_types.text_xml },
+    body_cap = body_caps.passive,
   }
-  if mut_err then return nil, "wp-xmlrpc-enabled: " .. mut_err end
-  local resp, do_err = ctx.client:do_no_follow(req)
-  if do_err then return nil, "wp-xmlrpc-enabled: " .. do_err end
-
+  if err then return nil, err end
   if resp:status() ~= 200 then return nil end
-
-  local body, _, rerr = resp:read_body_capped(BODY_CAP)
-  if rerr then return nil, "wp-xmlrpc-enabled: " .. rerr end
 
   if not xmlrpc_response_shape(body) then return nil end
 
@@ -104,7 +93,7 @@ function check.run(ctx)
 
   return {
     {
-      severity    = ctx.severity.medium,
+      severity    = severity.medium,
       target      = host_root,
       url         = probe_url,
       title       = "WordPress XML-RPC endpoint accepts anonymous requests",
@@ -112,13 +101,12 @@ function check.run(ctx)
         "POST %s with a system.listMethods envelope returned a valid XML-RPC methodResponse, confirming /xmlrpc.php is enabled. The endpoint amplifies credential brute-force attempts via system.multicall and exposes server-side request methods that operators often do not need on a default install.%s",
         probe_url, detail_tail),
       evidence = ctx.evidence.build{
-        method  = "POST",
+        method  = methods.post,
         url     = probe_url,
         status  = resp:status(),
         headers = resp:headers(),
         body    = body,
       },
-      dedupe_parts = { "wp-xmlrpc-enabled" },
     },
   }
 end

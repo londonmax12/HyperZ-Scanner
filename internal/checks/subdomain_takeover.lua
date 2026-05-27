@@ -17,11 +17,11 @@
 
 local check = {
   name  = "subdomain-takeover",
-  level = "passive",
-  scope = "host",
+  level = levels.passive,
+  scope = scopes.host,
   cwe   = "CWE-1104",
   owasp = "A05:2021 Security Misconfiguration",
-  tier  = "passive",
+  tier  = tiers.passive,
 }
 
 -- Generic suffixes appended to the per-provider guidance prefix the
@@ -78,7 +78,7 @@ local function compose_cname(ctx, facts)
   end
 
   return {
-    severity = ctx.severity.high,
+    severity = severity.high,
     title    = "subdomain takeover via dangling " .. facts.provider .. " CNAME",
     detail   = string.format(
       "Hostname's DNS still points at %s but the upstream resource is unclaimed; the edge serves its canonical \"this resource does not exist\" page. Each entry below explains the evidence.",
@@ -86,7 +86,7 @@ local function compose_cname(ctx, facts)
     details     = details,
     remediation = facts.provider_guidance .. REMEDIATION_TAIL_CNAME,
     evidence    = ctx.evidence.build {
-      method  = "GET",
+      method  = methods.get,
       url     = facts.probe_url,
       status  = facts.status,
       headers = evidence_headers,
@@ -98,7 +98,7 @@ local function compose_cname(ctx, facts)
     -- key off the current page URL; we override with an explicit key.
     dedupe_key = ctx.dedupe.key {
       check  = "subdomain-takeover",
-      scope  = "host",
+      scope  = scopes.host,
       target = facts.probe_url,
       parts  = { "cname:" .. facts.cname, "provider:" .. facts.provider },
     },
@@ -139,7 +139,7 @@ local function compose_fingerprint(ctx, facts)
   end
 
   return {
-    severity = ctx.severity.medium,
+    severity = severity.medium,
     title    = "possible subdomain takeover: " .. facts.provider .. " edge serves unclaimed-resource page",
     detail   = string.format(
       "The hostname's edge response identifies it as %s and matches the provider's canonical \"unclaimed resource\" page, but DNS does not surface a CNAME to this provider. Each entry below explains the evidence.",
@@ -147,7 +147,7 @@ local function compose_fingerprint(ctx, facts)
     details     = details,
     remediation = facts.provider_guidance .. REMEDIATION_TAIL_FINGERPRINT,
     evidence    = ctx.evidence.build {
-      method  = "GET",
+      method  = methods.get,
       url     = facts.probe_url,
       status  = facts.status,
       headers = evidence_headers,
@@ -155,7 +155,7 @@ local function compose_fingerprint(ctx, facts)
     },
     dedupe_key = ctx.dedupe.key {
       check  = "subdomain-takeover",
-      scope  = "host",
+      scope  = scopes.host,
       target = facts.probe_url,
       parts  = { "fingerprint", "provider:" .. facts.provider },
     },

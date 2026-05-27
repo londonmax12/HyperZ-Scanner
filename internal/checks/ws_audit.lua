@@ -26,9 +26,9 @@
 
 local check = {
   name  = "ws-audit",
-  level = "default",
-  scope = "host",
-  tier  = "active",
+  level = levels.default,
+  scope = scopes.host,
+  tier  = tiers.active,
 }
 
 function check.run(ctx)
@@ -66,7 +66,7 @@ function check.run(ctx)
         findings[#findings + 1] = {
           target      = target,
           url         = target,
-          severity    = ctx.severity.medium,
+          severity    = severity.medium,
           title       = "HTTPS page references cleartext WebSocket " .. ep,
           detail      = "An https:// page advertises a ws:// WebSocket endpoint. Modern browsers block the connection "
               .. "as mixed active content, but the reference itself reveals the channel to anyone reading the page "
@@ -78,7 +78,7 @@ function check.run(ctx)
               .. "server is behind a load balancer or reverse proxy, terminate TLS there and forward the upgraded "
               .. "connection as plaintext on the trusted internal segment.",
           evidence    = ctx.evidence.build {
-            method  = "GET",
+            method  = methods.get,
             url     = ep,
             snippet = "Page " .. target .. " references " .. ep,
           },
@@ -102,7 +102,7 @@ function check.run(ctx)
           findings[#findings + 1] = {
             target      = target,
             url         = ep,
-            severity    = ctx.severity.high,
+            severity    = severity.high,
             title       = "WebSocket handshake accepted from foreign Origin",
             detail      = "The endpoint completed an RFC 6455 handshake when the request carried Origin: " .. origin
                 .. ". WebSocket connections are NOT subject to the same-origin policy at the browser level; the only "
@@ -117,7 +117,7 @@ function check.run(ctx)
                 .. "non-cookie credential (signed token in a sub-protocol or in the first message); cookies alone are "
                 .. "vulnerable to replay from any origin the user happens to visit.",
             evidence    = ctx.evidence.build {
-              method  = "GET",
+              method  = methods.get,
               url     = ep,
               status  = res.status,
               snippet = res.snippet,
@@ -128,7 +128,7 @@ function check.run(ctx)
             -- Finding.Target (used for report display) is unaffected.
             dedupe_key = ctx.dedupe.key {
               check  = check.name,
-              scope  = "page",
+              scope  = scopes.page,
               target = ep,
               parts  = { "cswsh" },
             },

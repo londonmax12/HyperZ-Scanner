@@ -8,18 +8,18 @@
 
 local check = {
   name        = "sqli-time",
-  level       = "default",
-  scope       = "param",
+  level       = levels.default,
+  scope       = scopes.param,
   cwe         = "CWE-89",
   owasp       = "A03:2021 Injection",
   budget_seconds = 300,
   remediation = "Use parameterized queries / prepared statements; time-based blind SQLi remains exploitable "
                 .. "even when the response body never reflects database content. Disabling SLEEP / pg_sleep / WAITFOR via "
                 .. "the DB user's privileges narrows the attack surface but is not a replacement for parameterized queries.",
-  consumes    = {"page", "param"},
+  consumes    = { kinds.page, kinds.param },
 }
 
-local BODY_CAP = 4 * 1024
+local BODY_CAP = body_caps.small
 local FILLER_VALUE = "1"
 
 local function new_canary()
@@ -84,7 +84,7 @@ local function probe(ctx, sink)
           if conf_result.vulnerable then
             local probe_url = conf_req:url()
             return {
-              severity = ctx.severity.high,
+              severity = severity.high,
               url      = probe_url,
               title    = string.format('SQL injection (time-based) in %s parameter "%s"', sink.loc, sink.name),
               detail   = string.format(

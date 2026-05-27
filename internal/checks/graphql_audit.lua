@@ -25,12 +25,12 @@
 
 local check = {
   name  = "graphql-audit",
-  level = "default",
-  scope = "page",
-  tier  = "active",
+  level = levels.default,
+  scope = scopes.page,
+  tier  = tiers.active,
 }
 
-local BODY_CAP = 64 * 1024
+local BODY_CAP = body_caps.probe
 local ALIAS_COUNT = 10
 local ALIAS_AUTH_COUNT = 5
 local BATCH_MUTATION_COUNT = 3
@@ -102,11 +102,11 @@ local function post_json(ctx, target, payload)
   local raw, jerr = ctx.json.encode(payload)
   if jerr then return nil, 0, nil, nil, false, jerr end
   local req, mut_err = ctx.client:new_request {
-    method = "POST",
+    method = methods.post,
     url    = target,
     body   = raw,
     headers = {
-      ["Content-Type"] = "application/json",
+      ["Content-Type"] = content_types.json,
       ["Accept"]       = "application/json",
     },
   }
@@ -353,7 +353,7 @@ local function probe_introspection(ctx, target)
   if err then return nil, err end
   if not introspection_enabled(ctx, body) then return nil end
   return {
-    severity = ctx.severity.medium,
+    severity = severity.medium,
     target   = target,
     url      = target,
     title    = "GraphQL introspection enabled",
@@ -378,7 +378,7 @@ local function probe_suggestions(ctx, target)
   if err then return nil, err end
   if not suggestions_leaked(body) then return nil end
   return {
-    severity = ctx.severity.low,
+    severity = severity.low,
     target   = target,
     url      = target,
     title    = "GraphQL field suggestions enabled",
@@ -406,7 +406,7 @@ local function probe_batch(ctx, target)
   if err then return nil, err end
   if not batch_accepted(ctx, body) then return nil end
   return {
-    severity = ctx.severity.medium,
+    severity = severity.medium,
     target   = target,
     url      = target,
     title    = "GraphQL query batching accepted",
@@ -439,7 +439,7 @@ local function probe_alias(ctx, target)
   local got = alias_response_count(ctx, body)
   if got < ALIAS_COUNT then return nil end
   return {
-    severity = ctx.severity.medium,
+    severity = severity.medium,
     target   = target,
     url      = target,
     title    = string.format("GraphQL alias amplification accepted (%d aliases per query)", got),
@@ -469,7 +469,7 @@ local function probe_alias_auth_bypass(ctx, target)
     local got = per_alias_resolve_count(ctx, body)
     if got >= ALIAS_AUTH_COUNT then
       return {
-        severity = ctx.severity.high,
+        severity = severity.high,
         target   = target,
         url      = target,
         title    = string.format(
@@ -504,7 +504,7 @@ local function probe_batch_mutations(ctx, target)
     if err then return nil, err end
     if batch_mutations_executed(ctx, body, field) then
       return {
-        severity = ctx.severity.high,
+        severity = severity.high,
         target   = target,
         url      = target,
         title    = string.format("GraphQL batched mutations accepted (%s)", field),
@@ -537,7 +537,7 @@ local function probe_depth(ctx, target)
   if err then return nil, err end
   if not depth_resolved(ctx, body, DEPTH_LEVELS) then return nil end
   return {
-    severity = ctx.severity.medium,
+    severity = severity.medium,
     target   = target,
     url      = target,
     title    = string.format("GraphQL query-depth limit not enforced (depth %d resolved)", DEPTH_LEVELS),

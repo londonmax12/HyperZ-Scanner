@@ -77,6 +77,16 @@ func (c *LuaCheck) marshalOne(t *lua.LTable, env *runEnv) (Finding, error) {
 		// metadata. The explicit dedupe_key escape hatch is for the
 		// rare check that needs to override scope per-finding.
 		parts := stringList(t, "dedupe_parts")
+		// Drop the single-entry-equals-check-name form. MakeKey already
+		// prepends c.name, so `dedupe_parts = { c.name }` was a no-op
+		// duplicate (key ended `...|target|<name>` for no reason). The
+		// previous catalog wrote it on every passive vendor check; the
+		// migration leaves the field omitted, but anything we miss is
+		// silently normalized here so the key stays stable across the
+		// refactor.
+		if len(parts) == 1 && parts[0] == c.name {
+			parts = nil
+		}
 		scopeStr := lvalString(t.RawGetString("dedupe_scope"))
 		sc := c.defaultScope
 		if scopeStr != "" {

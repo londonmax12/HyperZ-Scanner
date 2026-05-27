@@ -22,9 +22,9 @@
 
 local check = {
   name  = "openapi-audit",
-  level = "passive",
-  scope = "host",
-  tier  = "passive",
+  level = levels.passive,
+  scope = scopes.host,
+  tier  = tiers.passive,
 }
 
 local BODY_SNIPPET_CAP = 512
@@ -43,7 +43,7 @@ local SEVERITY_RANK = { info = 0, low = 1, medium = 2, high = 3, critical = 4 }
 
 local function build_evidence(ctx, facts)
   return ctx.evidence.build {
-    method  = "GET",
+    method  = methods.get,
     url     = facts.probe_url,
     status  = facts.status,
     snippet = snippet_json(facts.body),
@@ -103,7 +103,7 @@ local function finding_embedded_credentials(ctx, facts)
   for _, p in ipairs(id_parts) do parts[#parts + 1] = p end
 
   return {
-    severity    = ctx.severity[max_sev],
+    severity    = severity[max_sev],
     target      = facts.probe_url,
     url         = facts.probe_url,
     title       = title,
@@ -115,7 +115,7 @@ local function finding_embedded_credentials(ctx, facts)
     evidence    = build_evidence(ctx, facts),
     dedupe_key  = ctx.dedupe.key {
       check  = check.name,
-      scope  = "host",
+      scope  = scopes.host,
       target = facts.probe_url,
       parts  = parts,
     },
@@ -171,7 +171,7 @@ local function finding_example_auth_tokens(ctx, facts)
   for _, p in ipairs(id_parts) do parts[#parts + 1] = p end
 
   return {
-    severity    = ctx.severity.low,
+    severity    = severity.low,
     target      = facts.probe_url,
     url         = facts.probe_url,
     title       = "OpenAPI spec carries example Authorization tokens",
@@ -183,7 +183,7 @@ local function finding_example_auth_tokens(ctx, facts)
     evidence    = build_evidence(ctx, facts),
     dedupe_key  = ctx.dedupe.key {
       check  = check.name,
-      scope  = "host",
+      scope  = scopes.host,
       target = facts.probe_url,
       parts  = parts,
     },
@@ -256,7 +256,7 @@ local function finding_authless_operations(ctx, facts)
   for _, p in ipairs(id_parts) do parts[#parts + 1] = p end
 
   return {
-    severity    = ctx.severity.medium,
+    severity    = severity.medium,
     target      = facts.probe_url,
     url         = facts.probe_url,
     title       = "OpenAPI spec declares auth schemes but exposes unauthenticated operations",
@@ -268,7 +268,7 @@ local function finding_authless_operations(ctx, facts)
     evidence    = build_evidence(ctx, facts),
     dedupe_key  = ctx.dedupe.key {
       check  = check.name,
-      scope  = "host",
+      scope  = scopes.host,
       target = facts.probe_url,
       parts  = parts,
     },

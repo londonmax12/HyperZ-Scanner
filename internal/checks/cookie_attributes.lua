@@ -6,10 +6,10 @@
 
 local check = {
   name  = "cookie-attributes",
-  level = "passive",
-  scope = "host",
+  level = levels.passive,
+  scope = scopes.host,
   owasp = "A05:2021 Security Misconfiguration",
-  tier  = "passive",
+  tier  = tiers.passive,
 }
 
 -- Per-attribute (severity, cwe, remediation). All three share OWASP
@@ -36,7 +36,7 @@ local ATTR_RULES = {
 local function build_finding(ctx, cookie_name, attr, evidence)
   local rule = ATTR_RULES[attr]
   return {
-    severity    = ctx.severity[rule.severity],
+    severity    = severity[rule.severity],
     title       = string.format('cookie "%s" missing %s attribute', cookie_name, attr),
     detail      = string.format('Set-Cookie for "%s" at %s did not include %s', cookie_name, ctx.page.url, attr),
     cwe         = rule.cwe,
@@ -55,7 +55,7 @@ function check.run(ctx)
 
   local is_https = string.sub(string.lower(ctx.page.url), 1, 8) == "https://"
   local evidence = ctx.evidence.build {
-    method  = "GET",
+    method  = methods.get,
     url     = ctx.page.url,
     status  = snap.status,
     headers = snap.headers,

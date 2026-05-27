@@ -18,8 +18,8 @@
 
 local check = {
   name        = "request-smuggling",
-  level       = "aggressive",
-  scope       = "host",
+  level       = levels.aggressive,
+  scope       = scopes.host,
   cwe         = "CWE-444",
   owasp       = "A03:2021 Injection",
   remediation = "Normalize request framing at the front-end: reject any HTTP/1.1 request that "
@@ -30,7 +30,7 @@ local check = {
     .. "disable HTTP keep-alive on the front-to-back connection if the framing risk cannot be "
     .. "eliminated at the parser level.",
   budget_seconds = 300,
-  tier = "active",
+  tier = tiers.active,
   pollute = true,
 }
 
@@ -84,13 +84,13 @@ local function compose_finding(ctx, host_key, page_url, v)
     baseline_label, probe1_label, probe2_label, threshold_label)
 
   return {
-    severity = ctx.severity.high,
+    severity = severity.high,
     target   = page_url,
     url      = page_url,
     title    = string.format("HTTP request smuggling (%s desynchronization)", v.label),
     detail   = detail,
     evidence = ctx.evidence.build {
-      method  = "POST",
+      method  = methods.post,
       url     = host_key,
       snippet = snippet,
     },

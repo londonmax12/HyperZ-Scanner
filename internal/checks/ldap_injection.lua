@@ -14,18 +14,18 @@
 
 local check = {
   name        = "ldapi",
-  level       = "default",
-  scope       = "param",
+  level       = levels.default,
+  scope       = scopes.param,
   cwe         = "CWE-90",
   owasp       = "A03:2021 Injection",
   remediation = "Escape every metacharacter LDAP filters treat specially (RFC 4515 lists `( ) * \\ NUL`) "
                 .. "before concatenating user input into a filter string. Prefer libraries that build filters from typed "
                 .. "values (FilterBuilder APIs) over string concatenation. For authentication, bind with the user's DN "
                 .. "rather than embedding the username and password in a search filter.",
-  consumes    = {"page", "param"},
+  consumes    = { kinds.page, kinds.param },
 }
 
-local BODY_CAP = 64 * 1024
+local BODY_CAP = body_caps.probe
 
 local function new_canary()
   local hex = "0123456789abcdef"
@@ -105,7 +105,7 @@ local function probe(ctx, sink)
         if result.decision == "vulnerable" then
           local probe_url = f_req:url()
           return {
-            severity = ctx.severity.high,
+            severity = severity.high,
             url      = probe_url,
             title    = string.format('LDAP injection (filter-break) in %s parameter "%s"', sink.loc, sink.name),
             detail   = string.format(
@@ -139,7 +139,7 @@ local function probe(ctx, sink)
       if #new_hits > 0 then
         local probe_url = req:url()
         return {
-          severity = ctx.severity.high,
+          severity = severity.high,
           url      = probe_url,
           title    = string.format('LDAP injection (error-based) in %s parameter "%s"', sink.loc, sink.name),
           detail   = string.format(

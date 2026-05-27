@@ -14,8 +14,8 @@
 
 local check = {
   name        = "insecure-deserialization",
-  level       = "default",
-  scope       = "param",
+  level       = levels.default,
+  scope       = scopes.param,
   cwe         = "CWE-502",
   owasp       = "A08:2021 Software and Data Integrity Failures",
   remediation = "Replace format-native deserialization (Java ObjectInputStream, .NET BinaryFormatter/LosFormatter, "
@@ -24,7 +24,7 @@ local check = {
                 .. "unavoidable, sign the blob with a server-side key (HMAC) and verify the MAC before "
                 .. "deserializing, and restrict the deserializer's type allowlist (Java: ObjectInputFilter; "
                 .. ".NET: ISerializationBinder; Python: a RestrictedUnpickler).",
-  consumes    = {"page", "param"},
+  consumes    = { kinds.page, kinds.param },
 }
 
 local FINGERPRINT_PREVIEW_CAP = 80
@@ -49,10 +49,10 @@ end
 -- fingerprint_finding builds a "Serialized X data carried in Y"
 -- finding. severity is high for round-trip surfaces, medium for
 -- body-only leakage.
-local function fingerprint_finding(ctx, target, location, fmt_name, fmt_label, value, severity)
+local function fingerprint_finding(ctx, target, location, fmt_name, fmt_label, value, sev_key)
   local prev = preview(value)
   return {
-    severity = ctx.severity[severity],
+    severity = severity[sev_key],
     target   = target,
     url      = target,
     title    = string.format("Serialized %s data carried in %s", fmt_label, location),
@@ -69,13 +69,13 @@ local function fingerprint_finding(ctx, target, location, fmt_name, fmt_label, v
       .. "before deserializing. Restrict the deserializer's type allowlist (Java: ObjectInputFilter; "
       .. ".NET: ISerializationBinder; Python: a RestrictedUnpickler).",
     evidence = ctx.evidence.build {
-      method  = "GET",
+      method  = methods.get,
       url     = target,
       snippet = string.format("%s value: %s", location, prev),
     },
     dedupe_key = ctx.dedupe.key {
       check  = check.name,
-      scope  = "page",
+      scope  = scopes.page,
       target = target,
       parts  = { "fingerprint", "format:" .. fmt_name, "location:" .. location },
     },
@@ -86,7 +86,7 @@ end
 -- leak (no proven round-trip). Severity medium.
 local function body_marker_finding(ctx, target, marker)
   return {
-    severity = ctx.severity.medium,
+    severity = severity.medium,
     target   = target,
     url      = target,
     title    = string.format("Serialized object exposed in response body (%s)", marker),
@@ -104,7 +104,7 @@ local function body_marker_finding(ctx, target, marker)
       .. "is unavoidable, sign the blob with a server-side key and verify the MAC before deserializing.",
     dedupe_key = ctx.dedupe.key {
       check  = check.name,
-      scope  = "page",
+      scope  = scopes.page,
       target = target,
       parts  = { "body-fingerprint:" .. marker },
     },
@@ -240,7 +240,7 @@ local function probe_sink(ctx, target, sink)
     if #new_hits > 0 then
       local probe_url = req:url()
       return {
-        severity = ctx.severity.high,
+        severity = severity.high,
         target   = target,
         url      = probe_url,
         title    = string.format("Insecure deserialization (%s) in %s parameter %q",
@@ -259,7 +259,7 @@ local function probe_sink(ctx, target, sink)
         },
         dedupe_key = ctx.dedupe.key {
           check  = check.name,
-          scope  = "param",
+          scope  = scopes.param,
           target = target,
           parts  = { "loc:" .. sink.loc, "param:" .. sink.name },
         },

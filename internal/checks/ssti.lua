@@ -16,17 +16,17 @@
 
 local check = {
   name        = "ssti",
-  level       = "default",
-  scope       = "param",
+  level       = levels.default,
+  scope       = scopes.param,
   cwe         = "CWE-1336",
   owasp       = "A03:2021 Injection",
   remediation = "Never concatenate user input into template source code. Render user input as template "
                 .. "variables or data objects instead. Use template engines with sandboxing when user-controlled templates "
                 .. "are a product requirement.",
-  consumes    = {"page", "param"},
+  consumes    = { kinds.page, kinds.param },
 }
 
-local BODY_CAP = 32 * 1024
+local BODY_CAP = body_caps.passive
 
 local function new_canary()
   local hex = "0123456789abcdef"
@@ -88,14 +88,14 @@ local function probe(ctx, sink)
         end
       end
 
-      local severity = confirmed and ctx.severity.critical or ctx.severity.high
+      local sev = confirmed and severity.critical or severity.high
       local title_suffix = confirmed and "expression evaluation" or "expression evaluation, unconfirmed"
       local probe_url = req:url()
       local loc_descriptor = ctx.payloads.loc_descriptor(sink.loc)
       local math_source = string.gsub(exp_probe.template, "{{TOKEN}}", "")
       local confirm_source = string.gsub(confirm.template, "{{TOKEN}}", "")
       return {
-        severity = severity,
+        severity = sev,
         url      = probe_url,
         title    = string.format('Server-Side Template Injection (%s) in %s %s "%s"',
           title_suffix, loc_descriptor, sink.loc, sink.name),
@@ -127,7 +127,7 @@ local function probe(ctx, sink)
       local probe_url = req:url()
       local loc_descriptor = ctx.payloads.loc_descriptor(sink.loc)
       return {
-        severity = ctx.severity.high,
+        severity = severity.high,
         url      = probe_url,
         title    = string.format('Server-Side Template Injection (error-based) in %s %s "%s"',
           loc_descriptor, sink.loc, sink.name),
@@ -248,7 +248,7 @@ function check.drain(ctx)
         hit.method, hit.source_addr, hit.user_agent or "", engine)
       local loc_descriptor = ctx.payloads.loc_descriptor(loc)
       findings[#findings + 1] = {
-        severity = ctx.severity.critical,
+        severity = severity.critical,
         target   = target,
         url      = target,
         title    = string.format('Server-Side Template Injection (OOB-confirmed, %s engine) in %s %s "%s"',

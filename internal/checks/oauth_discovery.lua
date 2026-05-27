@@ -14,9 +14,9 @@
 
 local check = {
   name  = "oauth-discovery",
-  level = "passive",
-  scope = "host",
-  tier  = "passive",
+  level = levels.passive,
+  scope = scopes.host,
+  tier  = tiers.passive,
 }
 
 -- Cap on the inline snippet. The full body lives in the Exchange field.
@@ -115,7 +115,7 @@ end
 
 local function build_evidence(ctx, facts)
   return ctx.evidence.build {
-    method  = "GET",
+    method  = methods.get,
     url     = facts.probe_url,
     status  = facts.status,
     body    = snippet_json(facts.body),
@@ -124,7 +124,7 @@ end
 
 local function finding_alg_none(ctx, facts)
   return {
-    severity = ctx.severity.critical,
+    severity = severity.critical,
     target   = facts.probe_url,
     url      = facts.probe_url,
     title    = "OAuth/OIDC discovery advertises alg=none for id_token",
@@ -143,7 +143,7 @@ local function finding_alg_none(ctx, facts)
     evidence    = build_evidence(ctx, facts),
     dedupe_key  = ctx.dedupe.key {
       check  = check.name,
-      scope  = "host",
+      scope  = scopes.host,
       target = facts.probe_url,
       parts  = { "alg-none" },
     },
@@ -152,7 +152,7 @@ end
 
 local function finding_symmetric_alg(ctx, facts, sym_algs)
   return {
-    severity = ctx.severity.medium,
+    severity = severity.medium,
     target   = facts.probe_url,
     url      = facts.probe_url,
     title    = "OAuth/OIDC discovery advertises symmetric id_token signing",
@@ -172,7 +172,7 @@ local function finding_symmetric_alg(ctx, facts, sym_algs)
     evidence    = build_evidence(ctx, facts),
     dedupe_key  = ctx.dedupe.key {
       check  = check.name,
-      scope  = "host",
+      scope  = scopes.host,
       target = facts.probe_url,
       parts  = { "symmetric-alg" },
     },
@@ -181,7 +181,7 @@ end
 
 local function finding_token_endpoint_auth_none(ctx, facts)
   return {
-    severity = ctx.severity.high,
+    severity = severity.high,
     target   = facts.probe_url,
     url      = facts.probe_url,
     title    = "OAuth/OIDC token endpoint accepts only unauthenticated clients",
@@ -200,7 +200,7 @@ local function finding_token_endpoint_auth_none(ctx, facts)
     evidence    = build_evidence(ctx, facts),
     dedupe_key  = ctx.dedupe.key {
       check  = check.name,
-      scope  = "host",
+      scope  = scopes.host,
       target = facts.probe_url,
       parts  = { "token-auth-none" },
     },
@@ -209,7 +209,7 @@ end
 
 local function finding_pkce_weak(ctx, facts, weakness)
   return {
-    severity = ctx.severity.medium,
+    severity = severity.medium,
     target   = facts.probe_url,
     url      = facts.probe_url,
     title    = "OAuth/OIDC discovery advertises weak or absent PKCE support",
@@ -227,7 +227,7 @@ local function finding_pkce_weak(ctx, facts, weakness)
     evidence    = build_evidence(ctx, facts),
     dedupe_key  = ctx.dedupe.key {
       check  = check.name,
-      scope  = "host",
+      scope  = scopes.host,
       target = facts.probe_url,
       parts  = { "pkce-weak" },
     },
@@ -236,7 +236,7 @@ end
 
 local function finding_implicit_flow(ctx, facts, types)
   return {
-    severity = ctx.severity.low,
+    severity = severity.low,
     target   = facts.probe_url,
     url      = facts.probe_url,
     title    = "OAuth/OIDC discovery advertises deprecated implicit flow",
@@ -256,7 +256,7 @@ local function finding_implicit_flow(ctx, facts, types)
     evidence    = build_evidence(ctx, facts),
     dedupe_key  = ctx.dedupe.key {
       check  = check.name,
-      scope  = "host",
+      scope  = scopes.host,
       target = facts.probe_url,
       parts  = { "implicit-flow" },
     },
@@ -265,7 +265,7 @@ end
 
 local function finding_plain_http_endpoint(ctx, facts, endpoints)
   return {
-    severity = ctx.severity.high,
+    severity = severity.high,
     target   = facts.probe_url,
     url      = facts.probe_url,
     title    = "OAuth/OIDC discovery advertises endpoints over plain HTTP",
@@ -283,7 +283,7 @@ local function finding_plain_http_endpoint(ctx, facts, endpoints)
     evidence    = build_evidence(ctx, facts),
     dedupe_key  = ctx.dedupe.key {
       check  = check.name,
-      scope  = "host",
+      scope  = scopes.host,
       target = facts.probe_url,
       parts  = { "plain-http" },
     },

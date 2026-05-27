@@ -10,17 +10,17 @@
 
 local check = {
   name        = "sqli-error",
-  level       = "default",
-  scope       = "param",
+  level       = levels.default,
+  scope       = scopes.param,
   cwe         = "CWE-89",
   owasp       = "A03:2021 Injection",
   remediation = "Use parameterized queries / prepared statements so user input is passed as a value, never "
                 .. "concatenated into SQL text. Disable verbose database error reporting in production responses regardless - "
                 .. "leaked error traces accelerate exploitation even when the underlying bug is patched.",
-  consumes    = {"page", "param"},
+  consumes    = { kinds.page, kinds.param },
 }
 
-local BODY_CAP = 32 * 1024
+local BODY_CAP = body_caps.passive
 
 local function new_canary()
   local hex = "0123456789abcdef"
@@ -62,7 +62,7 @@ local function probe(ctx, sink)
     if #new_hits > 0 then
       local probe_url = req:url()
       return {
-        severity = ctx.severity.high,
+        severity = severity.high,
         url      = probe_url,
         title    = string.format('SQL injection (error-based) in %s parameter "%s"', sink.loc, sink.name),
         detail   = string.format(

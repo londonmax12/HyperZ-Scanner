@@ -11,18 +11,18 @@
 
 local check = {
   name        = "crlf-injection",
-  level       = "default",
-  scope       = "param",
+  level       = levels.default,
+  scope       = scopes.param,
   cwe         = "CWE-113",
   owasp       = "A03:2021 Injection",
   remediation = "Reject or strip CR (\\r) and LF (\\n) bytes from any value that flows into a response header (Location, Set-Cookie, custom headers). "
                 .. "Prefer the framework's typed setters that perform this validation automatically rather than concatenating raw strings into the header stream. "
                 .. "At the edge, configure the reverse proxy / WAF to drop responses whose header section contains unexpected line terminators.",
-  consumes    = {"page", "param"},
+  consumes    = { kinds.page, kinds.param },
 }
 
 local CANARY_HEADER = "X-Hyperz-CRLF"
-local BODY_CAP      = 4 * 1024
+local BODY_CAP      = body_caps.small
 
 -- Full CRLF first (textbook), then LF-only and CR-only to catch
 -- filters that strip one byte but not the other; aggressive scans add
@@ -79,7 +79,7 @@ local function probe(ctx, sink, sep)
 
   local probe_url = req:url()
   return {
-    severity = ctx.severity.high,
+    severity = severity.high,
     url      = probe_url,
     title    = string.format('CRLF header injection via %s "%s"', sink.loc, sink.name),
     detail   = string.format(
@@ -111,7 +111,7 @@ function check.run(ctx)
   local seen = {}
   local first_err
   for _, sink in ipairs(sinks) do
-    if sink.loc == ctx.locs.query or sink.loc == ctx.locs.form then
+    if sink.loc == locs.query or sink.loc == locs.form then
       if ctx.scope:allows(sink.url) then
         local found
         local probe_err

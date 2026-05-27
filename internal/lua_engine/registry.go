@@ -68,11 +68,13 @@ const staticHelpersKey = "__hyperz_static"
 // API is exposed) but we still re-share the same instance across
 // every Run since gopher-lua tables are not subject to GC pressure
 // during a single VM's lifetime.
+//
+// Pure-constant vocabularies (severity, scopes, levels, locs, cms,
+// methods, ...) are NOT here - they live in Lua globals installed by
+// installConstGlobals so meta-table fields (applies_to, patched_in,
+// tier, level, scope, consumes) can reference them at module-load
+// time, before any ctx exists.
 type staticHelpers struct {
-	severity  *lua.LTable
-	scopes    *lua.LTable
-	levels    *lua.LTable
-	locs      *lua.LTable
 	evidence  *lua.LTable
 	dedupe    *lua.LTable
 	url       *lua.LTable

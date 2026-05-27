@@ -6,9 +6,9 @@
 
 local check = {
   name  = "js-libs-known-vuln",
-  level = "passive",
-  scope = "host",
-  tier  = "fingerprint",
+  level = levels.passive,
+  scope = scopes.host,
+  tier  = tiers.fingerprint,
 }
 
 function check.run(ctx)
@@ -26,7 +26,7 @@ function check.run(ctx)
   if #hits == 0 then return nil end
 
   local evidence = ctx.evidence.build {
-    method  = "GET",
+    method  = methods.get,
     url     = ctx.page.url,
     status  = snap.status,
     headers = snap.headers,
@@ -37,7 +37,7 @@ function check.run(ctx)
     if #h.vulnerabilities == 0 then
       -- Library detected but no known vulns at this version - info.
       findings[#findings + 1] = {
-        severity    = ctx.severity.info,
+        severity    = severity.info,
         title       = "detected JavaScript library: " .. h.name,
         detail      = string.format(
           "script analysis detected %s version %s; no known vulnerabilities for this version",
@@ -63,7 +63,7 @@ function check.run(ctx)
           h.name, h.version, table.concat(h.vulnerabilities, ", "))
       end
       findings[#findings + 1] = {
-        severity    = ctx.severity.medium,
+        severity    = severity.medium,
         title       = string.format("%s (version %s) detected with known vulnerabilities", h.name, h.version),
         detail      = detail,
         cwe         = "CWE-1104",

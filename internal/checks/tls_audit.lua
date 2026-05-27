@@ -12,10 +12,10 @@
 
 local check = {
   name  = "tls-audit",
-  level = "passive",
-  scope = "host",
+  level = levels.passive,
+  scope = scopes.host,
   owasp = "A02:2021 Cryptographic Failures",
-  tier  = "fingerprint",
+  tier  = tiers.fingerprint,
 }
 
 local function version_finding(ctx, target, version_name)
@@ -31,7 +31,7 @@ local function version_finding(ctx, target, version_name)
   return {
     target      = target,
     url         = target,
-    severity    = ctx.severity[sev],
+    severity    = severity[sev],
     title       = "obsolete TLS version negotiated: " .. version_name,
     detail      = "server negotiated " .. version_name .. "; modern clients require TLS 1.2 or later",
     cwe         = "CWE-327",
@@ -61,7 +61,7 @@ local function cipher_finding(ctx, target, state)
   return {
     target      = target,
     url         = target,
-    severity    = ctx.severity[cipher_severity(name)],
+    severity    = severity[cipher_severity(name)],
     title       = "weak TLS cipher suite negotiated: " .. name,
     detail      = "server selected " .. name .. "; this suite is considered insecure (no forward secrecy, RC4/3DES, CBC, or similar weakness)",
     cwe         = "CWE-327",
@@ -85,7 +85,7 @@ local function expiry_findings(ctx, target, leaf)
     return {{
       target      = target,
       url         = target,
-      severity    = ctx.severity.high,
+      severity    = severity.high,
       title       = "TLS certificate has expired",
       detail      = string.format("leaf certificate (CN=%s) expired on %s", cn, ctx.tls.format_unix_rfc3339_utc(not_after)),
       cwe         = "CWE-298",
@@ -97,7 +97,7 @@ local function expiry_findings(ctx, target, leaf)
     return {{
       target      = target,
       url         = target,
-      severity    = ctx.severity.high,
+      severity    = severity.high,
       title       = "TLS certificate is not yet valid",
       detail      = string.format("leaf certificate (CN=%s) becomes valid at %s", cn, ctx.tls.format_unix_rfc3339_utc(not_before)),
       cwe         = "CWE-298",
@@ -118,7 +118,7 @@ local function expiry_findings(ctx, target, leaf)
   return {{
     target      = target,
     url         = target,
-    severity    = ctx.severity[sev],
+    severity    = severity[sev],
     title       = string.format("TLS certificate expires in %d days", days),
     detail      = string.format("leaf certificate (CN=%s) expires on %s - within %s", cn, ctx.tls.format_unix_rfc3339_utc(not_after), window),
     cwe         = "CWE-298",
@@ -144,7 +144,7 @@ local function intermediate_expiry_findings(ctx, target, intermediates)
       out[#out + 1] = {
         target      = target,
         url         = target,
-        severity    = ctx.severity.high,
+        severity    = severity.high,
         title       = "TLS chain " .. role .. " certificate has expired",
         detail      = string.format("%s certificate (CN=%s) expired on %s", role, cn, ctx.tls.format_unix_rfc3339_utc(not_after)),
         cwe         = "CWE-298",
@@ -155,7 +155,7 @@ local function intermediate_expiry_findings(ctx, target, intermediates)
       out[#out + 1] = {
         target      = target,
         url         = target,
-        severity    = ctx.severity.high,
+        severity    = severity.high,
         title       = "TLS chain " .. role .. " certificate is not yet valid",
         detail      = string.format("%s certificate (CN=%s) becomes valid at %s", role, cn, ctx.tls.format_unix_rfc3339_utc(not_before)),
         cwe         = "CWE-298",
@@ -175,7 +175,7 @@ local function intermediate_expiry_findings(ctx, target, intermediates)
         out[#out + 1] = {
           target      = target,
           url         = target,
-          severity    = ctx.severity[sev],
+          severity    = severity[sev],
           title       = string.format("TLS chain %s expires in %d days", role, days),
           detail      = string.format("%s certificate (CN=%s) expires on %s - within %s", role, cn, ctx.tls.format_unix_rfc3339_utc(not_after), window),
           cwe         = "CWE-298",
@@ -193,7 +193,7 @@ local function ocsp_finding(ctx, target, state)
   return {
     target      = target,
     url         = target,
-    severity    = ctx.severity.low,
+    severity    = severity.low,
     title       = "TLS handshake did not include a stapled OCSP response",
     detail      = "the server returned no OCSP response in the handshake; clients must perform their own revocation checks (or skip them entirely)",
     cwe         = "CWE-299",
@@ -208,7 +208,7 @@ local function sct_finding(ctx, target, leaf, state)
   return {
     target      = target,
     url         = target,
-    severity    = ctx.severity.low,
+    severity    = severity.low,
     title       = "TLS leaf certificate carries no Signed Certificate Timestamps",
     detail      = "the handshake exposed no SCT extension and the leaf certificate embeds none; Certificate-Transparency-enforcing clients may reject this certificate",
     cwe         = "CWE-295",
@@ -233,7 +233,7 @@ local function hostname_finding(ctx, target, host, leaf)
   return {
     target      = target,
     url         = target,
-    severity    = ctx.severity.high,
+    severity    = severity.high,
     title       = "TLS certificate hostname mismatch",
     detail      = detail,
     cwe         = "CWE-297",
@@ -275,7 +275,7 @@ function check.run(ctx)
     findings[#findings + 1] = {
       target      = target,
       url         = target,
-      severity    = ctx.severity.medium,
+      severity    = severity.medium,
       title       = "TLS handshake completed without a server certificate",
       detail      = addr .. " presented no peer certificate",
       cwe         = "CWE-295",

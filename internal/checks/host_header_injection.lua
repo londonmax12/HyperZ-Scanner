@@ -11,19 +11,19 @@
 
 local check = {
   name        = "host-header-injection",
-  level       = "default",
-  scope       = "host",
+  level       = levels.default,
+  scope       = scopes.host,
   cwe         = "CWE-74",
   owasp       = "A06:2021 Vulnerable and Outdated Components",
   remediation = "Whitelist the allowed Host header values and validate incoming Host headers against this list. "
                 .. "Use absolute URLs from configuration (not derived from the Host header) for sensitive operations like password resets. "
                 .. "Implement cache-busting strategies per Host header variant, or use Host-independent cache keys. "
                 .. "Use HTTP/2 or enforce Host header validation at the proxy layer.",
-  tier        = "active",
+  tier        = tiers.active,
 }
 
 local CANARY    = "evil.example"
-local BODY_CAP  = 8 * 1024
+local BODY_CAP  = body_caps.small
 
 function check.run(ctx)
   local u, perr = ctx.url.parse(ctx.page.url)
@@ -36,7 +36,7 @@ function check.run(ctx)
   end
 
   local req, nerr = ctx.client:new_request {
-    method  = "GET",
+    method  = methods.get,
     url     = ctx.page.url,
     host    = CANARY,
     headers = { Host = CANARY },
@@ -66,7 +66,7 @@ function check.run(ctx)
   end
 
   return {{
-    severity = ctx.severity.high,
+    severity = severity.high,
     title    = "Host header reflected in response",
     detail   = string.format(
       "The Host header is reflected unsafely in the response body. "

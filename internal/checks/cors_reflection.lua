@@ -18,17 +18,17 @@
 
 local check = {
   name        = "cors-reflection",
-  level       = "default",
-  scope       = "host",
+  level       = levels.default,
+  scope       = scopes.host,
   cwe         = "CWE-942",
   owasp       = "A05:2021 Security Misconfiguration",
   remediation = "Validate the request Origin against a hardcoded allowlist before echoing it. If credentialed cross-origin access is not required, drop Access-Control-Allow-Credentials. Never return Access-Control-Allow-Origin: <whatever the client sent>.",
-  tier        = "active",
+  tier        = tiers.active,
 }
 
 local CANARY_HOST = "hyperz-canary.invalid"
 local CANARY      = "https://" .. CANARY_HOST
-local BODY_CAP    = 4 * 1024
+local BODY_CAP    = body_caps.small
 
 local function trim(s) return (s:gsub("^%s+", ""):gsub("%s+$", "")) end
 
@@ -70,7 +70,7 @@ function check.run(ctx)
   local first_err
   for _, spec in ipairs(probe_specs(ctx, u.host)) do
     local req, nerr = ctx.client:new_request {
-      method  = "GET",
+      method  = methods.get,
       url     = ctx.page.url,
       headers = { Origin = spec.origin },
     }
@@ -130,7 +130,7 @@ function check.run(ctx)
 
   local first = hits[1]
   return {{
-    severity = ctx.severity[sev],
+    severity = severity[sev],
     title    = "CORS reflects attacker-controlled Origin (" .. table.concat(techniques, ", ") .. ")",
     detail   = string.format(
       "Confirmed by sending crafted Origin headers against %s. The server echoed each probe Origin into Access-Control-Allow-Origin, so a page hosted on any attacker-controlled origin can issue cross-origin reads against this host.\n%s",

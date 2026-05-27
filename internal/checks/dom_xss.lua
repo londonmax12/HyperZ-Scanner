@@ -18,8 +18,8 @@
 
 local check = {
   name        = "dom-xss",
-  level       = "default",
-  scope       = "param",
+  level       = levels.default,
+  scope       = scopes.param,
   cwe         = "CWE-79",
   owasp       = "A03:2021 Injection",
   remediation = "Treat DOM sources (location.*, document.referrer, document.cookie, postMessage "
@@ -27,7 +27,7 @@ local check = {
               .. "setTimeout/setInterval with a string argument, or as a javascript: URI. Use textContent "
               .. "or setAttribute; when HTML is unavoidable, sanitize through a vetted library (DOMPurify) "
               .. "before injection.",
-  consumes    = {"page", "param"},
+  consumes    = { kinds.page, kinds.param },
 }
 
 -- Long enough for typical event-loop work (DOMContentLoaded handlers,
@@ -89,7 +89,7 @@ local function build_finding(ctx, target, probe_url, source, param, token, paylo
   return {
     target   = target,
     url      = probe_url,
-    severity = ctx.severity.high,
+    severity = severity.high,
     title    = title,
     detail   = string.format(
       "Client-side JavaScript read the payload from %s and piped it into a %s. "
@@ -98,7 +98,7 @@ local function build_finding(ctx, target, probe_url, source, param, token, paylo
         .. "so the bug is in client code, not server output encoding.",
       source, sink_hint, token),
     evidence = ctx.evidence.build {
-      method      = "GET",
+      method      = methods.get,
       request_url = probe_url,
       snippet     = "headless-browser execution; payload: " .. payload,
     },
@@ -163,7 +163,7 @@ function check.run(ctx)
   -- the server. Reflected-xss already covers the reflected path; the
   -- DOM-only path is the unique value here.
   for _, sink in ipairs(ctx.sinks.for_page()) do
-    if sink.loc == ctx.locs.query then
+    if sink.loc == locs.query then
       for _, probe in ipairs(payloads) do
         local token = ctx.browser.new_canary()
         local payload = substitute(probe.payload, token)

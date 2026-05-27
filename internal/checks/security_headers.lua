@@ -7,10 +7,10 @@
 
 local check = {
   name  = "security-headers",
-  level = "passive",
-  scope = "host",
+  level = levels.passive,
+  scope = scopes.host,
   owasp = "A05:2021 Security Misconfiguration",
-  tier  = "passive",
+  tier  = tiers.passive,
 }
 
 local SEVERITY_RANK = { info = 0, low = 1, medium = 2, high = 3, critical = 4 }
@@ -97,13 +97,13 @@ function check.run(ctx)
   end
 
   return {{
-    severity = ctx.severity[max_sev],
+    severity = severity[max_sev],
     title    = title,
     detail   = "response from " .. ctx.page.url .. " did not include the following security headers",
     details  = details,
     cwe      = table.concat(cwes, ", "),
     evidence = ctx.evidence.build {
-      method  = "GET",
+      method  = methods.get,
       url     = ctx.page.url,
       status  = snap.status,
       headers = snap.headers,

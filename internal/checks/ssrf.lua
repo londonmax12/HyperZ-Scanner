@@ -19,14 +19,14 @@
 
 local check = {
   name        = "ssrf",
-  level       = "default",
-  scope       = "param",
+  level       = levels.default,
+  scope       = scopes.param,
   cwe         = "CWE-918",
   owasp       = "A10:2021 Server-Side Request Forgery (SSRF)",
   remediation = "Validate and restrict the URL parameter to a strict allowlist of domains/hosts. "
                 .. "Disable access to private/internal IP ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, ::1). "
                 .. "Use a URL parsing library that properly validates scheme and host. Never fetch arbitrary user-supplied URLs.",
-  consumes    = {"page", "param"},
+  consumes    = { kinds.page, kinds.param },
 }
 
 local function probe_inband(ctx, target, sink)
@@ -42,7 +42,7 @@ local function probe_inband(ctx, target, sink)
 
   local probe_url = req:url()
   return {
-    severity = ctx.severity.high,
+    severity = severity.high,
     target   = target,
     url      = probe_url,
     title    = string.format("Server-Side Request Forgery via %s ?%s=", sink.loc, sink.name),
@@ -142,7 +142,7 @@ function check.drain(ctx)
       local method = extra.method or ""
       local hit = hits[1]
       findings[#findings + 1] = {
-        severity = ctx.severity.critical,
+        severity = severity.critical,
         target   = target,
         url      = target,
         title    = string.format("Server-Side Request Forgery (OOB-confirmed) via %s %s", loc, sink_name),

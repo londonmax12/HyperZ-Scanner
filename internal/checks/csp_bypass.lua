@@ -22,8 +22,8 @@
 
 local check = {
   name  = "csp-bypass",
-  level = "default",
-  scope = "host",
+  level = levels.default,
+  scope = scopes.host,
   owasp = "A05:2021 Security Misconfiguration",
 }
 
@@ -102,7 +102,7 @@ function probe_nonce_reuse(ctx, dirs)
   if err then return nil, err end
 
   local req, nerr = ctx.client:new_request {
-    method  = "GET",
+    method  = methods.get,
     url     = probe_url,
     headers = {
       ["Cache-Control"] = "no-cache",
@@ -142,14 +142,14 @@ function probe_nonce_reuse(ctx, dirs)
   return {
     target      = target,
     url         = target,
-    severity    = ctx.severity.high,
+    severity    = severity.high,
     title       = "CSP nonce reused across responses",
     detail      = detail,
     cwe         = "CWE-1004, CWE-330",
     owasp       = "A05:2021 Security Misconfiguration",
     remediation = "Generate a fresh, cryptographically random nonce per response (e.g. 16 bytes from a CSPRNG, base64url-encoded) and inject the same value into both the CSP header and every legitimate <script> / <style> tag in the body. Never derive the nonce from a static seed, a session ID, or a deployment-time constant.",
     evidence    = ctx.evidence.build {
-      method  = "GET",
+      method  = methods.get,
       url     = probe_url,
       status  = resp:status(),
       headers = resp:headers(),
@@ -180,7 +180,7 @@ function probe_jsonp_whitelist(ctx, dirs)
     local matched, ok = ctx.body.csp_script_src_allows_host(script_srcs, probe.host)
     if ok then
       local probe_url = probe.url_tmpl .. canary
-      local req, nerr = ctx.client:new_request { method = "GET", url = probe_url }
+      local req, nerr = ctx.client:new_request { method = methods.get, url = probe_url }
       if nerr then
         if not first_err then first_err = nerr end
       else
@@ -195,7 +195,7 @@ function probe_jsonp_whitelist(ctx, dirs)
             findings[#findings + 1] = {
               target      = target,
               url         = target,
-              severity    = ctx.severity.high,
+              severity    = severity.high,
               title       = string.format("CSP script-src allowlists %s, which serves a JSONP bypass endpoint", probe.host),
               detail      = string.format(
                 "The Content-Security-Policy on %s includes a source that allows scripts from %s (matched: %q). That host serves a JSONP endpoint at %s which echoes the supplied callback parameter into executable JavaScript. An attacker with HTML injection on %s can load <script src=\"%sEVIL\"></script> where EVIL is an attacker-controlled function name; the script then executes EVIL(...) under this origin and the CSP allows it because the host is on the script-src allowlist. The probe confirmed the bypass by fetching the endpoint with callback=%s and observing a JavaScript response containing the callback as a function call.",
@@ -204,7 +204,7 @@ function probe_jsonp_whitelist(ctx, dirs)
               owasp       = "A05:2021 Security Misconfiguration",
               remediation = string.format("Drop %s from script-src, or - if it is genuinely required - restrict it to a specific path prefix that excludes the JSONP endpoint (browsers honour path-bounded sources). Better: switch to a strict, nonce-based policy where third-party CDN hosts are not required at all. JSONP-on-allowlisted-CDN is one of the most heavily documented CSP bypass patterns; any CDN in a script-src deserves the same audit.", probe.host),
               evidence    = ctx.evidence.build {
-                method  = "GET",
+                method  = methods.get,
                 url     = probe_url,
                 status  = resp:status(),
                 headers = resp:headers(),
@@ -243,14 +243,14 @@ function probe_base_uri_hijack(ctx, snap, dirs)
   return {
     target      = target,
     url         = target,
-    severity    = ctx.severity.medium,
+    severity    = severity.medium,
     title       = "Base-URI hijack is exploitable on this page",
     detail      = detail,
     cwe         = "CWE-1021, CWE-79",
     owasp       = "A05:2021 Security Misconfiguration",
     remediation = "Add base-uri 'none' (or 'self') to the CSP. Once base-uri is constrained, an injected <base> tag cannot retarget relative URLs and the rest of the policy regains its grip on script loading.",
     evidence    = ctx.evidence.build {
-      method  = "GET",
+      method  = methods.get,
       url     = target,
       status  = snap.status,
       headers = snap.headers,
@@ -259,7 +259,7 @@ function probe_base_uri_hijack(ctx, snap, dirs)
     dedupe_parts = { "base-uri-hijack" },
     -- One per page, not per host: base-uri exploitability depends on
     -- the per-page set of relative script srcs.
-    dedupe_scope = "page",
+    dedupe_scope = scopes.page,
   }
 end
 

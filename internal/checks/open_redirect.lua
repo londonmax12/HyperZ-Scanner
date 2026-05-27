@@ -8,14 +8,14 @@
 
 local check = {
   name        = "open-redirect",
-  level       = "default",
-  scope       = "param",
+  level       = levels.default,
+  scope       = scopes.param,
   cwe         = "CWE-601",
   owasp       = "A01:2021 Broken Access Control",
   remediation = "Validate the redirect target against an allowlist of trusted hosts "
                 .. "(or restrict to same-origin paths). Never use unvalidated user input "
                 .. "as a Location value; map opaque tokens to known destinations instead.",
-  consumes    = {"page", "param"},
+  consumes    = { kinds.page, kinds.param },
 }
 
 -- RFC 2606 .example so the host is guaranteed unregistered. The
@@ -27,7 +27,7 @@ local CANARY_HOST = "evil.example"
 -- 32 KiB is large enough to cover the <head> + early <body> where
 -- soft-redirect scripts typically live, without exposing the check
 -- to a runaway response on a page that doesn't have one.
-local BODY_CAP = 32 * 1024
+local BODY_CAP = body_caps.passive
 
 -- Curated, not exhaustive: every additional name is one more probe
 -- per scanned URL. The open-set of existing query params on the
@@ -137,7 +137,7 @@ function probe(ctx, sink)
     sink.name, sink.loc, sink_kind, sink.name, CANARY, sink_payload, probe_url)
 
   return {
-    severity = ctx.severity.high,
+    severity = severity.high,
     url      = probe_url,
     title    = string.format("Open redirect via %s ?%s=", sink.loc, sink.name),
     detail   = detail,

@@ -27,8 +27,8 @@
 
 local check = {
   name        = "xxe",
-  level       = "default",
-  scope       = "page",
+  level       = levels.default,
+  scope       = scopes.page,
   cwe         = "CWE-611",
   owasp       = "A05:2021 Security Misconfiguration",
   remediation = "Disable external entity and DTD processing in the XML parser. "
@@ -37,10 +37,10 @@ local check = {
                 .. "For PHP libxml, call libxml_disable_entity_loader(true) (or use parsers with externals off by default). "
                 .. "For Python lxml, parse with resolve_entities=False and no_network=True. "
                 .. "Prefer JSON over XML where the protocol permits.",
-  tier        = "active",
+  tier        = tiers.active,
 }
 
-local BODY_CAP = 32 * 1024
+local BODY_CAP = body_caps.passive
 
 local XXE_VARIANT_SYSTEM         = "oob-system"
 local XXE_VARIANT_DTD_LOADER     = "oob-dtd-loader"
@@ -55,7 +55,7 @@ local function send(ctx, cand, doc)
     url    = cand.url,
     body   = doc,
     headers = {
-      ["Content-Type"] = "application/xml",
+      ["Content-Type"] = content_types.xml,
       ["Accept"]       = "application/xml, text/xml, */*",
     },
   }
@@ -153,7 +153,7 @@ local function probe(ctx, target, cand)
     if #new_hits > 0 then
       local probe_url = req:url()
       return {
-        severity = ctx.severity.critical,
+        severity = severity.critical,
         target   = target,
         url      = probe_url,
         title    = string.format("XML External Entity (file disclosure) in %s %s", cand.method, probe_url),
@@ -182,7 +182,7 @@ local function probe(ctx, target, cand)
     if #new_hits > 0 then
       local probe_url = req:url()
       return {
-        severity = ctx.severity.high,
+        severity = severity.high,
         target   = target,
         url      = probe_url,
         title    = string.format("XML External Entity (error-based) in %s %s", cand.method, probe_url),
@@ -274,7 +274,7 @@ function check.run(ctx)
       elseif f ~= nil then
         local key = ctx.dedupe.key {
           check  = check.name,
-          scope  = "page",
+          scope  = scopes.page,
           target = ctx.page.url,
           parts  = f.dedupe_parts,
         }
@@ -316,7 +316,7 @@ local function build_oob_finding_system(ctx, reg, hits)
   local endpoint_url = extra.url or ""
   local ua = hit.user_agent or ""
   return {
-    severity = ctx.severity.critical,
+    severity = severity.critical,
     target   = target,
     url      = endpoint_url,
     title    = string.format("XML External Entity (OOB-confirmed) in %s %s", method, endpoint_url),
@@ -364,7 +364,7 @@ local function build_oob_finding_dtd_exfil(ctx, reg, loader_hits, exfil_hits)
     end
     local exfil_url = "http://" .. ctx.oob:callback_host() .. "/" .. (extra.exfil_token or "")
     return {
-      severity = ctx.severity.critical,
+      severity = severity.critical,
       target   = target,
       url      = endpoint_url,
       title    = string.format("XML External Entity (OOB DTD exfiltration) in %s %s", method, endpoint_url),
@@ -391,7 +391,7 @@ local function build_oob_finding_dtd_exfil(ctx, reg, loader_hits, exfil_hits)
 
   local hit = loader_hits[1]
   return {
-    severity = ctx.severity.high,
+    severity = severity.high,
     target   = target,
     url      = endpoint_url,
     title    = string.format("XML External Entity (external DTD fetched) in %s %s", method, endpoint_url),

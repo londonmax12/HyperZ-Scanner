@@ -15,18 +15,18 @@
 
 local check = {
   name        = "cmd-injection-blind",
-  level       = "default",
-  scope       = "param",
+  level       = levels.default,
+  scope       = scopes.param,
   cwe         = "CWE-78",
   owasp       = "A03:2021 Injection",
   remediation = "Never pass user input to a shell. Use the language's exec API that takes an argv slice "
                 .. "(e.g. Go's exec.Command(name, args...), Python's subprocess with shell=False) so arguments are passed as "
                 .. "separate elements rather than concatenated into a shell-parsed string. When a shell is unavoidable, "
                 .. "strictly allowlist the permitted argument shape - blocklists of metacharacters are routinely bypassed.",
-  consumes    = {"page", "param"},
+  consumes    = { kinds.page, kinds.param },
 }
 
-local BODY_CAP = 4 * 1024
+local BODY_CAP = body_caps.small
 
 local function new_canary()
   local hex = "0123456789abcdef"
@@ -66,7 +66,7 @@ local function probe_inband(ctx, sink)
             if matched_error ~= "" then
               local probe_url = req:url()
               return {
-                severity = ctx.severity.critical,
+                severity = severity.critical,
                 url      = probe_url,
                 title    = string.format('Blind OS command injection in %s parameter "%s"', sink.loc, sink.name),
                 detail   = string.format(
@@ -189,7 +189,7 @@ function check.drain(ctx)
             .. 'is vulnerable to blind RCE, with confirmed egress to attacker-controlled hosts.',
           sink_name, loc, payload, reg.http_url, hit.method, hit.source_addr, hit.user_agent or "", #hits)
         findings[#findings + 1] = {
-          severity = ctx.severity.critical,
+          severity = severity.critical,
           target   = target,
           url      = target,
           title    = string.format('Blind OS command injection (OOB-confirmed) in %s parameter "%s"', loc, sink_name),

@@ -11,18 +11,18 @@
 
 local check = {
   name        = "path-traversal",
-  level       = "default",
-  scope       = "param",
+  level       = levels.default,
+  scope       = scopes.param,
   cwe         = "CWE-22",
   owasp       = "A01:2021 Broken Access Control",
   remediation = "Resolve user-supplied paths against a fixed root and reject any result that escapes it "
                 .. "(filepath.Clean + prefix check, or chroot-equivalent containment). Never pass raw user input to "
                 .. "os.Open / fs.ReadFile - even after a regex filter, encoded variants (`..%2f`, `....//`) bypass naive "
                 .. "defenses. Prefer opaque IDs that map to allowlisted filenames server-side.",
-  consumes    = {"page", "param"},
+  consumes    = { kinds.page, kinds.param },
 }
 
-local BODY_CAP = 32 * 1024
+local BODY_CAP = body_caps.passive
 
 local function send(ctx, sink, wire)
   local req, mut_err = sink:mutate_request(wire)
@@ -55,7 +55,7 @@ local function probe(ctx, sink)
       if #new_hits > 0 then
         local probe_url = req:url()
         return {
-          severity = ctx.severity.high,
+          severity = severity.high,
           url      = probe_url,
           title    = string.format('Path traversal in %s parameter "%s"', sink.loc, sink.name),
           detail   = string.format(

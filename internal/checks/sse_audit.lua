@@ -17,8 +17,8 @@
 
 local check = {
   name        = "sse-audit",
-  level       = "default",
-  scope       = "page",
+  level       = levels.default,
+  scope       = scopes.page,
   cwe         = "CWE-942",
   owasp       = "A05:2021 Security Misconfiguration",
   remediation = "Validate the request Origin against a hardcoded allowlist before echoing it into "
@@ -26,7 +26,7 @@ local check = {
                 .. "keeping a foreign page from reading the stream via EventSource is server-side CORS. If "
                 .. "the stream MUST be public, remove credentials from the channel (sessionless tokens in the "
                 .. "URL or first message) so a permissive ACAO does not leak authenticated content.",
-  tier        = "active",
+  tier        = tiers.active,
 }
 
 local SSE_PROBE_BODY_CAP = 4 * 1024
@@ -169,7 +169,7 @@ end
 -- and surface as nil + error string up to check.run.
 local function probe_endpoint(ctx, target)
   local req, mut_err = ctx.client:new_request {
-    method = "GET",
+    method = methods.get,
     url    = target,
     headers = {
       Accept          = "text/event-stream",
@@ -191,8 +191,8 @@ local function probe_endpoint(ctx, target)
   local acac_trimmed = acac_raw:gsub("^%s+", ""):gsub("%s+$", "")
   local acac = acac_trimmed:lower() == "true"
 
-  local severity, title, detail = classify_sse_cors(acao, acac, target)
-  if severity == "" then return nil end
+  local sev_key, title, detail = classify_sse_cors(acao, acac, target)
+  if sev_key == "" then return nil end
 
   local body, truncated, rerr = resp:read_body_capped(SSE_PROBE_BODY_CAP)
   if rerr then
@@ -200,7 +200,7 @@ local function probe_endpoint(ctx, target)
   end
 
   return {
-    severity = ctx.severity[severity],
+    severity = severity[sev_key],
     target   = target,
     url      = target,
     title    = title,

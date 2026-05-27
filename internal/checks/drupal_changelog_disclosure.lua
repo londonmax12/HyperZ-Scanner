@@ -20,16 +20,14 @@
 
 local check = {
   name        = "drupal-changelog-disclosure",
-  level       = "passive",
-  scope       = "host",
+  level       = levels.passive,
+  scope       = scopes.host,
   cwe         = "CWE-200",
   owasp       = "A05:2021 Security Misconfiguration",
   remediation = "Remove /CHANGELOG.txt from the document root, or deny it at the web server (nginx: location = /CHANGELOG.txt { deny all; }) or CDN. Drupal 8+ no longer ships the file by default; legacy Drupal 7 deployments should clean it up as part of hardening.",
-  tier        = "passive",
-  applies_to  = { cms = {"drupal"} },
+  tier        = tiers.passive,
+  applies_to  = { cms = { cms.drupal } },
 }
-
-local BODY_CAP = 4 * 1024
 
 -- match_version returns the version string the CHANGELOG.txt leading
 -- "Drupal x.y.z[, date]" line discloses, or "" when the body does
@@ -49,30 +47,24 @@ local function match_version(body)
 end
 
 function check.run(ctx)
-  local u, perr = ctx.url.parse(ctx.page.url)
-  if perr or u == nil or u.scheme == "" or u.host == "" then return nil end
-  local host_root = u.scheme .. "://" .. u.host
-  if not ctx.scope:allows(host_root) then return nil end
-  if not ctx.host.claim_once(host_root) then return nil end
+  local host_root, ok = ctx.host:claim_from_page()
+  if not ok then return nil end
 
   local probe_url = host_root .. "/CHANGELOG.txt"
-
-  local req, mut_err = ctx.client:new_request{ method = "GET", url = probe_url }
-  if mut_err then return nil, "drupal-changelog-disclosure: " .. mut_err end
-  local resp, do_err = ctx.client:do_no_follow(req)
-  if do_err then return nil, "drupal-changelog-disclosure: " .. do_err end
-
+  local resp, body, err = ctx.client:fetch{
+    method   = methods.get,
+    url      = probe_url,
+    body_cap = body_caps.small,
+  }
+  if err then return nil, err end
   if resp:status() ~= 200 then return nil end
-
-  local body, _, rerr = resp:read_body_capped(BODY_CAP)
-  if rerr then return nil, "drupal-changelog-disclosure: " .. rerr end
 
   local version = match_version(body)
   if version == "" then return nil end
 
   return {
     {
-      severity    = ctx.severity.low,
+      severity    = severity.low,
       target      = host_root,
       url         = probe_url,
       title       = "Drupal CHANGELOG.txt disclosed (version " .. version .. ")",
@@ -80,13 +72,12 @@ function check.run(ctx)
         "GET %s returned a Drupal core CHANGELOG file disclosing version %s. An attacker reading this file knows the exact build the site is running and can pick targeted exploits for it rather than fingerprinting through trial and error.",
         probe_url, version),
       evidence = ctx.evidence.build{
-        method  = "GET",
+        method  = methods.get,
         url     = probe_url,
         status  = resp:status(),
         headers = resp:headers(),
         body    = body,
       },
-      dedupe_parts = { "drupal-changelog-disclosure" },
     },
   }
 end

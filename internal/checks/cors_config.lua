@@ -14,11 +14,11 @@
 
 local check = {
   name  = "cors-config",
-  level = "passive",
-  scope = "host",
+  level = levels.passive,
+  scope = scopes.host,
   cwe   = "CWE-942",
   owasp = "A05:2021 Security Misconfiguration",
-  tier  = "passive",
+  tier  = tiers.passive,
 }
 
 local function trim(s) return (s:gsub("^%s+", ""):gsub("%s+$", "")) end
@@ -53,7 +53,7 @@ function check.run(ctx)
   local acac = string.lower(trim(snap.headers:get("Access-Control-Allow-Credentials"))) == "true"
 
   local evidence = ctx.evidence.build {
-    method  = "GET",
+    method  = methods.get,
     url     = ctx.page.url,
     status  = snap.status,
     headers = snap.headers,
@@ -64,7 +64,7 @@ function check.run(ctx)
     -- the spec-violating combination is what we flag.
     if not acac then return nil end
     return {{
-      severity    = ctx.severity.high,
+      severity    = severity.high,
       title       = "CORS allows any origin with credentials",
       detail      = string.format(
         "response from %s set Access-Control-Allow-Origin: * with Access-Control-Allow-Credentials: true. The CORS spec forbids this combination; browsers refuse it, but the configuration indicates the credentials contract is misunderstood and is often paired with a permissive handler that this passive scan did not reach.",
@@ -80,7 +80,7 @@ function check.run(ctx)
     -- pages, and certain redirect chains - the very contexts an
     -- attacker can engineer; trusting it is the canonical CWE-942.
     return {{
-      severity    = ctx.severity.medium,
+      severity    = severity.medium,
       title       = "CORS trusts the null origin",
       detail      = string.format(
         "response from %s set Access-Control-Allow-Origin: null. Sandboxed iframes, data: URIs, and file: contexts all present as the null origin, so any of them can issue cross-origin reads against this host%s.",
@@ -98,7 +98,7 @@ function check.run(ctx)
     return nil
   end
   return {{
-    severity    = ctx.severity.high,
+    severity    = severity.high,
     title       = "CORS trusts a foreign origin with credentials",
     detail      = string.format(
       "response from %s set Access-Control-Allow-Origin: %s with Access-Control-Allow-Credentials: true. This is the shape produced by servers that reflect the caller's Origin verbatim; if so, any attacker-controlled page can read authenticated responses from this host.",

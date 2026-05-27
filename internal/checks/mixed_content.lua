@@ -6,12 +6,12 @@
 
 local check = {
   name        = "mixed-content",
-  level       = "passive",
-  scope       = "host",
+  level       = levels.passive,
+  scope       = scopes.host,
   cwe         = "CWE-319",
   owasp       = "A02:2021 Cryptographic Failures",
   remediation = "Serve the referenced resource over HTTPS, host it locally on the same origin, or remove the reference.",
-  tier        = "passive",
+  tier        = tiers.passive,
 }
 
 -- Per tag: { attribute_carrying_the_url, is_active }. <a href> is
@@ -85,7 +85,7 @@ function check.run(ctx)
 
   local findings = {}
   local evidence = ctx.evidence.build {
-    method  = "GET",
+    method  = methods.get,
     url     = ctx.page.url,
     status  = snap.status,
     headers = snap.headers,
@@ -93,10 +93,10 @@ function check.run(ctx)
 
   for _, u in ipairs(urls) do
     local r = refs[u]
-    local severity, kind = "low", "passive"
-    if r.active then severity, kind = "high", "active" end
+    local sev_key, kind = "low", "passive"
+    if r.active then sev_key, kind = "high", "active" end
     findings[#findings + 1] = {
-      severity = ctx.severity[severity],
+      severity = severity[sev_key],
       title    = string.format("%s mixed content: <%s> loads %s", kind, r.tag, u),
       detail   = string.format("HTTPS page %s loads %s subresource over plaintext via <%s>: %s",
                                ctx.page.url, kind, r.tag, u),

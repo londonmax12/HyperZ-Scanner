@@ -7,14 +7,14 @@
 
 local check = {
   name        = "cross-origin-isolation",
-  level       = "passive",
-  scope       = "host",
+  level       = levels.passive,
+  scope       = scopes.host,
   cwe         = "CWE-693",
   owasp       = "A05:2021 Security Misconfiguration",
   remediation = "Aim for Cross-Origin-Opener-Policy: same-origin and Cross-Origin-Embedder-Policy: require-corp on every HTML document that should be cross-origin isolated. "
                 .. "Tag every cross-origin subresource (images, scripts, fonts, frames) with Cross-Origin-Resource-Policy: same-origin or cross-origin so require-corp does not block them. "
                 .. "During rollout, deploy Cross-Origin-Embedder-Policy-Report-Only first to inventory subresources that would break under require-corp, then switch to enforcement once the report stream is clean.",
-  tier        = "passive",
+  tier        = tiers.passive,
 }
 
 local COOP_VALID = {
@@ -152,12 +152,12 @@ function check.run(ctx)
     ctx.page.url)
 
   return {{
-    severity = ctx.severity[max_sev],
+    severity = severity[max_sev],
     title    = title,
     detail   = lead_in,
     details  = details,
     evidence = ctx.evidence.build {
-      method  = "GET",
+      method  = methods.get,
       url     = ctx.page.url,
       status  = snap.status,
       headers = snap.headers,

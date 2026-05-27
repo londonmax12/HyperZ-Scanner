@@ -5,15 +5,15 @@
 
 local check = {
   name        = "secrets-in-body",
-  level       = "passive",
-  scope       = "host",
+  level       = levels.passive,
+  scope       = scopes.host,
   cwe         = "CWE-200, CWE-798",
   owasp       = "A02:2021 Cryptographic Failures",
   remediation = "Rotate every leaked credential immediately - assume it is already public from the moment it was served. "
                 .. "Audit access logs for the affected key during the exposure window. "
                 .. "Remove the embedded value from the source that generated this response (HTML template, JS bundle, JSON serializer, error/debug handler) and replace it with a server-side lookup or a short-lived, scoped token issued per request. "
                 .. "For build-time leaks (keys baked into JS bundles), move the secret to an environment variable consumed only by the backend and front the third-party call with a same-origin proxy endpoint.",
-  tier        = "passive",
+  tier        = tiers.passive,
 }
 
 local SEVERITY_RANK = { info = 0, low = 1, medium = 2, high = 3, critical = 4 }
@@ -60,12 +60,12 @@ function check.run(ctx)
     ctx.page.url)
 
   return {{
-    severity = ctx.severity[max_sev],
+    severity = severity[max_sev],
     title    = title,
     detail   = lead_in,
     details  = details,
     evidence = ctx.evidence.build {
-      method  = "GET",
+      method  = methods.get,
       url     = ctx.page.url,
       status  = snap.status,
       headers = snap.headers,

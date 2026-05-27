@@ -23,8 +23,8 @@
 
 local check = {
   name        = "proto-pollution",
-  level       = "aggressive",
-  scope       = "param",
+  level       = levels.aggressive,
+  scope       = scopes.param,
   cwe         = "CWE-1321",
   owasp       = "A03:2021 Injection",
   remediation = "Reject or strip dangerous keys (`__proto__`, `constructor`, `prototype`) at the JSON / "
@@ -33,12 +33,12 @@ local check = {
                 .. "untrusted payloads; use schema-validated DTOs instead. As a defense in depth, freeze "
                 .. "`Object.prototype` at process start with `Object.freeze(Object.prototype)` so even a missed "
                 .. "sanitization step cannot mutate the shared prototype.",
-  tier     = "active",
-  consumes = {"page", "param"},
+  tier     = tiers.active,
+  consumes = { kinds.page, kinds.param },
   pollute = true,
 }
 
-local BODY_CAP = 32 * 1024
+local BODY_CAP = body_caps.passive
 local PROTO_JSON_SPACES = 7
 local PROTO_STATUS = 510
 local CLEANUP_TIMEOUT = 5
@@ -65,7 +65,7 @@ end
 -- rides on this request so the gadget hit cannot be confused with a
 -- reflection of the pollution probe.
 local function observe(ctx, target)
-  local req, err = ctx.client:new_request{ method = "GET", url = target }
+  local req, err = ctx.client:new_request{ method = methods.get, url = target }
   if err then return nil, err end
   local resp, derr = ctx.client["do"](ctx.client, req)
   if derr then return nil, derr end
@@ -190,27 +190,27 @@ end
 -- (request_userdata, nil) or (nil, err).
 local function build_request(ctx, sink, canary_key, canary_val, cleanup_mode)
   local method = sink.method:upper()
-  if method == "" then method = "POST" end
+  if method == "" then method = methods.post end
 
-  if sink.loc == ctx.locs.query then
+  if sink.loc == locs.query then
     local extra = build_bracket(canary_key, canary_val, cleanup_mode)
     local new_url = compose_query_url(ctx, sink.url, extra)
     if new_url == nil then return nil, "parse url failed" end
     return ctx.client:new_request{ method = method, url = new_url }
   end
 
-  if sink.loc == ctx.locs.form then
+  if sink.loc == locs.form then
     local body = build_bracket(canary_key, canary_val, cleanup_mode)
     local enc = ctx.url.encode_values(body)
     return ctx.client:new_request{
       method = method,
       url = sink.url,
       body = enc,
-      headers = { ["Content-Type"] = "application/x-www-form-urlencoded" },
+      headers = { ["Content-Type"] = content_types.form },
     }
   end
 
-  if sink.loc == ctx.locs.json then
+  if sink.loc == locs.json then
     local body = build_json_body(canary_key, canary_val, cleanup_mode)
     local enc, jerr = ctx.json.encode(body)
     if jerr then return nil, jerr end
@@ -218,7 +218,7 @@ local function build_request(ctx, sink, canary_key, canary_val, cleanup_mode)
       method = method,
       url = sink.url,
       body = enc,
-      headers = { ["Content-Type"] = "application/json" },
+      headers = { ["Content-Type"] = content_types.json },
     }
   end
 
@@ -269,7 +269,7 @@ local function probe(ctx, target, sink, base_obs)
   local pollute_status = 0
   if pollute_resp ~= nil then pollute_status = pollute_resp:status() end
   local finding = {
-    severity = ctx.severity.high,
+    severity = severity.high,
     target   = target,
     url      = probe_url,
     title    = string.format("Server-side prototype pollution via %s parameter %q", sink.loc, sink.name),
@@ -332,7 +332,7 @@ function check.run(ctx)
         if f ~= nil then
           local key = ctx.dedupe.key {
             check  = check.name,
-            scope  = "param",
+            scope  = scopes.param,
             target = ctx.page.url,
             parts  = f.dedupe_parts,
           }

@@ -9,14 +9,14 @@
 
 local check = {
   name        = "csp-weak",
-  level       = "passive",
-  scope       = "host",
+  level       = levels.passive,
+  scope       = scopes.host,
   cwe         = "CWE-1173, CWE-79",
   owasp       = "A05:2021 Security Misconfiguration",
   remediation = "Aim for a strict, nonce-based policy: default-src 'none'; script-src 'nonce-{random}' 'strict-dynamic'; style-src 'nonce-{random}'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'. "
                 .. "Drop 'unsafe-inline' and 'unsafe-eval' from script-src; refactor inline handlers and string-eval call sites instead of allowlisting them. "
                 .. "For incremental rollout, deploy the strict policy via Content-Security-Policy-Report-Only first, monitor violation reports, and switch to enforcement once clean.",
-  tier        = "passive",
+  tier        = tiers.passive,
 }
 
 local SEVERITY_RANK = { info = 0, low = 1, medium = 2, high = 3, critical = 4 }
@@ -61,12 +61,12 @@ function check.run(ctx)
     ctx.page.url)
 
   return {{
-    severity = ctx.severity[max_sev],
+    severity = severity[max_sev],
     title    = title,
     detail   = lead_in,
     details  = details,
     evidence = ctx.evidence.build {
-      method  = "GET",
+      method  = methods.get,
       url     = ctx.page.url,
       status  = snap.status,
       headers = snap.headers,

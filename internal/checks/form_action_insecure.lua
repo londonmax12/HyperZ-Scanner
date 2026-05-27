@@ -10,11 +10,11 @@
 
 local check = {
   name        = "form-action-insecure",
-  level       = "passive",
-  scope       = "page",
+  level       = levels.passive,
+  scope       = scopes.page,
   cwe         = "CWE-319",
   owasp       = "A02:2021 Cryptographic Failures",
-  tier        = "passive",
+  tier        = tiers.passive,
 }
 
 local function format_inputs(inputs)
@@ -91,7 +91,7 @@ function check.run(ctx)
   if #cands == 0 then return nil end
 
   local evidence = ctx.evidence.build {
-    method  = "GET",
+    method  = methods.get,
     url     = ctx.page.url,
     status  = snap.status,
     headers = snap.headers,
@@ -107,10 +107,10 @@ function check.run(ctx)
       local key = "action:" .. cand.resolved
       if not seen[key] then
         seen[key] = true
-        local severity = "high"
-        if cand.has_credential_field then severity = "critical" end
+        local sev_key = "high"
+        if cand.has_credential_field then sev_key = "critical" end
         findings[#findings + 1] = {
-          severity    = ctx.severity[severity],
+          severity    = severity[sev_key],
           title       = build_title(cand.has_credential_field, cand.override),
           detail      = build_detail(ctx.page.url, cand, cand.has_credential_field),
           remediation = build_remediation(cand.method),

@@ -6,11 +6,11 @@
 
 local check = {
   name  = "target-blank-noopener",
-  level = "passive",
-  scope = "page",
+  level = levels.passive,
+  scope = scopes.page,
   cwe   = "CWE-1022",
   owasp = "A05:2021 Security Misconfiguration",
-  tier  = "passive",
+  tier  = tiers.passive,
 }
 
 local INTERESTING_TAGS = { "base", "a", "area", "form" }
@@ -78,7 +78,7 @@ function check.run(ctx)
   local base_url = ctx.page.url
 
   local evidence = ctx.evidence.build {
-    method  = "GET",
+    method  = methods.get,
     url     = ctx.page.url,
     status  = snap.status,
     headers = snap.headers,
@@ -109,10 +109,10 @@ function check.run(ctx)
               if not seen[key] then
                 seen[key] = true
                 local cross_origin = string.lower(ru.hostname) ~= string.lower(page_url.hostname)
-                local severity = "low"
-                if cross_origin then severity = "medium" end
+                local sev_key = "low"
+                if cross_origin then sev_key = "medium" end
                 findings[#findings + 1] = {
-                  severity    = ctx.severity[severity],
+                  severity    = severity[sev_key],
                   title       = build_title(tag.tag, cross_origin),
                   detail      = build_detail(ctx.page.url, tag.tag, href, resolved, cross_origin),
                   remediation = build_remediation(tag.tag),

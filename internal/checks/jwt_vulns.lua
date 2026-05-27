@@ -16,10 +16,10 @@
 
 local check = {
   name           = "jwt-vulns",
-  level          = "aggressive",
-  scope          = "host",
+  level          = levels.aggressive,
+  scope          = scopes.host,
   budget_seconds = 180,
-  tier           = "active",
+  tier           = tiers.active,
   pollute        = true,
 }
 
@@ -30,7 +30,7 @@ local check = {
 local function compose_finding(ctx, fact)
   local p = fact.params or {}
   return {
-    severity = p.severity or ctx.severity.high,
+    severity = p.severity or severity.high,
     target   = fact.target,
     url      = fact.target,
     title    = p.title or "",
@@ -51,7 +51,7 @@ local function compose_finding(ctx, fact)
     -- prose.
     dedupe_key = p.dedupe_key or ctx.dedupe.key {
       check  = check.name,
-      scope  = "host",
+      scope  = scopes.host,
       target = fact.target,
       parts  = { fact.kind },
     },

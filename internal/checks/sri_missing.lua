@@ -5,15 +5,15 @@
 
 local check = {
   name        = "sri-missing",
-  level       = "passive",
-  scope       = "host",
+  level       = levels.passive,
+  scope       = scopes.host,
   cwe         = "CWE-345",
   owasp       = "A08:2021 Software and Data Integrity Failures",
   remediation = 'Add integrity="sha384-<base64-hash>" (and crossorigin="anonymous" for cross-origin loads) to the tag. '
                 .. "Most public CDNs (jsDelivr, unpkg, cdnjs) publish SRI hashes alongside their URLs; "
                 .. "for self-hosted assets generate one with `openssl dgst -sha384 -binary <file> | openssl base64 -A`. "
                 .. "Alternatively, host the file from the same origin so the integrity question collapses to TLS.",
-  tier        = "passive",
+  tier        = tiers.passive,
 }
 
 local LINK_RELS = {
@@ -47,7 +47,7 @@ function check.run(ctx)
   local findings = {}
   local seen = {}
   local evidence = ctx.evidence.build {
-    method  = "GET",
+    method  = methods.get,
     url     = ctx.page.url,
     status  = snap.status,
     headers = snap.headers,
@@ -86,10 +86,10 @@ function check.run(ctx)
               local key = "url:" .. resolved
               if not seen[key] then
                 seen[key] = true
-                local severity = "medium"
-                if tag.tag == "script" then severity = "high" end
+                local sev_key = "medium"
+                if tag.tag == "script" then sev_key = "high" end
                 findings[#findings + 1] = {
-                  severity = ctx.severity[severity],
+                  severity = severity[sev_key],
                   title    = string.format("cross-origin <%s> loaded without Subresource Integrity", tag.tag),
                   detail   = string.format(
                     "Page %s loads <%s> from %s without an integrity attribute. "

@@ -29,8 +29,8 @@
 
 local check = {
   name        = "stored-xss",
-  level       = "default",
-  scope       = "param",
+  level       = levels.default,
+  scope       = scopes.param,
   cwe         = "CWE-79",
   owasp       = "A03:2021 Injection",
   remediation = "Apply context-aware output encoding at the rendering boundary, not just at the storage one: "
@@ -38,13 +38,13 @@ local check = {
                 .. "and JavaScript-encode (or hand off via JSON) for values placed inside <script>. "
                 .. "Storing the raw user input is fine when every read path is guaranteed to escape - audit every template that renders this field.",
   budget_seconds = 90,
-  tier     = "active",
-  consumes = {"page", "param"},
+  tier     = tiers.active,
+  consumes = { kinds.page, kinds.param },
   phase = "two-phase",
   pollute = true,
 }
 
-local BODY_CAP = 256 * 1024
+local BODY_CAP = body_caps.corpus
 
 -- The per-context payload family. Three covers HTML text, double-
 -- quoted attribute, and double-quoted JS string - the three
@@ -174,13 +174,13 @@ function check.detect(ctx)
                 .. "Payload xss/%s round-tripped intact across the storage boundary - an attacker can plant script that fires for every visitor of the detect page.",
               plant.name, plant.loc, plant.plant_url, ctx.page.url, plant.payload_ctx, plant.payload_name)
             findings[#findings + 1] = {
-              severity     = ctx.severity.high,
+              severity     = severity.high,
               target       = plant.plant_url,
               url          = ctx.page.url,
               title        = title,
               detail       = detail,
               evidence     = ctx.evidence.build {
-                method  = "GET",
+                method  = methods.get,
                 url     = ctx.page.url,
                 status  = ctx.page.status,
                 snippet = snippet(ctx.page.body, plant.payload),
