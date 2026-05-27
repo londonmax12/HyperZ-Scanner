@@ -1,0 +1,18 @@
+# Scan profile for the vuln-drupal integration container.
+# See vuln-static/hyperz.yaml for the enable-vs-assertion contract
+# and the ${ORIGIN_HTTP} placeholder convention.
+#
+# Single seed is enough: drupal-changelog-disclosure is host-scoped
+# and claim_once-guarded, so the host-root visit alone fires the
+# probe against /CHANGELOG.txt. Crawl stays off to keep the run
+# focused on the one finding under assertion.
+mode: default
+crawl:
+  enabled: false
+
+url:
+  - "${ORIGIN_HTTP}/"
+
+checks:
+  enable:
+    - drupal-changelog-disclosure

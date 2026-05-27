@@ -141,6 +141,26 @@ var vulnSuites = []vulnCase{
 		},
 		notes: "wp-rest-user-enum (real WordPress install + author list)",
 	},
+	{
+		// Real Drupal 7 (Apache + MariaDB co-hosted, installed via
+		// drush 8.4.12 on first boot) so drupal-changelog-disclosure
+		// exercises the live /CHANGELOG.txt surface a real D7 install
+		// ships at docroot, the fingerprinter's Drupal detection
+		// against real Drupal HTML, and the applies_to dispatch path
+		// end-to-end. The startup wait keys off the install-complete
+		// marker emitted by init.sh; the default port-listen wait
+		// would race the drush site-install step. Bumped startupWait
+		// covers the apt-cached image's MariaDB bootstrap + drush
+		// install (~30s warm, ~3min cold) - same envelope as
+		// vuln-wordpress.
+		spec: targetSpec{
+			dir:         "vuln-drupal",
+			exposedPort: 80,
+			waitLog:     "[vuln-drupal] ready",
+			startupWait: 5 * time.Minute,
+		},
+		notes: "drupal-changelog-disclosure (real Drupal 7 install + /CHANGELOG.txt at docroot)",
+	},
 }
 
 // TestVuln drives every container in vulnSuites as a t.Run subtest

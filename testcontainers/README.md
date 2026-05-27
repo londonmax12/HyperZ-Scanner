@@ -48,6 +48,7 @@ scanner binary; only the integration suite sees it.
 | `vuln-smuggling`  | python:3.12 sockets  | request-smuggling (CL.TE: front-end CL-only proxy + back-end TE-only) |
 | `vuln-race`       | golang:1.22          | race-condition (TOCTOU balance deduct) |
 | `vuln-wordpress`  | wordpress:apache + mariadb | wp-rest-user-enum (real WP install; `/wp-json/wp/v2/users` open to anon) |
+| `vuln-drupal`     | drupal:7-apache + mariadb | drupal-changelog-disclosure (real D7 install; `/CHANGELOG.txt` at docroot) |
 
 `dom-xss` is not exercised here because it requires `--js` (Chrome /
 chromedp); add a Chromium-enabled runner if you need it in CI.
