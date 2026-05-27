@@ -13,16 +13,16 @@ import (
 
 // luaTwoPhase wraps a *LuaCheck whose module declares the two-phase
 // shape (a `plant` function plus the catalog meta `phase = "two-phase"`).
-// The scanner picks it up via type assertion to TwoPhaseCheck
-// and runs Plant during the crawl, DetectURLs once between phases,
-// and Detect on every re-fetched page in phase 2. The embedded
-// *LuaCheck continues to satisfy Check unconditionally, so a
-// two-phase module is still discoverable in `hyperz checks list`
+// The scanner picks it up via type assertion to TwoPhaseCheck and
+// runs Plant at the check's declared tier (TierActive by default)
+// then Detect at TierDeferred against a freshly-fetched body. The
+// embedded *LuaCheck continues to satisfy Check unconditionally, so
+// a two-phase module is still discoverable in `hyperz checks list`
 // alongside the single-phase catalog.
 //
 // Wrapping rather than always implementing TwoPhaseCheck on every
-// *LuaCheck is deliberate: the scanner re-fetches the visited URL
-// set during phase 2 the moment ANY two-phase check is registered.
+// *LuaCheck is deliberate: when ANY two-phase check is registered
+// the scanner walks every target to TierDeferred for a re-fetch.
 // Single-phase Lua checks must therefore not appear as
 // TwoPhaseCheck implementations, or every scan with the default
 // catalog would burn 2x the request count for no extra signal.
@@ -40,34 +40,12 @@ func (c *luaTwoPhase) Plant(ctx context.Context, client *httpclient.Client, sc *
 	return c.dispatchPhaseFn(ctx, client, sc, p, "plant")
 }
 
-// Detect dispatches to `check.detect(ctx)` in the Lua module on each
-// re-fetched page in phase 2. p carries the freshly-fetched response
-// body the bridge passes through ctx.page; the module reads
-// ctx.page.body and looks up canaries it planted earlier.
+// Detect dispatches to `check.detect(ctx)` in the Lua module on the
+// re-fetched body at TierDeferred. p carries the freshly-fetched
+// response body the bridge passes through ctx.page; the module
+// reads ctx.page.body and looks up canaries it planted earlier.
 func (c *luaTwoPhase) Detect(ctx context.Context, client *httpclient.Client, sc *scope.Scope, p page.Page) ([]Finding, error) {
 	return c.dispatchPhaseFn(ctx, client, sc, p, "detect")
-}
-
-// DetectURLs returns the same-origin URL set the Lua module asked
-// the scanner to re-fetch in phase 2. Read straight from the
-// AuxOrCreate-backed stored-xss state because the URL union is
-// computed by Plant calls that already populated it; running Lua
-// here would either require a runEnv without a page (gopher-lua
-// dislikes that) or another round-trip to extract a slice.
-//
-// Returns nil when no stored-xss state was ever instantiated on
-// this LuaCheck (the module never planted anything). The scanner
-// treats nil identically to an empty slice for phase-2 fanout.
-func (c *luaTwoPhase) DetectURLs() []string {
-	v, ok := c.LuaCheck.aux.Load(storedXSSStateKey{})
-	if !ok {
-		return nil
-	}
-	state, ok := v.(*StoredXSSState)
-	if !ok {
-		return nil
-	}
-	return state.DetectURLsSnapshot()
 }
 
 // dispatchPhaseFn is the shared body Plant / Detect use: borrow a VM,

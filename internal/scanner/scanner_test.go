@@ -16,6 +16,7 @@ import (
 	"github.com/londonmax12/hyperz/internal/httpclient"
 	"github.com/londonmax12/hyperz/internal/page"
 	"github.com/londonmax12/hyperz/internal/scope"
+	"github.com/londonmax12/hyperz/internal/target"
 )
 
 // stubCheck records every Run invocation and returns a configurable result.
@@ -466,10 +467,11 @@ func (o *observingCheck) Run(ctx context.Context, c *httpclient.Client, s *scope
 }
 
 // stubTwoPhase is the test double for the TwoPhaseCheck contract. It
-// records every Plant and Detect call, returns a configurable detect-URL
-// extension, and emits a fixed finding from Detect so the scanner test
-// can assert the two-phase fan-out actually drives Detect after phase 1
-// drains.
+// records every Plant and Detect call, emits a fixed finding from
+// Detect so the scanner test can assert the two-phase fan-out actually
+// drives Detect at TierDeferred, and surfaces extra URLs by pushing
+// them into the worklist via core.DiscoverAt at TierDeferred (the
+// post-fold replacement for the legacy DetectURLs interface method).
 type stubTwoPhase struct {
 	stubCheck
 	planted    atomic.Int64
@@ -485,13 +487,10 @@ func (s *stubTwoPhase) Plant(ctx context.Context, _ *httpclient.Client, _ *scope
 	s.mu.Lock()
 	s.plantedAt = append(s.plantedAt, p.URL)
 	s.mu.Unlock()
+	for _, u := range s.extraURLs {
+		core.DiscoverAt(ctx, target.Page(u, ""), core.TierDeferred)
+	}
 	return nil, nil
-}
-
-func (s *stubTwoPhase) DetectURLs() []string {
-	out := make([]string, len(s.extraURLs))
-	copy(out, s.extraURLs)
-	return out
 }
 
 func (s *stubTwoPhase) Detect(ctx context.Context, _ *httpclient.Client, _ *scope.Scope, p page.Page) ([]core.Finding, error) {

@@ -44,6 +44,7 @@ const (
 	TierPassive     = core.TierPassive
 	TierDiscovery   = core.TierDiscovery
 	TierActive      = core.TierActive
+	TierDeferred    = core.TierDeferred
 
 	DefaultBudget = core.DefaultBudget
 )

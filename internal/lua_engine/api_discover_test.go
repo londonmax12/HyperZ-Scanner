@@ -13,14 +13,18 @@ import (
 
 // recordingDiscoverer captures every target.Target the Lua bridge
 // hands through core.Discover so tests can assert what was emitted.
+// Captures the per-emission tier alongside the Target since the
+// post-fold Discoverer signature carries scheduling info too.
 type recordingDiscoverer struct {
-	mu       sync.Mutex
-	captured []target.Target
+	mu        sync.Mutex
+	captured  []target.Target
+	capturedT []core.Tier
 }
 
-func (r *recordingDiscoverer) sink(t target.Target) {
+func (r *recordingDiscoverer) sink(t target.Target, tier core.Tier) {
 	r.mu.Lock()
 	r.captured = append(r.captured, t)
+	r.capturedT = append(r.capturedT, tier)
 	r.mu.Unlock()
 }
 

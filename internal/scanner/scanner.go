@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"net/url"
-	"sort"
 	"sync"
 	"time"
 
@@ -195,15 +193,10 @@ func (s *Scanner) ScanAll(ctx context.Context, pages <-chan page.Page, out chan<
 	defer close(out)
 
 	twoPhase := s.twoPhaseChecks()
-
-	// visited retains the in-scope URLs phase 1 saw so phase 2 can re-fetch
-	// them. Only populated when at least one TwoPhaseCheck is registered so
-	// single-pass scans don't pay for the bookkeeping. The map is mutated
-	// from every scan worker so reads/writes are mutex-guarded.
-	var visitedMu sync.Mutex
-	var visited map[string]struct{}
-	if len(twoPhase) > 0 {
-		visited = map[string]struct{}{}
+	hasDeferred := len(twoPhase) > 0
+	lastTier := core.TierActive
+	if hasDeferred {
+		lastTier = core.TierDeferred
 	}
 
 	// The worklist mediates dispatch with quiescence-based termination
@@ -220,15 +213,29 @@ func (s *Scanner) ScanAll(ctx context.Context, pages <-chan page.Page, out chan<
 	// the producer signals SourceDone AND every accepted push at every
 	// tier has had a matching Done call.
 	//
+	// TierDeferred is the absorbing point for the legacy two-phase
+	// orchestration: when at least one TwoPhaseCheck is registered,
+	// every target advances past TierActive to TierDeferred where the
+	// worker re-fetches the page (Plant mutations may have rewritten
+	// the body) and dispatches each TwoPhaseCheck's Detect. The
+	// worklist's barrier guarantees every Plant has completed across
+	// every target before the first Detect begins. Same-origin URLs
+	// the plant responses surfaced ride a different path: Plant
+	// emits them via core.DiscoverAt(ctx, t, TierDeferred), which
+	// pushes the new target directly at TierDeferred so it skips
+	// the lower tiers (no fresh Plant run, just the Detect re-fetch).
+	//
 	// pageByKey bridges the worklist's target.Target payload back to
 	// the page.Page artifact the crawler captured AND caches the
 	// fetched-on-demand page for discovery-origin targets across tier
 	// advances. The producer stores the crawler page before pushing;
 	// the worker Loads (does NOT delete) on each tier dispatch so
-	// tiers 2-4 reuse the same page artifact without re-fetching. The
-	// worker deletes the entry only after the final tier (TierActive)
-	// drains or when a tier re-push is rejected (cancel / scope /
-	// budget) so dropped advances do not leak map slots.
+	// tiers 2..N reuse the same page artifact without re-fetching.
+	// TierDeferred is the exception: the worker evicts the cache on
+	// entry so materialize re-fetches a fresh body. The worker
+	// deletes the entry after the final tier drains or when a tier
+	// re-push is rejected (cancel / scope / budget) so dropped
+	// advances do not leak map slots.
 	queue := newWorklist(s.scope, 0)
 	queue.withHostBudget(s.hostBudget)
 	var pageByKey sync.Map
@@ -242,13 +249,6 @@ func (s *Scanner) ScanAll(ctx context.Context, pages <-chan page.Page, out chan<
 			case p, ok := <-pages:
 				if !ok {
 					return
-				}
-				if visited != nil {
-					if key := visitedKey(p.URL); key != "" && s.scopeAllowsURL(key) {
-						visitedMu.Lock()
-						visited[key] = struct{}{}
-						visitedMu.Unlock()
-					}
 				}
 				t := target.Page(p.URL, "crawler")
 				key := t.CanonicalKey()
@@ -270,15 +270,24 @@ func (s *Scanner) ScanAll(ctx context.Context, pages <-chan page.Page, out chan<
 				if !ok {
 					return
 				}
+				// Plant may have mutated the body; force a re-fetch
+				// for Detect by evicting the cache on TierDeferred
+				// entry. The worklist barrier guarantees TierActive
+				// has fully drained globally by the time this fires.
+				if tier == core.TierDeferred {
+					pageByKey.Delete(t.CanonicalKey())
+				}
 				p, materialized := s.materializePage(ctx, t, &pageByKey)
 				if materialized {
 					s.scanTier(ctx, t, tier, p, queue, out)
 				}
 				// Tier advance: re-push at tier+1 if more tiers remain
-				// AND materialization succeeded. A failed materialize
-				// means we cannot ever scan this target (fetch error,
-				// empty URL); no point cycling it through tiers 2-4.
-				if materialized && tier < core.TierActive {
+				// AND materialization succeeded. The "more tiers remain"
+				// cutoff depends on whether the scan has any
+				// TwoPhaseCheck registered - lastTier is TierDeferred
+				// when one is, TierActive otherwise, so a single-phase
+				// scan does not pay for an extra round-trip per target.
+				if materialized && tier < lastTier {
 					if !queue.Push(ctx, t, tier+1) {
 						pageByKey.Delete(t.CanonicalKey())
 					}
@@ -291,9 +300,6 @@ func (s *Scanner) ScanAll(ctx context.Context, pages <-chan page.Page, out chan<
 	}
 	wg.Wait()
 
-	if len(twoPhase) > 0 && ctx.Err() == nil {
-		s.runPhase2(ctx, twoPhase, visited, out)
-	}
 	if s.oobServer != nil && ctx.Err() == nil {
 		s.runOOBDrain(ctx, out)
 	}
@@ -364,158 +370,18 @@ func (s *Scanner) twoPhaseChecks() []core.TwoPhaseCheck {
 	return out
 }
 
-// runPhase2 fans out the detect pass after phase 1 has fully drained. It
-// computes the in-scope URL set (visited union DetectURLs from every
-// two-phase check), re-fetches each URL via the same client and rate
-// limiter phase 1 uses, then calls Detect on each (check, re-fetched
-// page) pair. Findings flow through the same `out` channel; the caller
-// (ScanAll) closes it after this returns.
-//
-// Robots is intentionally not re-checked here: a URL only enters the
-// visited set after the crawler already cleared it. Scope is mandatory
-// because DetectURLs can surface same-origin pages the operator never
-// authorized (an off-path link discovered in a plant response).
-func (s *Scanner) runPhase2(ctx context.Context, twoPhase []core.TwoPhaseCheck, visited map[string]struct{}, out chan<- core.Finding) {
-	detectSet := make(map[string]struct{}, len(visited))
-	for u := range visited {
-		detectSet[u] = struct{}{}
-	}
-	for _, c := range twoPhase {
-		for _, raw := range c.DetectURLs() {
-			key := visitedKey(raw)
-			if key == "" {
-				continue
-			}
-			if !s.scopeAllowsURL(key) {
-				continue
-			}
-			detectSet[key] = struct{}{}
-		}
-	}
-	if len(detectSet) == 0 {
-		return
-	}
-
-	urls := make([]string, 0, len(detectSet))
-	for u := range detectSet {
-		urls = append(urls, u)
-	}
-	// Stable order so re-runs against the same target produce a
-	// deterministic request stream - matters for evidence reproducibility
-	// and for tests that assert on phase-2 fetch order.
-	sort.Strings(urls)
-
-	// One semaphore caps phase-2 fetch parallelism. Reuses the same
-	// concurrency knob as phase 1 so an operator who set --concurrency=4
-	// isn't surprised by phase 2 fanning out wider.
-	sem := make(chan struct{}, s.concurrency)
-	var wg sync.WaitGroup
-	for _, u := range urls {
-		if ctx.Err() != nil {
-			break
-		}
-		select {
-		case sem <- struct{}{}:
-		case <-ctx.Done():
-		}
-		if ctx.Err() != nil {
-			break
-		}
-		wg.Add(1)
-		go func(u string) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			p, err := s.fetchPhase2(ctx, u)
-			if err != nil {
-				// ctx cancel mid-fetch is the expected drain path; don't
-				// flood onError with one entry per pending URL on a
-				// canceled scan.
-				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-					return
-				}
-				if s.onError != nil {
-					s.onError(u, "phase-2-fetch", err)
-				}
-				return
-			}
-			s.detectOne(ctx, twoPhase, p, out)
-		}(u)
-	}
-	wg.Wait()
-}
-
-// detectOne fingerprints the re-fetched p then dispatches Detect across
-// every applicable two-phase check. Mirrors scanOne's structure (per-check
-// budget, level/stack/reporter context, ErrFetchAlreadyFailed suppression,
-// flush-on-cancel send loop) so phase 2 inherits the same operator-visible
-// contract as phase 1.
-func (s *Scanner) detectOne(ctx context.Context, twoPhase []core.TwoPhaseCheck, p page.Page, out chan<- core.Finding) {
-	stack := s.fingerprint(ctx, p)
-	target := p.URL
-
-	var sem chan struct{}
-	if s.checkConcurrency > 0 {
-		sem = make(chan struct{}, s.checkConcurrency)
-	}
-
-	var wg sync.WaitGroup
-	for _, c := range twoPhase {
-		if ctx.Err() != nil {
-			break
-		}
-		if !s.applies(c, stack, target) {
-			continue
-		}
-		if sem != nil {
-			select {
-			case sem <- struct{}{}:
-			case <-ctx.Done():
-			}
-			if ctx.Err() != nil {
-				break
-			}
-		}
-		wg.Add(1)
-		go func(c core.TwoPhaseCheck) {
-			defer wg.Done()
-			if sem != nil {
-				defer func() { <-sem }()
-			}
-			runCtx, cancel := context.WithTimeout(ctx, checkBudget(c))
-			defer cancel()
-			runCtx = core.WithLevel(runCtx, s.level)
-			runCtx = core.WithStack(runCtx, stack)
-			runCtx = core.WithOOB(runCtx, s.oobServer)
-			runCtx = core.WithBrowser(runCtx, s.browserPool)
-			if s.onError != nil {
-				runCtx = core.WithReporter(runCtx, func(err error) {
-					s.onError(target, c.Name(), err)
-				})
-			}
-			found, err := c.Detect(runCtx, s.client, s.scope, p)
-			if err != nil {
-				if errors.Is(err, core.ErrFetchAlreadyFailed) {
-					return
-				}
-				if s.onError != nil {
-					s.onError(target, c.Name(), err)
-				}
-				return
-			}
-			for _, f := range found {
-				out <- f
-			}
-		}(c)
-	}
-	wg.Wait()
-}
-
 // fetchPhase2 issues a GET for rawurl and packages the response into a
 // page.Page. The body is read up to phase2BodyCap; truncation is silent
 // because Detect implementations search for short canary needles that
 // land near the start of any storage UI long before that cap. Fetched is
 // set so checks that gate on "did anyone try this URL" can read the
 // usual signal.
+//
+// Kept after the two-phase fold-in because materializePage reuses it as
+// its on-demand fetcher: discovery-origin KindPage / KindParam targets
+// and crawler-origin targets at TierDeferred (where the body is
+// re-fetched because Plant may have mutated it) both route through
+// here.
 func (s *Scanner) fetchPhase2(ctx context.Context, rawurl string) (page.Page, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawurl, nil)
 	if err != nil {
@@ -536,37 +402,6 @@ func (s *Scanner) fetchPhase2(ctx context.Context, rawurl string) (page.Page, er
 	}, nil
 }
 
-// visitedKey returns the canonical form of rawurl used to dedupe the
-// phase-2 detect set: the URL with its fragment stripped (anchors don't
-// alter what the server returns). An unparseable or schemeless URL
-// returns "" so callers can drop it without poisoning the set.
-func visitedKey(rawurl string) string {
-	if rawurl == "" {
-		return ""
-	}
-	u, err := url.Parse(rawurl)
-	if err != nil || u.Host == "" {
-		return ""
-	}
-	u.Fragment = ""
-	return u.String()
-}
-
-// scopeAllowsURL is a string-input wrapper around scope.Allows so the
-// phase-2 pipeline can filter without each callsite re-parsing rawurl.
-// A nil scope (the unconstrained default) permits everything, matching
-// the contract in core.Check.Run.
-func (s *Scanner) scopeAllowsURL(rawurl string) bool {
-	if s.scope == nil {
-		return true
-	}
-	u, err := url.Parse(rawurl)
-	if err != nil {
-		return false
-	}
-	return s.scope.Allows(u)
-}
-
 // scanTier dispatches every applicable check at exactly `tier` against
 // (t, p) in parallel and waits for the tier to drain before returning.
 // The worker loop in ScanAll calls scanTier once per (target, tier)
@@ -584,9 +419,10 @@ func (s *Scanner) scopeAllowsURL(rawurl string) bool {
 // `out` until it closes or the senders will deadlock.
 //
 // A check that implements TwoPhaseCheck has its Plant method invoked
-// here in place of Run - the scanner reserves Run for the legacy
-// single-phase contract and uses Plant during phase 1 so the check can
-// carry private state into Detect.
+// at its declared tier (TierActive by default) and its Detect method
+// invoked at TierDeferred. The scanner reserves Run for the legacy
+// single-phase contract; TwoPhaseChecks never see Run during a
+// scanner-driven scan.
 //
 // queue is the worklist the per-check Discoverer pushes into when a
 // check surfaces a new scan target via core.Discover. When queue is
@@ -613,13 +449,20 @@ func (s *Scanner) scanTier(ctx context.Context, t target.Target, tier core.Tier,
 		// match ahead of s.applies (which fires onSkip on a miss) also
 		// keeps gated-check skip notifications at exactly one per
 		// target, not one per tier visit.
-		if checkTier(c) != tier {
+		if !checkMatchesTier(c, tier) {
 			continue
 		}
 		if !consumesKind(c, t.Kind) {
 			continue
 		}
-		if isSelfLoop(t, c) {
+		// Self-loop break is suppressed at TierDeferred: a
+		// TwoPhaseCheck legitimately emits at TierDeferred from
+		// Plant (TierActive) and consumes at TierDeferred via
+		// Detect, which the loop-break heuristic would otherwise
+		// flag as a same-check fan-out cycle. TierDeferred is
+		// also the last tier, so there is no downstream loop
+		// even when a non-two-phase check happens to declare it.
+		if tier != core.TierDeferred && isSelfLoop(t, c) {
 			continue
 		}
 		if !s.applies(c, stack, targetURL) {
@@ -627,19 +470,22 @@ func (s *Scanner) scanTier(ctx context.Context, t target.Target, tier core.Tier,
 		}
 		checks = append(checks, c)
 	}
-	s.runTier(ctx, checks, t, p, stack, sem, queue, out)
+	s.runTier(ctx, checks, tier, t, p, stack, sem, queue, out)
 }
 
-// tierOrder is the canonical dispatch order: fingerprint observations
-// land first so passive checks can read them via core.StackFrom (or
-// the future stack-update path), passive checks finish before
-// discovery emits new targets, and discovery finishes before active
-// probes burn budget against a target that may grow surface area.
-var tierOrder = []core.Tier{
-	core.TierFingerprint,
-	core.TierPassive,
-	core.TierDiscovery,
-	core.TierActive,
+// checkMatchesTier reports whether c should dispatch when the worker
+// has popped a target at the given tier. The normal case is the
+// declared-tier match (TierActive by default). TwoPhaseCheck is a
+// dual-tier exception: in addition to its declared tier (Plant), it
+// also dispatches at TierDeferred (Detect). The runCheck helper picks
+// the right entry point based on the dispatch tier.
+func checkMatchesTier(c core.Check, tier core.Tier) bool {
+	if tier == core.TierDeferred {
+		if _, ok := c.(core.TwoPhaseCheck); ok {
+			return true
+		}
+	}
+	return checkTier(c) == tier
 }
 
 // checkTier returns the dispatch tier for c. Checks that do not
@@ -648,23 +494,29 @@ var tierOrder = []core.Tier{
 // active stage. A Targeted check that returns a tier outside the
 // declared range is treated as TierActive so a misconfigured opt-in
 // can't silently skip an otherwise-active check.
+//
+// TwoPhaseCheck is a wrinkle: its declared Tier() is the band where
+// Plant runs (TierActive by default), but Detect runs at TierDeferred
+// in addition. scanTier handles that with a TierDeferred special-case
+// rather than threading it through checkTier, so this function
+// continues to report the Plant-side tier.
 func checkTier(c core.Check) core.Tier {
 	tc, ok := c.(core.Targeted)
 	if !ok {
 		return core.TierActive
 	}
 	tier := tc.Tier()
-	if tier < core.TierFingerprint || tier > core.TierActive {
+	if tier < core.TierFingerprint || tier > core.TierDeferred {
 		return core.TierActive
 	}
 	return tier
 }
 
 // runTier dispatches every check in checks in parallel (capped by sem)
-// and waits for the tier to drain before returning. Mirrors the
-// pre-tier dispatch loop's body but is invoked once per tier so the
-// caller can sequence them.
-func (s *Scanner) runTier(ctx context.Context, checks []core.Check, t target.Target, p page.Page, stack *fingerprint.Stack, sem chan struct{}, queue *worklist, out chan<- core.Finding) {
+// and waits for the tier to drain before returning. tier is passed
+// through to runCheck so the per-check entry point can select Plant
+// (lower tiers) vs Detect (TierDeferred) for TwoPhaseCheck.
+func (s *Scanner) runTier(ctx context.Context, checks []core.Check, tier core.Tier, t target.Target, p page.Page, stack *fingerprint.Stack, sem chan struct{}, queue *worklist, out chan<- core.Finding) {
 	if len(checks) == 0 {
 		return
 	}
@@ -688,20 +540,21 @@ func (s *Scanner) runTier(ctx context.Context, checks []core.Check, t target.Tar
 			if sem != nil {
 				defer func() { <-sem }()
 			}
-			s.runCheck(ctx, c, t, p, stack, queue, out)
+			s.runCheck(ctx, c, tier, t, p, stack, queue, out)
 		}(c)
 	}
 	wg.Wait()
 }
 
-// runCheck wraps a single check's Run (or Plant) invocation: builds
-// the per-check context (deadline, level/stack/oob/browser/target/
-// reporter/discoverer), routes to Plant for TwoPhaseCheck, suppresses
-// ErrFetchAlreadyFailed, surfaces other errors via onError, and flushes
-// findings on the out channel. Pulled out of scanOne so the tier loop
-// stays readable; the function carries the cancellation-flush contract
-// (findings sent unconditionally once Run returns).
-func (s *Scanner) runCheck(ctx context.Context, c core.Check, t target.Target, p page.Page, stack *fingerprint.Stack, queue *worklist, out chan<- core.Finding) {
+// runCheck wraps a single check's Run / Plant / Detect invocation:
+// builds the per-check context (deadline, level/stack/oob/browser/
+// target/reporter/discoverer), routes a TwoPhaseCheck to Plant at its
+// declared tier and Detect at TierDeferred, suppresses
+// ErrFetchAlreadyFailed, surfaces other errors via onError, and
+// flushes findings on the out channel. Carries the cancellation-flush
+// contract (findings sent unconditionally once the entry point
+// returns).
+func (s *Scanner) runCheck(ctx context.Context, c core.Check, tier core.Tier, t target.Target, p page.Page, stack *fingerprint.Stack, queue *worklist, out chan<- core.Finding) {
 	// Per-check deadline keeps a pathological Run (regex backtracking,
 	// slow body read, weird redirect chain) from pinning its worker
 	// slot for the full client Timeout multiplied by however many
@@ -730,23 +583,30 @@ func (s *Scanner) runCheck(ctx context.Context, c core.Check, t target.Target, p
 	// coverage before the active tier reaches it.
 	if queue != nil {
 		checkName := c.Name()
-		runCtx = core.WithDiscoverer(runCtx, func(disc target.Target) {
+		runCtx = core.WithDiscoverer(runCtx, func(disc target.Target, discTier core.Tier) {
 			if disc.Origin == "" {
 				disc.Origin = "check:" + checkName
 			}
 			if disc.Parent == "" {
 				disc.Parent = t.CanonicalKey()
 			}
-			queue.Push(ctx, disc, core.TierFingerprint)
+			queue.Push(ctx, disc, discTier)
 		})
 	}
-	// A two-phase check receives Plant during phase 1; its Run is
-	// reserved for callers that intentionally drive it single-phase
-	// (e.g. dry runs without phase-2 wiring) and would otherwise
-	// double-fire findings here.
+	// TwoPhaseCheck dispatch: at TierDeferred call Detect against the
+	// freshly-fetched body the worker materialized after evicting the
+	// cache; at every other tier call Plant so the check accumulates
+	// its private state (canary->plant map, etc.) ahead of the
+	// barrier. Run is reserved for callers that intentionally drive a
+	// two-phase check single-phase (dry runs without phase-2 wiring)
+	// and would otherwise double-fire findings here.
 	runFn := c.Run
 	if tp, ok := c.(core.TwoPhaseCheck); ok {
-		runFn = tp.Plant
+		if tier == core.TierDeferred {
+			runFn = tp.Detect
+		} else {
+			runFn = tp.Plant
+		}
 	}
 	found, err := runFn(runCtx, s.client, s.scope, p)
 	if err != nil {

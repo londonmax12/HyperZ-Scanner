@@ -10,6 +10,9 @@ import (
 
 	lua "github.com/yuin/gopher-lua"
 	"golang.org/x/net/html"
+
+	"github.com/londonmax12/hyperz/internal/core"
+	"github.com/londonmax12/hyperz/internal/target"
 )
 
 // buildStoredXSSTable returns the ctx.stored_xss helper namespace. The
@@ -65,13 +68,15 @@ type storedXSSPlant struct {
 // stored-xss Lua port. Concurrent Plant calls across page workers all
 // take the same mutex; Detect calls do too. The structure mirrors the
 // Go stored-xss check's internal map set (plantedSinks, canaries,
-// detectURLs, detectFired) so the Lua port can produce byte-aligned
-// findings against the same wire input.
+// detectFired) so the Lua port can produce byte-aligned findings
+// against the same wire input. URLs surfaced during Plant flow
+// directly to the worklist at TierDeferred via core.DiscoverAt and
+// no longer live on the state; the post-fold TwoPhaseCheck contract
+// has no DetectURLs() round-trip.
 type StoredXSSState struct {
 	mu           sync.Mutex
 	plantedSinks map[sinkKey]struct{}
 	canaries     map[string]*storedXSSPlant
-	detectURLs   map[string]struct{}
 	detectFired  map[sinkKey]struct{}
 }
 
@@ -135,13 +140,16 @@ func (s *StoredXSSState) LookupCanary(canary string) *storedXSSPlant {
 	return s.canaries[canary]
 }
 
-// AbsorbDetectURLs extends the phase-2 detect set with same-origin
-// URLs surfaced in the plant response: Location header (the POST-
-// redirect-GET destination most write endpoints return) plus body
-// links the application rendered in the immediate response. Cross-
+// harvestPlantResponseURLs walks the same-origin URLs surfaced in a
+// plant response - Location header (the POST-redirect-GET destination
+// most write endpoints return) plus body links the application
+// rendered in the immediate response - and hands each to emit. Cross-
 // origin URLs are dropped here so an unrelated CDN reference in a
-// 200 body does not get added to the re-fetch list.
-func (s *StoredXSSState) AbsorbDetectURLs(plantURL, locationHeader string, body []byte) {
+// 200 body does not get added to the re-fetch list. Pure helper; no
+// scan state is mutated, so callers can route the emitted URLs
+// wherever (the post-fold path pushes them at TierDeferred via
+// core.DiscoverAt).
+func harvestPlantResponseURLs(plantURL, locationHeader string, body []byte, emit func(string)) {
 	base, err := url.Parse(plantURL)
 	if err != nil {
 		return
@@ -163,12 +171,7 @@ func (s *StoredXSSState) AbsorbDetectURLs(plantURL, locationHeader string, body 
 			return
 		}
 		resolved.Fragment = ""
-		s.mu.Lock()
-		if s.detectURLs == nil {
-			s.detectURLs = map[string]struct{}{}
-		}
-		s.detectURLs[resolved.String()] = struct{}{}
-		s.mu.Unlock()
+		emit(resolved.String())
 	}
 	if locationHeader != "" {
 		add(locationHeader)
@@ -176,22 +179,6 @@ func (s *StoredXSSState) AbsorbDetectURLs(plantURL, locationHeader string, body 
 	if len(body) > 0 {
 		harvestBodyLinks(body, add)
 	}
-}
-
-// DetectURLsSnapshot returns the set of harvested URLs as a sorted-
-// free slice. Returned by the LuaCheck's DetectURLs() shim for the
-// scanner's phase-2 re-fetch union.
-func (s *StoredXSSState) DetectURLsSnapshot() []string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if len(s.detectURLs) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(s.detectURLs))
-	for u := range s.detectURLs {
-		out = append(out, u)
-	}
-	return out
 }
 
 // DetectFireOnce records the (method, url, loc, name) sink as having
@@ -338,7 +325,6 @@ func ensureStoredXSSStateMT(L *lua.LState) *lua.LTable {
 	methods.RawSetString("absorb_detect_urls", L.NewFunction(storedXSSStateAbsorbDetectURLs))
 	methods.RawSetString("detect_fire_once", L.NewFunction(storedXSSStateDetectFireOnce))
 	methods.RawSetString("find_canaries", L.NewFunction(storedXSSStateFindCanaries))
-	methods.RawSetString("detect_urls", L.NewFunction(storedXSSStateDetectURLs))
 	mt.RawSetString("__index", methods)
 	L.G.Registry.RawSetString(mtStoredXSSState, mt)
 	return mt
@@ -404,12 +390,29 @@ func storedXSSStateLookupCanary(L *lua.LState) int {
 	return 1
 }
 
+// storedXSSStateAbsorbDetectURLs harvests same-origin URLs from the
+// plant response and emits each as a KindPage discovery at
+// TierDeferred via core.DiscoverAt. The scanner's per-check
+// Discoverer pushes them into the worklist; the barrier guarantees
+// they receive only the Detect pass (not a fresh Plant).
+//
+// Receiver `s` is unused on the state itself - the URL harvest is a
+// pure transform on the plant response - but the method is kept on
+// the state userdata so existing Lua call sites
+// (`state:absorb_detect_urls(...)`) continue to work without
+// touching the Lua-level surface.
 func storedXSSStateAbsorbDetectURLs(L *lua.LState) int {
-	s := storedXSSStateFromArg(L, 1)
+	_ = storedXSSStateFromArg(L, 1)
+	env := currentEnv(L)
+	if env == nil {
+		L.RaiseError("absorb_detect_urls called outside a check run")
+	}
 	plantURL := requireString(L, 2)
 	loc := optString(L, 3, "")
 	body := optString(L, 4, "")
-	s.AbsorbDetectURLs(plantURL, loc, []byte(body))
+	harvestPlantResponseURLs(plantURL, loc, []byte(body), func(u string) {
+		core.DiscoverAt(env.ctx, target.Page(u, ""), core.TierDeferred)
+	})
 	return 0
 }
 
@@ -427,11 +430,5 @@ func storedXSSStateFindCanaries(L *lua.LState) int {
 	_ = storedXSSStateFromArg(L, 1)
 	body := requireString(L, 2)
 	L.Push(pushStringList(L, canaryRe.FindAllString(body, -1)))
-	return 1
-}
-
-func storedXSSStateDetectURLs(L *lua.LState) int {
-	s := storedXSSStateFromArg(L, 1)
-	L.Push(pushStringList(L, s.DetectURLsSnapshot()))
 	return 1
 }

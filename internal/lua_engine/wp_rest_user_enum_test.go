@@ -211,7 +211,7 @@ func TestWPRestUserEnumEmitsAuthorProfileDiscoveries(t *testing.T) {
 
 	var mu sync.Mutex
 	var emitted []target.Target
-	ctx := core.WithDiscoverer(context.Background(), func(t target.Target) {
+	ctx := core.WithDiscoverer(context.Background(), func(t target.Target, _ core.Tier) {
 		mu.Lock()
 		emitted = append(emitted, t)
 		mu.Unlock()

@@ -440,9 +440,16 @@ type discovererKey struct{}
 // Discoverer is the function shape the scanner installs to absorb a
 // check's emitted targets. The scanner-side implementation tags Origin
 // with the emitting check's name, runs the worklist's dedupe / scope /
-// host-budget filter, and otherwise discards quietly. Checks emit
-// liberally; the dispatcher decides what to queue.
-type Discoverer func(t target.Target)
+// host-budget filter, pushes at the requested tier, and otherwise
+// discards quietly. Checks emit liberally; the dispatcher decides
+// what to queue.
+//
+// tier picks where the emitted target lands in the dispatch pipeline.
+// The common case is TierFingerprint (the lowest tier, so the new
+// target walks through every band of coverage); checks that surface
+// a URL specifically for the TwoPhase Detect pass push at
+// TierDeferred to skip Plant.
+type Discoverer func(t target.Target, tier Tier)
 
 // WithDiscoverer attaches fn to ctx so checks can emit new targets
 // during Run. The scanner installs a per-check Discoverer so the
@@ -458,16 +465,26 @@ func WithDiscoverer(ctx context.Context, fn Discoverer) context.Context {
 	return context.WithValue(ctx, discovererKey{}, fn)
 }
 
-// Discover forwards t to the discoverer attached to ctx. Safe to call
-// when no discoverer is attached (no-op) or with a zero Target (the
-// scanner-side discoverer drops empty URLs at the worklist boundary).
-// The dispatcher dedupes by canonical key, enforces scope, applies the
-// per-host budget, and breaks self-loops; checks should not pre-filter
-// their emissions.
+// Discover forwards t to the discoverer attached to ctx, pushing the
+// emission at TierFingerprint so it walks the full pipeline. Safe to
+// call when no discoverer is attached (no-op) or with a zero Target
+// (the scanner-side discoverer drops empty URLs at the worklist
+// boundary). The dispatcher dedupes by canonical key, enforces scope,
+// applies the per-host budget, and breaks self-loops; checks should
+// not pre-filter their emissions.
 func Discover(ctx context.Context, t target.Target) {
+	DiscoverAt(ctx, t, TierFingerprint)
+}
+
+// DiscoverAt is Discover with an explicit tier. Used by checks that
+// surface a URL specifically for a higher-tier pass - the canonical
+// example is a TwoPhaseCheck whose Plant response contains a Location
+// header pointing at a "view your post" page that should be visited
+// at TierDeferred (Detect only) without re-firing Plant.
+func DiscoverAt(ctx context.Context, t target.Target, tier Tier) {
 	fn, _ := ctx.Value(discovererKey{}).(Discoverer)
 	if fn != nil {
-		fn(t)
+		fn(t, tier)
 	}
 }
 
@@ -683,6 +700,16 @@ const (
 	TierPassive
 	TierDiscovery
 	TierActive
+	// TierDeferred is the post-active barrier where TwoPhaseCheck
+	// Detect dispatches run. Plants happen at TierActive across every
+	// target; once the barrier crosses, the worker re-fetches each
+	// target (Plant mutations may have changed the body) and dispatches
+	// Detect on the same target. TierDeferred is the absorbing point
+	// for the legacy two-phase orchestration: instead of a separate
+	// runPhase2 pass after the main worklist drains, Detect is just
+	// another tier in the same worklist, with the cross-target barrier
+	// guaranteeing every Plant has completed before any Detect begins.
+	TierDeferred
 )
 
 func (t Tier) String() string {
@@ -695,6 +722,8 @@ func (t Tier) String() string {
 		return "discovery"
 	case TierActive:
 		return "active"
+	case TierDeferred:
+		return "deferred"
 	default:
 		return fmt.Sprintf("tier(%d)", int(t))
 	}
@@ -738,58 +767,55 @@ type Check interface {
 	Run(ctx context.Context, client *httpclient.Client, scope *scope.Scope, p page.Page) ([]Finding, error)
 }
 
-// TwoPhaseCheck is implemented by checks whose verdict requires observing
-// the application state AFTER every page has been planted. Stored XSS is
-// the canonical case: a canary submitted via /api/comments only surfaces
-// later when /post/123 renders the stored content, so a single per-page
-// Run() pass cannot see persistence.
+// TwoPhaseCheck is implemented by checks whose verdict requires
+// observing the application state AFTER every page has been planted.
+// Stored XSS is the canonical case: a canary submitted via
+// /api/comments only surfaces later when /post/123 renders the stored
+// content, so a single per-page Run() pass cannot see persistence.
 //
 // The scanner drives a two-phase check like this:
 //
-//  1. Phase 1 (during the main crawl): for each in-scope page, the scanner
-//     calls Plant in place of Run. Plant fans out probes (canary plants,
-//     state mutations, etc.) and accumulates its own cross-page state -
-//     the scanner does not see that state directly. Plant findings flow
-//     to the report immediately, same as Run findings.
+//  1. TierActive (the check's declared tier, default is active): for
+//     each in-scope target the scanner calls Plant in place of Run.
+//     Plant fans out probes (canary plants, state mutations, etc.)
+//     and accumulates its own cross-page state - the scanner does
+//     not see that state directly. Plant findings flow to the
+//     report immediately, same as Run findings. Plant calls
+//     core.DiscoverAt(ctx, t, TierDeferred) (or via the Lua
+//     `ctx:discover{tier = "deferred"}` bridge) to surface
+//     same-origin URLs the application revealed in plant responses
+//     (a Location redirect, a "view your post" link in the body)
+//     that should receive Detect coverage but NOT a fresh Plant
+//     run.
 //
-//  2. Between phases: the scanner calls DetectURLs once. The returned
-//     URLs are unioned with the in-scope crawler URL set the scanner
-//     retained during phase 1. Use this to surface same-origin URLs the
-//     plant responses revealed (e.g. a redirect Location, a "view your
-//     post" link in the body) that weren't in the original crawl. The
-//     scanner's retained set only contains URLs the crawler fed into
-//     ScanAll - URLs a Plant call discovered at runtime (form-following,
-//     redirect chains the check followed itself) are NOT auto-added, so
-//     a check that needs phase 2 to revisit them must return them here.
+//  2. TierDeferred (post-active barrier): the scanner re-fetches
+//     every target that walked through TierActive plus every URL
+//     emitted at TierDeferred during Plant, respecting scope and
+//     the rate limiter, and calls Detect once per (check, re-
+//     fetched page). Detect inspects the body for evidence of
+//     planted state (canary echo, breakout bytes round-tripping
+//     intact, etc.) and returns findings. The worklist's
+//     cross-target barrier guarantees every Plant has completed
+//     before the first Detect begins.
 //
-//  3. Phase 2 (after phase 1 drains): the scanner re-fetches every URL
-//     in the unioned set, respecting scope and the rate limiter, and
-//     calls Detect once per (check, re-fetched page). Detect inspects
-//     the body for evidence of planted state (canary echo, breakout
-//     bytes round-tripping intact, etc.) and returns findings.
+// A two-phase check still satisfies Check; the scanner uses Run only
+// as a fallback when phase-2 orchestration is disabled (older
+// scanner code, dry runs). Implementations should return nil
+// findings from Run rather than duplicating Plant - the report
+// would otherwise carry two copies of every phase-1 hit.
 //
-// A two-phase check still satisfies Check; the scanner uses Run only as
-// a fallback when phase-2 orchestration is disabled (older scanner code,
-// dry runs). Implementations should return nil findings from Run rather
-// than duplicating Plant - the report would otherwise carry two copies
-// of every phase-1 hit.
-//
-// Implementations must be safe to call concurrently from many goroutines:
-// scanOne runs Plant in parallel across pages, so any shared planted-
-// state map needs its own mutex.
+// Implementations must be safe to call concurrently from many
+// goroutines: scanTier runs Plant in parallel across pages, so any
+// shared planted-state map needs its own mutex.
 type TwoPhaseCheck interface {
 	Check
-	// Plant fires once per in-scope page during phase 1. Same call
-	// shape as Run; any findings returned flow out immediately.
+	// Plant fires once per in-scope target at the check's declared
+	// tier (TierActive by default). Same call shape as Run; any
+	// findings returned flow out immediately.
 	Plant(ctx context.Context, client *httpclient.Client, scope *scope.Scope, p page.Page) ([]Finding, error)
-	// DetectURLs returns same-origin URLs the check discovered during
-	// plant responses that should be added to the phase-2 re-fetch set.
-	// Called once between phases, on the same goroutine as the scanner's
-	// main loop, so it does not need its own synchronization beyond the
-	// internal locking Plant already uses. Return nil for "no extras".
-	DetectURLs() []string
-	// Detect fires once per re-fetched page during phase 2. p carries
-	// the freshly-fetched body/headers; the check searches it for
+	// Detect fires once per target at TierDeferred. p carries the
+	// freshly-fetched body / headers (the scanner invalidates the
+	// page cache on TierDeferred entry); the check searches it for
 	// evidence of its planted state and emits findings for each hit.
 	Detect(ctx context.Context, client *httpclient.Client, scope *scope.Scope, p page.Page) ([]Finding, error)
 }

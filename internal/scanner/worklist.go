@@ -86,6 +86,7 @@ var tierBands = []core.Tier{
 	core.TierPassive,
 	core.TierDiscovery,
 	core.TierActive,
+	core.TierDeferred,
 }
 
 // newWorklist constructs a worklist with the given scope (nil means

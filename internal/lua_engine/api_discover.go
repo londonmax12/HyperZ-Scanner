@@ -20,6 +20,13 @@ import (
 //	  content_type = "application/json",    -- endpoint kind
 //	  param = "redirect_url",               -- param kind
 //	  location = "query",                   -- param kind (query|body|header|cookie|path)
+//	  tier = "fingerprint",                 -- optional: which tier to land on
+//	                                        -- (fingerprint|passive|discovery|active|deferred)
+//	                                        -- default is "fingerprint" so the surface walks
+//	                                        -- every tier. Use "deferred" from a TwoPhase
+//	                                        -- Plant when surfacing a URL that should only
+//	                                        -- receive a Detect re-fetch and NOT a fresh
+//	                                        -- Plant run.
 //	  note = "...",                         -- opaque payload the dispatcher does not interpret
 //	}
 //
@@ -62,6 +69,15 @@ func ctxDiscover(L *lua.LState) int {
 		method = strings.ToUpper(method)
 	}
 
+	tier := core.TierFingerprint
+	if tierStr := lvalString(tbl.RawGetString("tier")); tierStr != "" {
+		parsed, perr := parseTier(tierStr)
+		if perr != nil {
+			L.ArgError(1, perr.Error())
+		}
+		tier = parsed
+	}
+
 	disc := target.Target{
 		Kind:          kind,
 		URL:           url,
@@ -71,7 +87,7 @@ func ctxDiscover(L *lua.LState) int {
 		ParamLocation: strings.ToLower(lvalString(tbl.RawGetString("location"))),
 		Note:          lvalString(tbl.RawGetString("note")),
 	}
-	core.Discover(env.ctx, disc)
+	core.DiscoverAt(env.ctx, disc, tier)
 	return 0
 }
 

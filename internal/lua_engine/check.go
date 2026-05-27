@@ -337,8 +337,10 @@ func parseTier(s string) (core.Tier, error) {
 		return core.TierDiscovery, nil
 	case "active":
 		return core.TierActive, nil
+	case "deferred":
+		return core.TierDeferred, nil
 	}
-	return 0, fmt.Errorf("invalid tier %q (want fingerprint, passive, discovery, or active)", s)
+	return 0, fmt.Errorf("invalid tier %q (want fingerprint, passive, discovery, active, or deferred)", s)
 }
 
 // parseConsumes reads the `consumes` field as either a single string
