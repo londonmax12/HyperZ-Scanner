@@ -206,21 +206,29 @@ func (s *Scanner) ScanAll(ctx context.Context, pages <-chan page.Page, out chan<
 		visited = map[string]struct{}{}
 	}
 
-	// The worklist mediates dispatch with quiescence-based termination:
-	// a single producer pushes crawler-origin pages, workers Pop targets
-	// and call scanOne, and the per-check Discoverer wired in scanOne
-	// pushes any emitted discoveries back onto the same queue. The queue
-	// reports itself drained when the producer signals SourceDone AND
-	// every accepted push has had a matching Done call from the worker
-	// that processed it. That terminates the scan cleanly even when
-	// discoveries fan out mid-drain.
+	// The worklist mediates dispatch with quiescence-based termination
+	// AND cross-target tier ordering: a single producer pushes crawler-
+	// origin pages at TierFingerprint, workers Pop the lowest-tier
+	// target available and call scanTier (which runs ONLY that tier's
+	// checks). After scanTier returns the worker re-pushes the same
+	// target at tier+1, walking it through every tier band before
+	// retiring it. The per-check Discoverer wired in scanTier pushes
+	// any emitted discoveries back onto the queue at TierFingerprint
+	// so a freshly-surfaced endpoint re-enters at the lowest tier and
+	// still receives fingerprint / passive coverage before any active
+	// check fires against it. The queue reports itself drained when
+	// the producer signals SourceDone AND every accepted push at every
+	// tier has had a matching Done call.
 	//
-	// pageByKey bridges the worklist's target.Target payload back to the
-	// page.Page artifact the crawler captured. The producer stores under
-	// the canonical key before pushing; the worker's LoadAndDelete sees
-	// the entry via the happens-before edge through the worklist mutex.
-	// On push rejection (cancel / scope / dedupe / budget) the producer
-	// deletes the entry so dropped pushes do not leak map slots.
+	// pageByKey bridges the worklist's target.Target payload back to
+	// the page.Page artifact the crawler captured AND caches the
+	// fetched-on-demand page for discovery-origin targets across tier
+	// advances. The producer stores the crawler page before pushing;
+	// the worker Loads (does NOT delete) on each tier dispatch so
+	// tiers 2-4 reuse the same page artifact without re-fetching. The
+	// worker deletes the entry only after the final tier (TierActive)
+	// drains or when a tier re-push is rejected (cancel / scope /
+	// budget) so dropped advances do not leak map slots.
 	queue := newWorklist(s.scope, 0)
 	queue.withHostBudget(s.hostBudget)
 	var pageByKey sync.Map
@@ -245,7 +253,7 @@ func (s *Scanner) ScanAll(ctx context.Context, pages <-chan page.Page, out chan<
 				t := target.Page(p.URL, "crawler")
 				key := t.CanonicalKey()
 				pageByKey.Store(key, p)
-				if !queue.Push(ctx, t) {
+				if !queue.Push(ctx, t, core.TierFingerprint) {
 					pageByKey.Delete(key)
 				}
 			}
@@ -258,15 +266,26 @@ func (s *Scanner) ScanAll(ctx context.Context, pages <-chan page.Page, out chan<
 		go func() {
 			defer wg.Done()
 			for {
-				t, ok := queue.Pop(ctx)
+				t, tier, ok := queue.Pop(ctx)
 				if !ok {
 					return
 				}
 				p, materialized := s.materializePage(ctx, t, &pageByKey)
 				if materialized {
-					s.scanOne(ctx, t, p, queue, out)
+					s.scanTier(ctx, t, tier, p, queue, out)
 				}
-				queue.Done()
+				// Tier advance: re-push at tier+1 if more tiers remain
+				// AND materialization succeeded. A failed materialize
+				// means we cannot ever scan this target (fetch error,
+				// empty URL); no point cycling it through tiers 2-4.
+				if materialized && tier < core.TierActive {
+					if !queue.Push(ctx, t, tier+1) {
+						pageByKey.Delete(t.CanonicalKey())
+					}
+				} else {
+					pageByKey.Delete(t.CanonicalKey())
+				}
+				queue.Done(tier)
 			}
 		}()
 	}
@@ -548,55 +567,111 @@ func (s *Scanner) scopeAllowsURL(rawurl string) bool {
 	return s.scope.Allows(u)
 }
 
-// scanOne fingerprints p then runs every applicable check in parallel.
-// When a check's Run returns, its findings are sent unconditionally - they
-// already exist in memory, so we flush them even if ctx cancels mid-send.
-// New checks are not scheduled after ctx cancels (the loop bails on
-// ctx.Err()), so the post-cancel send burst is bounded by checks already
-// in flight. The caller (the report side) must drain `out` until it closes
-// or the senders will deadlock.
+// scanTier dispatches every applicable check at exactly `tier` against
+// (t, p) in parallel and waits for the tier to drain before returning.
+// The worker loop in ScanAll calls scanTier once per (target, tier)
+// Pop and then re-pushes the same target at tier+1, so cross-target
+// tier ordering is realized at the queue level: every tier-N item
+// queued anywhere drains before workers begin dispatching the same
+// target's tier-(N+1) work. Within a tier, checks run in parallel
+// capped by checkConcurrency.
 //
-// A check that implements TwoPhaseCheck has its Plant method invoked here
-// in place of Run - the scanner reserves Run for the legacy single-phase
-// contract and uses Plant during phase 1 so the check can carry private
-// state into Detect.
+// When a check's Run returns, its findings are sent unconditionally:
+// they already exist in memory, so we flush them even if ctx cancels
+// mid-send. New checks are not scheduled after ctx cancels (the tier
+// loop bails on ctx.Err()), so the post-cancel send burst is bounded
+// by checks already in flight. The caller (the report side) must drain
+// `out` until it closes or the senders will deadlock.
+//
+// A check that implements TwoPhaseCheck has its Plant method invoked
+// here in place of Run - the scanner reserves Run for the legacy
+// single-phase contract and uses Plant during phase 1 so the check can
+// carry private state into Detect.
 //
 // queue is the worklist the per-check Discoverer pushes into when a
 // check surfaces a new scan target via core.Discover. When queue is
-// nil (the test-helper path that drives scanOne without ScanAll) the
+// nil (the test-helper path that drives scanTier without ScanAll) the
 // discoverer is wired as a no-op so checks running without the
 // dispatcher in place do not error out on emission.
-func (s *Scanner) scanOne(ctx context.Context, t target.Target, p page.Page, queue *worklist, out chan<- core.Finding) {
+func (s *Scanner) scanTier(ctx context.Context, t target.Target, tier core.Tier, p page.Page, queue *worklist, out chan<- core.Finding) {
 	stack := s.fingerprint(ctx, p)
 	targetURL := p.URL
 
-	// sem caps in-flight checks per target. A nil sem means no cap.
+	// sem caps in-flight checks for this tier dispatch. A nil sem
+	// means no cap. Each scanTier call gets its own sem so the bound
+	// is per-tier-dispatch, matching the pre-tier per-target behavior.
 	var sem chan struct{}
 	if s.checkConcurrency > 0 {
 		sem = make(chan struct{}, s.checkConcurrency)
 	}
 
-	var wg sync.WaitGroup
+	var checks []core.Check
 	for _, c := range s.checks {
-		if ctx.Err() != nil {
-			break
+		// Tier filter goes first: scanTier is called once per (target,
+		// tier) Pop, so a check whose tier does not match this Pop is
+		// skipped silently. Putting the cheap, side-effect-free tier
+		// match ahead of s.applies (which fires onSkip on a miss) also
+		// keeps gated-check skip notifications at exactly one per
+		// target, not one per tier visit.
+		if checkTier(c) != tier {
+			continue
 		}
-		// Kind filter: skip checks that do not consume this target's
-		// Kind. Checks without Targeted default to KindPage only, so
-		// pre-worklist behavior (every check ran against every Page)
-		// is preserved for the existing catalog.
 		if !consumesKind(c, t.Kind) {
 			continue
 		}
-		// Self-loop break: skip the check whose own emission produced
-		// this target. Two distinct checks emitting into each other
-		// can still cycle, which is why the worklist's per-host
-		// budget is the second-line defense against runaway fanout.
 		if isSelfLoop(t, c) {
 			continue
 		}
 		if !s.applies(c, stack, targetURL) {
 			continue
+		}
+		checks = append(checks, c)
+	}
+	s.runTier(ctx, checks, t, p, stack, sem, queue, out)
+}
+
+// tierOrder is the canonical dispatch order: fingerprint observations
+// land first so passive checks can read them via core.StackFrom (or
+// the future stack-update path), passive checks finish before
+// discovery emits new targets, and discovery finishes before active
+// probes burn budget against a target that may grow surface area.
+var tierOrder = []core.Tier{
+	core.TierFingerprint,
+	core.TierPassive,
+	core.TierDiscovery,
+	core.TierActive,
+}
+
+// checkTier returns the dispatch tier for c. Checks that do not
+// implement core.Targeted default to TierActive, matching the
+// pre-tier behavior where every catalog check ran as one batch at the
+// active stage. A Targeted check that returns a tier outside the
+// declared range is treated as TierActive so a misconfigured opt-in
+// can't silently skip an otherwise-active check.
+func checkTier(c core.Check) core.Tier {
+	tc, ok := c.(core.Targeted)
+	if !ok {
+		return core.TierActive
+	}
+	tier := tc.Tier()
+	if tier < core.TierFingerprint || tier > core.TierActive {
+		return core.TierActive
+	}
+	return tier
+}
+
+// runTier dispatches every check in checks in parallel (capped by sem)
+// and waits for the tier to drain before returning. Mirrors the
+// pre-tier dispatch loop's body but is invoked once per tier so the
+// caller can sequence them.
+func (s *Scanner) runTier(ctx context.Context, checks []core.Check, t target.Target, p page.Page, stack *fingerprint.Stack, sem chan struct{}, queue *worklist, out chan<- core.Finding) {
+	if len(checks) == 0 {
+		return
+	}
+	var wg sync.WaitGroup
+	for _, c := range checks {
+		if ctx.Err() != nil {
+			break
 		}
 		if sem != nil {
 			select {
@@ -613,71 +688,83 @@ func (s *Scanner) scanOne(ctx context.Context, t target.Target, p page.Page, que
 			if sem != nil {
 				defer func() { <-sem }()
 			}
-			// Per-check deadline keeps a pathological Run (regex
-			// backtracking, slow body read, weird redirect chain) from
-			// pinning its worker slot for the full client Timeout multiplied
-			// by however many requests it would otherwise issue.
-			runCtx, cancel := context.WithTimeout(ctx, checkBudget(c))
-			defer cancel()
-			// Sub-probe errors that the check chooses to swallow are still
-			// surfaced through this reporter, so a flaky host leaves one
-			// onError event per failure even when the check returns findings.
-			runCtx = core.WithLevel(runCtx, s.level)
-			runCtx = core.WithStack(runCtx, stack)
-			runCtx = core.WithOOB(runCtx, s.oobServer)
-			runCtx = core.WithBrowser(runCtx, s.browserPool)
-			runCtx = core.WithTarget(runCtx, t)
-			if s.onError != nil {
-				runCtx = core.WithReporter(runCtx, func(err error) {
-					s.onError(targetURL, c.Name(), err)
-				})
-			}
-			// Per-check Discoverer: tag Origin with this check's
-			// name (so the worklist's self-loop break and the
-			// scanOne kind/origin filter both have the data they
-			// need) and push to the queue. A nil queue degrades the
-			// discoverer to a no-op so test paths that bypass
-			// ScanAll do not need to wire a worklist.
-			if queue != nil {
-				checkName := c.Name()
-				runCtx = core.WithDiscoverer(runCtx, func(disc target.Target) {
-					if disc.Origin == "" {
-						disc.Origin = "check:" + checkName
-					}
-					if disc.Parent == "" {
-						disc.Parent = t.CanonicalKey()
-					}
-					queue.Push(ctx, disc)
-				})
-			}
-			// A two-phase check receives Plant during phase 1; its Run
-			// is reserved for callers that intentionally drive it
-			// single-phase (e.g. dry runs without phase-2 wiring) and
-			// would otherwise double-fire findings here.
-			runFn := c.Run
-			if tp, ok := c.(core.TwoPhaseCheck); ok {
-				runFn = tp.Plant
-			}
-			found, err := runFn(runCtx, s.client, s.scope, p)
-			if err != nil {
-				// ErrFetchAlreadyFailed means the crawler tried this URL
-				// and got nothing - it already reported the failure once
-				// via its own onError. Re-reporting per check would turn
-				// one dead host into N noisy events with no new signal.
-				if errors.Is(err, core.ErrFetchAlreadyFailed) {
-					return
-				}
-				if s.onError != nil {
-					s.onError(targetURL, c.Name(), err)
-				}
-				return
-			}
-			for _, f := range found {
-				out <- f
-			}
+			s.runCheck(ctx, c, t, p, stack, queue, out)
 		}(c)
 	}
 	wg.Wait()
+}
+
+// runCheck wraps a single check's Run (or Plant) invocation: builds
+// the per-check context (deadline, level/stack/oob/browser/target/
+// reporter/discoverer), routes to Plant for TwoPhaseCheck, suppresses
+// ErrFetchAlreadyFailed, surfaces other errors via onError, and flushes
+// findings on the out channel. Pulled out of scanOne so the tier loop
+// stays readable; the function carries the cancellation-flush contract
+// (findings sent unconditionally once Run returns).
+func (s *Scanner) runCheck(ctx context.Context, c core.Check, t target.Target, p page.Page, stack *fingerprint.Stack, queue *worklist, out chan<- core.Finding) {
+	// Per-check deadline keeps a pathological Run (regex backtracking,
+	// slow body read, weird redirect chain) from pinning its worker
+	// slot for the full client Timeout multiplied by however many
+	// requests it would otherwise issue.
+	runCtx, cancel := context.WithTimeout(ctx, checkBudget(c))
+	defer cancel()
+	runCtx = core.WithLevel(runCtx, s.level)
+	runCtx = core.WithStack(runCtx, stack)
+	runCtx = core.WithOOB(runCtx, s.oobServer)
+	runCtx = core.WithBrowser(runCtx, s.browserPool)
+	runCtx = core.WithTarget(runCtx, t)
+	targetURL := p.URL
+	if s.onError != nil {
+		runCtx = core.WithReporter(runCtx, func(err error) {
+			s.onError(targetURL, c.Name(), err)
+		})
+	}
+	// Per-check Discoverer: tag Origin with this check's name (so the
+	// worklist's self-loop break and the scanOne kind/origin filter
+	// both have the data they need) and push to the queue. A nil queue
+	// degrades the discoverer to a no-op so test paths that bypass
+	// ScanAll do not need to wire a worklist. Discoveries enter at
+	// TierFingerprint so the new target walks through every tier
+	// band - even when the emitter was an active-tier check, the
+	// surface it surfaced still receives fingerprint and passive
+	// coverage before the active tier reaches it.
+	if queue != nil {
+		checkName := c.Name()
+		runCtx = core.WithDiscoverer(runCtx, func(disc target.Target) {
+			if disc.Origin == "" {
+				disc.Origin = "check:" + checkName
+			}
+			if disc.Parent == "" {
+				disc.Parent = t.CanonicalKey()
+			}
+			queue.Push(ctx, disc, core.TierFingerprint)
+		})
+	}
+	// A two-phase check receives Plant during phase 1; its Run is
+	// reserved for callers that intentionally drive it single-phase
+	// (e.g. dry runs without phase-2 wiring) and would otherwise
+	// double-fire findings here.
+	runFn := c.Run
+	if tp, ok := c.(core.TwoPhaseCheck); ok {
+		runFn = tp.Plant
+	}
+	found, err := runFn(runCtx, s.client, s.scope, p)
+	if err != nil {
+		// ErrFetchAlreadyFailed means the crawler tried this URL and
+		// got nothing - it already reported the failure once via its
+		// own onError. Re-reporting per check would turn one dead host
+		// into N noisy events with no new signal.
+		if errors.Is(err, core.ErrFetchAlreadyFailed) {
+			return
+		}
+		if s.onError != nil {
+			s.onError(targetURL, c.Name(), err)
+		}
+		return
+	}
+	for _, f := range found {
+		out <- f
+	}
 }
 
 // checkBudget returns the per-check deadline to apply. A check that
@@ -732,35 +819,43 @@ func (s *Scanner) applies(c core.Check, stack *fingerprint.Stack, target string)
 }
 
 // materializePage produces the page.Page artifact a worker dispatches
-// against t. Several code paths:
+// against t and caches it in pageByKey so subsequent tier advances of
+// the same target reuse the artifact rather than re-fetching. The
+// worker is responsible for evicting the cache entry after the final
+// tier (TierActive) completes; materializePage never evicts.
 //
-//   - Crawler-origin target (any Kind): the producer stored the
-//     captured page.Page into pageByKey under t.CanonicalKey() before
-//     pushing; we LoadAndDelete it so the entry does not leak past
-//     dispatch.
-//   - Discovery-origin KindPage or KindParam target: no bridge exists
-//     in the side map, so we synchronously GET t.URL via the same
-//     fetcher the phase-2 detect pass uses. KindParam consumers read
-//     t.Param / t.ParamLocation via core.TargetFrom(ctx) to scope
-//     their probes to the named input; the fetched page.Page gives
-//     them the host artifact (forms, baseline response) they compare
-//     payloads against. Fetch errors report through onError and the
-//     target is skipped.
-//   - Discovery-origin KindEndpoint target: returns a minimal
-//     page.Page with only URL populated. The worker does NOT issue
-//     the declared method on the check's behalf - the method may be
-//     destructive (POST/PUT/DELETE) and the operator did not
-//     authorize the worker to invoke it. Endpoint-consuming checks
-//     read t.Method, t.ContentType via core.TargetFrom(ctx) and
-//     craft their own probes against the URL.
-//   - KindHost: still dropped; the fingerprint tier consumes hosts
-//     internally and per-Host check semantics need their own design
-//     in a follow-up.
+// Cache hit (any Kind): the producer stored the crawler page before
+// the first push, or a prior tier dispatch stored a freshly-fetched
+// discovery page. Return the cached value.
+//
+// Cache miss:
+//
+//   - KindPage / KindParam: GET t.URL via the same fetcher the
+//     phase-2 detect pass uses. KindParam consumers read t.Param /
+//     t.ParamLocation via core.TargetFrom(ctx) to scope their probes
+//     to the named input; the fetched page.Page gives them the host
+//     artifact (forms, baseline response) they compare payloads
+//     against. The fetched page is Stored so tier advances reuse it.
+//     Fetch errors report through onError and the target is skipped.
+//   - KindEndpoint: returns a minimal page.Page with only URL
+//     populated. The worker does NOT issue the declared method on
+//     the check's behalf - the method may be destructive
+//     (POST/PUT/DELETE) and the operator did not authorize the
+//     worker to invoke it. Endpoint-consuming checks read t.Method,
+//     t.ContentType via core.TargetFrom(ctx) and craft their own
+//     probes against the URL.
+//   - KindHost: also returns a minimal page.Page{URL: t.URL}.
+//     KindHost represents a host-scoped scan unit (cert posture,
+//     banner sweep, robots / sitemap discovery, vendor fingerprint
+//     probes) where the check owns its request shape; pre-fetching
+//     the host root would burn a GET the check may not want.
+//     Consumers read t.URL (scheme://host) and craft their own
+//     probes.
 //
 // Returns (page, true) on success or (zero, false) when no page can
 // be produced.
 func (s *Scanner) materializePage(ctx context.Context, t target.Target, pageByKey *sync.Map) (page.Page, bool) {
-	if raw, loaded := pageByKey.LoadAndDelete(t.CanonicalKey()); loaded {
+	if raw, loaded := pageByKey.Load(t.CanonicalKey()); loaded {
 		p, _ := raw.(page.Page)
 		return p, true
 	}
@@ -779,9 +874,12 @@ func (s *Scanner) materializePage(ctx context.Context, t target.Target, pageByKe
 			}
 			return page.Page{}, false
 		}
+		pageByKey.Store(t.CanonicalKey(), p)
 		return p, true
-	case target.KindEndpoint:
-		return page.Page{URL: t.URL}, true
+	case target.KindEndpoint, target.KindHost:
+		p := page.Page{URL: t.URL}
+		pageByKey.Store(t.CanonicalKey(), p)
+		return p, true
 	}
 	return page.Page{}, false
 }
