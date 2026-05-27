@@ -83,6 +83,7 @@ func buildCtxUserdata(L *lua.LState, env *runEnv) *lua.LTable {
 	t.RawSetString("ensure_response", L.NewFunction(ctxEnsureResponse))
 	t.RawSetString("report", L.NewFunction(ctxReport))
 	t.RawSetString("level_at_least", L.NewFunction(ctxLevelAtLeast))
+	t.RawSetString("discover", L.NewFunction(ctxDiscover))
 	return t
 }
 
