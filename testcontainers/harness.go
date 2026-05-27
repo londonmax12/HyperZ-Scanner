@@ -297,10 +297,18 @@ func runScanImpl(t *testing.T, opts scanOpts, extra ...string) []finding {
 		"--log-level", "warn",
 		// Fail-on none: we want every finding, not the operator gate.
 		"--fail-on", "none",
-		// Bound the wall-clock; defaults are conservative for real targets.
+		// Bound the per-request timeout; defaults are conservative for
+		// real targets. The rate / burst are deliberately wide open: the
+		// harness only ever scans loopback Docker containers under a per-
+		// test budget, so the production defaults' polite RPS cap is the
+		// wrong tradeoff here. With 20 RPS the SSRF check (which runs N
+		// param probes in parallel with the rest of the catalog) routinely
+		// drains the bucket past the per-request deadline and logs
+		// "rate: Wait(n=1) would exceed context deadline" noise without
+		// any safety benefit.
 		"--timeout", "15s",
-		"--rate", "20",
-		"--burst", "20",
+		"--rate", "500",
+		"--burst", "500",
 	}
 	if opts.CAFile != "" {
 		args = append(args, "--ca-file", opts.CAFile)
