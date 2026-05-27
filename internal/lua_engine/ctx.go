@@ -73,6 +73,11 @@ func buildCtxUserdata(L *lua.LState, env *runEnv) *lua.LTable {
 		t.RawSetString("smuggling", helpers.smuggling)
 	}
 	t.RawSetString("oob", pushOOBServer(L, env))
+	// config carries the operator-supplied per-check settings bag
+	// from the YAML config file (or an empty table when no bag was
+	// supplied). Always populated so Lua authors can read
+	// `ctx.config.foo` without first nil-checking ctx.config.
+	t.RawSetString("config", pushConfig(L, env.check.settings))
 
 	t.RawSetString("ensure_response", L.NewFunction(ctxEnsureResponse))
 	t.RawSetString("report", L.NewFunction(ctxReport))

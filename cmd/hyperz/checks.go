@@ -18,8 +18,14 @@ import (
 // probes that declared `pollute = true` in their module table). When
 // the operator passes --pollute at scan time we load those too;
 // otherwise the default scan stays read-only.
-func registry(pollute bool) []core.Check {
-	return lua_engine.All(pollute)
+//
+// settings is the operator-supplied per-check config bag map from
+// the YAML config file. Each matched check has its bag attached
+// before the catalog is returned; bags keyed by unknown check names
+// surface via the returned unknownSettings slice so the caller can
+// warn instead of failing the scan.
+func registry(pollute bool, settings map[string]map[string]any) (checks []core.Check, unknownSettings []string) {
+	return lua_engine.All(pollute, settings)
 }
 
 func newChecksCmd() *cobra.Command {
@@ -39,10 +45,12 @@ func newChecksListCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// pollute=true so the catalog shows the full set, including
 			// state-mutating checks; the operator chooses what to enable
-			// at scan time via --pollute.
+			// at scan time via --pollute. The list view does not surface
+			// per-check settings, so the settings map is nil here.
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
 			fmt.Fprintln(tw, "NAME\tLEVEL")
-			for _, c := range registry(true) {
+			catalog, _ := registry(true, nil)
+			for _, c := range catalog {
 				fmt.Fprintf(tw, "%s\t%s\n", c.Name(), c.Level())
 			}
 			return tw.Flush()

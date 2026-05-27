@@ -45,6 +45,14 @@ type LuaCheck struct {
 	isTwoPhase   bool
 	pollute      bool
 
+	// settings is the per-check config bag the operator supplied
+	// via the YAML config's `checks.settings[<name>]` block. The
+	// bridge exposes it inside Lua as `ctx.config`; the engine does
+	// not interpret the values, so the schema each check accepts
+	// stays owned by the .lua file. nil means "no settings", which
+	// the Lua side sees as an empty table.
+	settings map[string]any
+
 	proto  *lua.FunctionProto
 	source string
 
@@ -216,6 +224,16 @@ func readCheckMeta(t *lua.LTable) (checkMeta, error) {
 // catalog uses this to gate state-mutating / disruptive checks behind
 // --pollute so a default scan stays read-only.
 func (c *LuaCheck) Pollute() bool { return c.pollute }
+
+// SetSettings stores the per-check config bag this LuaCheck should
+// expose to Lua as `ctx.config`. Pass nil to clear. The catalog is
+// expected to call this once after load, before any Run / Plant is
+// invoked; nothing synchronizes concurrent SetSettings against a
+// running Run because in practice settings are configured at scan
+// startup and frozen for the duration of the scan.
+func (c *LuaCheck) SetSettings(bag map[string]any) {
+	c.settings = bag
+}
 
 // Drain executes the optional check.drain(ctx) Lua entry point and
 // returns its findings. Drain exists for OOB-using checks (ssti,

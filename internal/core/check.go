@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"path"
 	"sort"
 	"strings"
 	"time"
@@ -672,4 +673,83 @@ func Filter(all []Check, max Level) []Check {
 		}
 	}
 	return out
+}
+
+// FilterByName returns the subset of checks whose Name() matches the
+// enable allowlist and does not match the disable denylist. Both lists
+// are sets of path.Match-style glob patterns, evaluated against the
+// check's Name() string.
+//
+// An empty enable list means "every check passes the allow stage";
+// disable always subtracts from the post-enable set. A pattern that
+// does not match any registered check returns its literal name via
+// UnmatchedPatterns so the caller can warn the operator about a typo
+// without aborting the scan.
+//
+// Pattern syntax is the standard path.Match: '*' matches any run of
+// non-separator characters, '?' matches one, and '[abc]' matches a
+// class. Check names have no separators in practice, so '*' here means
+// "any characters" (e.g. "*-blind" matches every blind variant).
+func FilterByName(all []Check, enable, disable []string) (kept []Check, unmatched []string) {
+	kept = make([]Check, 0, len(all))
+	for _, c := range all {
+		name := c.Name()
+		if len(enable) > 0 && !matchesAny(name, enable) {
+			continue
+		}
+		if matchesAny(name, disable) {
+			continue
+		}
+		kept = append(kept, c)
+	}
+	// Unmatched is computed independently of the kept-set walk above.
+	// If --enable narrows the set before --disable ever sees a check,
+	// the disable patterns must still be evaluated against the full
+	// catalog so a typo there surfaces. Operators expect "pattern
+	// matched no check" to mean "no check in the catalog has this
+	// name", not "no check survived the enable filter".
+	for _, p := range enable {
+		if !patternMatchesAny(all, p) {
+			unmatched = append(unmatched, p)
+		}
+	}
+	for _, p := range disable {
+		if !patternMatchesAny(all, p) {
+			unmatched = append(unmatched, p)
+		}
+	}
+	return kept, unmatched
+}
+
+// matchesAny reports whether name matches any of patterns. path.Match
+// errors (malformed glob) are silently treated as no-match; the caller
+// would have already gotten the same outcome by typing a literal name
+// that does not exist.
+func matchesAny(name string, patterns []string) bool {
+	for _, p := range patterns {
+		ok, err := path.Match(p, name)
+		if err != nil {
+			continue
+		}
+		if ok {
+			return true
+		}
+	}
+	return false
+}
+
+// patternMatchesAny reports whether at least one check in all matches
+// pattern. Linear over the catalog, but the catalog is bounded at low
+// hundreds in practice and this only runs once at scan start.
+func patternMatchesAny(all []Check, pattern string) bool {
+	for _, c := range all {
+		ok, err := path.Match(pattern, c.Name())
+		if err != nil {
+			return false
+		}
+		if ok {
+			return true
+		}
+	}
+	return false
 }

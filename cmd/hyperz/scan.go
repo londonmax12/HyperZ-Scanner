@@ -17,6 +17,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/londonmax12/hyperz/internal/browser"
+	"github.com/londonmax12/hyperz/internal/config"
 	"github.com/londonmax12/hyperz/internal/core"
 	"github.com/londonmax12/hyperz/internal/crawler"
 	"github.com/londonmax12/hyperz/internal/fingerprint"
@@ -99,6 +100,30 @@ type scanConfig struct {
 	failOn         string
 
 	caFile string
+
+	// configPath / profile drive the optional YAML config layer.
+	// When configPath is empty the scan runs purely off CLI flags +
+	// defaults; when it is set, values from the file (and the named
+	// profile overlay, if any) populate every flag the operator did
+	// not explicitly set. CLI flags always take precedence over file
+	// values - see applyConfigDefaults.
+	configPath string
+	profile    string
+
+	// checksEnable / checksDisable are CLI-side glob lists that
+	// narrow the level-filtered catalog. Either may also be set in
+	// the YAML config under `checks.enable` / `checks.disable`; CLI
+	// values replace the file values entirely when both are given
+	// (slice merge would surprise an operator typing --disable=foo
+	// to override a file-wide deny list).
+	checksEnable  []string
+	checksDisable []string
+
+	// checkSettings is populated from the YAML config's
+	// `checks.settings` block when --config is used. There is no
+	// flag equivalent: passing arbitrary nested per-check schemas
+	// through cobra would be more painful than just editing YAML.
+	checkSettings map[string]map[string]any
 }
 
 func newScanCmd() *cobra.Command {
@@ -130,8 +155,16 @@ Modes:
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Allow bare positional URLs as a convenience: `hyperz scan https://a https://b`.
 			cfg.urls = append(cfg.urls, args...)
+			// --config (when supplied) populates every flag the
+			// operator did not explicitly set; CLI flags win on
+			// collisions. Applied before the URL-required check so
+			// a config that sets `url:` works without --url on the
+			// CLI.
+			if err := applyConfigDefaults(cmd, &cfg); err != nil {
+				return err
+			}
 			if len(cfg.urls) == 0 && cfg.urlsFile == "" {
-				return fmt.Errorf("provide --url and/or --urls-file (or a URL as a positional arg)")
+				return fmt.Errorf("provide --url and/or --urls-file (or a URL as a positional arg, or `url:` / `urls_file:` in --config)")
 			}
 			level, err := core.ParseLevel(cfg.mode)
 			if err != nil {
@@ -303,7 +336,170 @@ Modes:
 			"for HTTPS targets. Use when scanning internal services that serve a self-signed "+
 			"or private-CA certificate so probes verify cleanly instead of failing the TLS handshake")
 
+	f.StringVar(&cfg.configPath, "config", "",
+		"path to a YAML config file. Values populate every flag the operator did not "+
+			"explicitly pass; CLI flags always win on collisions. Use --profile to apply "+
+			"a named overlay defined inside the same file.")
+	f.StringVar(&cfg.profile, "profile", "",
+		"name of a profile inside --config to overlay on the base values (e.g. staging, "+
+			"prod-api). Errors if the profile is not defined in the file.")
+	f.StringSliceVar(&cfg.checksEnable, "enable", nil,
+		"narrow the catalog to checks whose name matches one of these glob patterns "+
+			"(repeatable; e.g. --enable 'sqli-*'). Empty means every check the level allows. "+
+			"CLI value replaces `checks.enable` from --config rather than merging.")
+	f.StringSliceVar(&cfg.checksDisable, "disable", nil,
+		"drop checks whose name matches one of these glob patterns (repeatable; "+
+			"e.g. --disable '*-blind'). Applied after --enable. CLI value replaces "+
+			"`checks.disable` from --config rather than merging.")
+
 	return cmd
+}
+
+// applyConfigDefaults loads --config (when supplied) and overlays its
+// values onto cfg for every field the operator did not explicitly set
+// via a CLI flag. cobra's pflag.Changed reports whether a flag was
+// passed, which is the cleanest signal we have: "Changed" means CLI
+// wins, "not Changed" means the config (or default) wins.
+//
+// On --config="" this returns nil immediately; the scanConfig already
+// carries the flag defaults so there is nothing to layer on top of.
+func applyConfigDefaults(cmd *cobra.Command, cfg *scanConfig) error {
+	if cfg.configPath == "" {
+		return nil
+	}
+	file, err := config.Load(cfg.configPath)
+	if err != nil {
+		return fmt.Errorf("--config: %w", err)
+	}
+	resolved, err := file.Resolve(cfg.profile)
+	if err != nil {
+		return fmt.Errorf("--profile: %w", err)
+	}
+
+	f := cmd.Flags()
+	setStr := func(name string, dst *string, src *string) {
+		if src != nil && !f.Changed(name) {
+			*dst = *src
+		}
+	}
+	setInt := func(name string, dst *int, src *int) {
+		if src != nil && !f.Changed(name) {
+			*dst = *src
+		}
+	}
+	setInt64 := func(name string, dst *int64, src *int64) {
+		if src != nil && !f.Changed(name) {
+			*dst = *src
+		}
+	}
+	setBool := func(name string, dst *bool, src *bool) {
+		if src != nil && !f.Changed(name) {
+			*dst = *src
+		}
+	}
+	setFloat := func(name string, dst *float64, src *float64) {
+		if src != nil && !f.Changed(name) {
+			*dst = *src
+		}
+	}
+	setDur := func(name string, dst *time.Duration, src *config.Duration) {
+		if src != nil && !f.Changed(name) {
+			*dst = src.Std()
+		}
+	}
+	setStrSlice := func(name string, dst *[]string, src []string) {
+		// nil-vs-empty: src == nil means "config didn't touch this";
+		// src == [] means "config wants to clear it". Both leave the
+		// CLI value alone when the operator explicitly set the flag.
+		if src != nil && !f.Changed(name) {
+			*dst = src
+		}
+	}
+
+	setDur("timeout", &cfg.timeout, resolved.Timeout)
+	setStr("user-agent", &cfg.userAgent, resolved.UserAgent)
+	setStr("format", &cfg.format, resolved.Format)
+	setStr("mode", &cfg.mode, resolved.Mode)
+	setInt("concurrency", &cfg.concurrency, resolved.Concurrency)
+	setInt("check-concurrency", &cfg.checkConcurrency, resolved.CheckConcurrency)
+	setFloat("rate", &cfg.rps, resolved.Rate)
+	setInt("burst", &cfg.burst, resolved.Burst)
+	setInt64("max-requests", &cfg.maxRequests, resolved.MaxRequests)
+	setFloat("rate-global", &cfg.globalRPS, resolved.GlobalRate)
+	setInt("burst-global", &cfg.globalBurst, resolved.GlobalBurst)
+	setInt("max-retries", &cfg.maxRetries, resolved.MaxRetries)
+	setDur("max-retry-wait", &cfg.maxRetryWait, resolved.MaxRetryWait)
+	setStr("output", &cfg.outputPath, resolved.Output)
+	setStr("log-level", &cfg.logLevel, resolved.LogLevel)
+	setStr("log-format", &cfg.logFormat, resolved.LogFormat)
+	setStr("fail-on", &cfg.failOn, resolved.FailOn)
+	setStr("ca-file", &cfg.caFile, resolved.CAFile)
+	setBool("no-fingerprint", &cfg.noFingerprint, resolved.NoFingerprint)
+	setStrSlice("url", &cfg.urls, resolved.URL)
+	setStr("urls-file", &cfg.urlsFile, resolved.URLsFile)
+
+	if c := resolved.Crawl; c != nil {
+		setBool("crawl", &cfg.crawl, c.Enabled)
+		setInt("max-pages", &cfg.crawlPages, c.MaxPages)
+		setInt("crawl-workers", &cfg.crawlWorkers, c.Workers)
+		setBool("api-discovery", &cfg.apiDiscovery, c.APIDiscovery)
+	}
+	if s := resolved.Scope; s != nil {
+		setStrSlice("scope-host", &cfg.scopeHosts, s.Hosts)
+		setBool("scope-any-host", &cfg.scopeAnyHost, s.AnyHost)
+		setStr("scope-ports", &cfg.scopePorts, s.Ports)
+		setStrSlice("scope-path-include", &cfg.scopePathInclude, s.PathInclude)
+		setStrSlice("scope-path-exclude", &cfg.scopePathExclude, s.PathExclude)
+		setInt("scope-max-depth", &cfg.scopeMaxDepth, s.MaxDepth)
+	}
+	if a := resolved.Auth; a != nil {
+		setStr("auth-basic", &cfg.authBasic, a.Basic)
+		setStr("auth-bearer", &cfg.authBearer, a.Bearer)
+		setStrSlice("header", &cfg.headers, a.Headers)
+		setStrSlice("cookie", &cfg.cookies, a.Cookies)
+		setStr("cookies-file", &cfg.cookiesFile, a.CookiesFile)
+	}
+	if o := resolved.OOB; o != nil {
+		setBool("oob", &cfg.oob, o.Enabled)
+		setStr("oob-listen", &cfg.oobListen, o.Listen)
+		setStr("oob-host", &cfg.oobHost, o.Host)
+		setDur("oob-wait", &cfg.oobWait, o.Wait)
+	}
+	if j := resolved.JS; j != nil {
+		setBool("js", &cfg.js, j.Enabled)
+		setInt("js-concurrent", &cfg.jsConcurrent, j.Concurrent)
+	}
+	if p := resolved.Proxies; p != nil {
+		setStrSlice("proxy", &cfg.proxies, p.URLs)
+		setStr("proxies-file", &cfg.proxiesFile, p.File)
+		setBool("scrape-proxies", &cfg.scrapeProxies, p.Scrape)
+		setStrSlice("proxy-source", &cfg.proxySources, p.Sources)
+		setInt("proxy-stats-top", &cfg.proxyStatsTopN, p.StatsTop)
+	}
+	if s := resolved.Session; s != nil {
+		setStr("session-check-url", &cfg.sessionCheckURL, s.CheckURL)
+		setStr("session-check-pattern", &cfg.sessionCheckPattern, s.Pattern)
+		setInt("session-check-every", &cfg.sessionCheckEvery, s.Every)
+	}
+	if c := resolved.CSRF; c != nil {
+		setStr("csrf-token-source", &cfg.csrfTokenSource, c.TokenSource)
+		setStr("csrf-inject", &cfg.csrfInject, c.Inject)
+		setStr("csrf-header-name", &cfg.csrfHeaderName, c.Header)
+		setStr("csrf-param", &cfg.csrfParam, c.Param)
+	}
+	if b := resolved.Baseline; b != nil {
+		setStr("baseline", &cfg.baselinePath, b.Path)
+		setStr("baseline-format", &cfg.baselineFormat, b.Format)
+	}
+	if c := resolved.Checks; c != nil {
+		setBool("pollute", &cfg.pollute, c.Pollute)
+		setStrSlice("enable", &cfg.checksEnable, c.Enable)
+		setStrSlice("disable", &cfg.checksDisable, c.Disable)
+		if len(c.Settings) > 0 {
+			cfg.checkSettings = c.Settings
+		}
+	}
+	return nil
 }
 
 func runScan(ctx context.Context, cfg *scanConfig, level core.Level) int {
@@ -441,8 +637,27 @@ func runScan(ctx context.Context, cfg *scanConfig, level core.Level) int {
 		defer browserPool.Close()
 	}
 
-	all := registry(cfg.pollute)
+	all, unknownSettings := registry(cfg.pollute, cfg.checkSettings)
+	for _, name := range unknownSettings {
+		// A settings bag keyed by an unknown check name is almost
+		// always a typo; surface it loudly without aborting the
+		// scan so a config written for a newer build still works.
+		log.Warn("config: settings for unknown check ignored", "check", name)
+	}
 	enabled := core.Filter(all, level)
+	if len(cfg.checksEnable) > 0 || len(cfg.checksDisable) > 0 {
+		// Validate patterns against the FULL catalog (including
+		// pollute-gated rules and every level) so an operator who
+		// disables "request-smuggling" while running at passive
+		// without --pollute does not see a phantom "no match" warning
+		// for a check that does exist - just not in this run.
+		fullCatalog, _ := registry(true, nil)
+		_, unmatched := core.FilterByName(fullCatalog, cfg.checksEnable, cfg.checksDisable)
+		for _, pat := range unmatched {
+			log.Warn("config: enable/disable pattern matched no check", "pattern", pat)
+		}
+		enabled, _ = core.FilterByName(enabled, cfg.checksEnable, cfg.checksDisable)
+	}
 	log.Info("scan starting",
 		"scan_level", level.String(),
 		"enabled", len(enabled),
