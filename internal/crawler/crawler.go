@@ -73,6 +73,15 @@ func New(client *httpclient.Client, cfg Config, opts ...Option) *Crawler {
 type item struct {
 	url   string
 	depth int
+	// isSpec marks URLs whose path heuristically looks like an
+	// OpenAPI / Swagger document (well-known suffix or .json / .yaml
+	// extension; see looksLikeSpec). The worker uses this to bracket
+	// the item in the specsInFlight WaitGroup so a sibling worker
+	// emitting a non-spec page can wait for late-arriving recordSpecOps
+	// to land before it calls takeSpecOps. Without this synchronization,
+	// link discovery enqueuing /api/foo just ahead of an OpenAPI parse
+	// that covers /api/foo would lose the operations to the dedupe.
+	isSpec bool
 }
 
 // Crawl visits seeds and any reachable links permitted by the configured
@@ -106,6 +115,15 @@ func (c *Crawler) Crawl(ctx context.Context, seeds []string, out chan<- page.Pag
 		// specs that overlap on a URL; appends merge their contributions.
 		specOpsMu sync.Mutex
 		specOps   = map[string][]page.SpecOp{}
+		// specsInFlight tracks queued + in-process items whose URL path
+		// looks like a spec document. emit() for non-spec pages calls
+		// Wait() so that any recordSpecOps the in-flight spec parses
+		// produce is visible by the time the page's takeSpecOps runs.
+		// Without it, link discovery racing an OpenAPI parse on the
+		// same operation URL would emit the page with empty SpecOps,
+		// and proto-pollution / race-condition / any other check that
+		// reads p.SpecOps would silently see no input surface.
+		specsInFlight sync.WaitGroup
 	)
 
 	closeWork := func() { closeOnce.Do(func() { close(work) }) }
@@ -167,12 +185,39 @@ func (c *Crawler) Crawl(ctx context.Context, seeds []string, out chan<- page.Pag
 		if c.cfg.MaxPages > 0 && queued.Add(1) > int64(c.cfg.MaxPages) {
 			return
 		}
+		// Path-only heuristic: contentType is unknown at submit time, but
+		// the well-known spec paths plus any .json / .yaml extension or
+		// /api-docs / /swagger / /openapi suffix are recognizable from the
+		// URL alone. False positives (a /data.json that turns out not to
+		// be a spec) only cost a single specsInFlight slot; the per-item
+		// teardown decrements it after process() returns regardless.
+		isSpec := looksLikeSpec("", u.Path)
 		pending.Add(1)
+		if isSpec {
+			specsInFlight.Add(1)
+			// Spec items run on their own goroutine instead of the
+			// shared worker pool. If all general workers ended up at
+			// emit() waiting on specsInFlight while the spec items
+			// were still queued for the same pool, we'd deadlock; a
+			// dedicated goroutine per spec guarantees forward progress.
+			// The worker count is irrelevant - well-known spec paths
+			// are bounded (~12 per origin) and link-discovered specs
+			// are rare, so we are not at risk of goroutine blowup.
+			go func() {
+				if ctx.Err() == nil {
+					c.process(ctx, item{url: canonical, depth: depth, isSpec: true},
+						out, submit, recordSpecOps, takeSpecOps, specsInFlight.Wait)
+				}
+				specsInFlight.Done()
+				finish()
+			}()
+			return
+		}
 		go func() {
 			select {
 			case <-ctx.Done():
 				finish()
-			case work <- item{url: canonical, depth: depth}:
+			case work <- item{url: canonical, depth: depth, isSpec: false}:
 			}
 		}()
 	}
@@ -183,7 +228,7 @@ func (c *Crawler) Crawl(ctx context.Context, seeds []string, out chan<- page.Pag
 		go func() {
 			defer wg.Done()
 			for it := range work {
-				c.process(ctx, it, out, submit, recordSpecOps, takeSpecOps)
+				c.process(ctx, it, out, submit, recordSpecOps, takeSpecOps, specsInFlight.Wait)
 				finish()
 			}
 		}()
@@ -226,12 +271,27 @@ func (c *Crawler) process(
 	submit func(string, int),
 	recordSpecOps func(string, []page.SpecOp),
 	takeSpecOps func(string) []page.SpecOp,
+	waitSpecsInFlight func(),
 ) {
 	// emit drops a Page onto out, respecting ctx cancellation. Returns
 	// false if the send was abandoned so the caller can stop processing.
 	// Any spec ops registered for this URL by an earlier spec parse are
 	// attached just before the send so input-fuzzing checks see them.
+	//
+	// For non-spec items, emit first waits for every spec parse the
+	// crawler currently has in flight to complete. A spec parse calls
+	// recordSpecOps before returning, so by the time the WaitGroup
+	// drains, any SpecOps that would cover this URL are guaranteed to
+	// be visible to takeSpecOps. Without the wait, link-discovered
+	// /api/foo could be emitted in the gap between the OpenAPI worker
+	// finishing the fetch and finishing the parse, dropping the
+	// JSON-body sinks the openapi spec was about to declare for it.
+	// Spec items skip the wait so they can't block each other; their
+	// own emit just publishes the spec page itself.
 	emit := func(p page.Page) bool {
+		if !it.isSpec {
+			waitSpecsInFlight()
+		}
 		if ops := takeSpecOps(p.URL); len(ops) > 0 {
 			p.SpecOps = ops
 		}
