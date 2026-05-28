@@ -6,7 +6,6 @@ import (
 	"crypto/tls"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -123,84 +122,6 @@ var (
 		return tls.DialWithDialer(d, "tcp", addr, cfg)
 	}
 )
-
-// evaluateHost runs the per-host probe sequence. Order: baseline first,
-// then HTTP/1.1 variants (CL.TE, TE.CL), then HTTP/2 (H2.CL) if ALPN
-// negotiates h2. The first variant that confirms wins; we don't fan
-// out further once a finding is established, since the per-host
-// recommendation is identical regardless of which parser disagreed.
-func (c *RequestSmuggling) evaluateHost(ctx context.Context, u *url.URL) (*Finding, error) {
-	host, port := splitHostPortDefault(u)
-	addr := net.JoinHostPort(host, port)
-	tlsCfg := &tls.Config{
-		ServerName: host,
-		// Smuggling probes test framing disagreement between the front-
-		// and back-end, which is orthogonal to cert validity. Refusing
-		// to probe self-signed or expired-cert targets would silently
-		// skip most staging environments where smuggling is most worth
-		// catching. The check never sends authenticated traffic or
-		// confidential bytes over the connection, so accepting any
-		// cert here does not change the safety profile of the probe.
-		InsecureSkipVerify: true,
-		// ALPN: offer h2 so the H2.CL probe can run when supported.
-		// We negotiate per-probe rather than once per host because the
-		// HTTP/1.1 probes deliberately reuse no connection.
-		NextProtos: []string{"h2", "http/1.1"},
-	}
-
-	baseline, err := c.measureBaseline(ctx, u, addr, tlsCfg)
-	if err != nil {
-		return nil, fmt.Errorf("baseline: %w", err)
-	}
-
-	// Walk the default catalogue's families. canProbe gates each family
-	// (e.g. H2 needs ALPN h2); a non-empty skip reason short-circuits
-	// every variant in that family. First confirmed variant wins -
-	// per-host recommendation is identical regardless of which parser
-	// pair disagreed.
-	for _, family := range smugglingCatalogues["framing"].families {
-		if family.canProbe(ctx, c, u, addr, tlsCfg) != "" {
-			continue
-		}
-		for _, v := range family.variants {
-			// Each variant can take up to smugglingProbeTimeout twice; bail
-			// the whole loop on cancellation rather than burning the rest
-			// of the budget on a request the caller has given up on.
-			if err := ctx.Err(); err != nil {
-				return nil, err
-			}
-			probe1, p1err := family.probe(ctx, c, u, addr, tlsCfg, v)
-			if p1err != nil {
-				// A transport-layer failure on the probe itself (TLS error,
-				// dial refused, etc.) is not a smuggling signal. Move on
-				// to the next variant rather than failing the whole host.
-				continue
-			}
-			if !c.timingHit(baseline, probe1) {
-				continue
-			}
-			// Wait out any short-lived transient (GC pause, upstream stall)
-			// before the confirmation probe so we are not measuring the
-			// same back-pressure event twice.
-			select {
-			case <-time.After(smugglingConfirmDelay):
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			}
-			// Re-issue to filter jitter. Both attempts must cross the
-			// threshold before we call it.
-			probe2, p2err := family.probe(ctx, c, u, addr, tlsCfg, v)
-			if p2err != nil {
-				continue
-			}
-			if !c.timingHit(baseline, probe2) {
-				continue
-			}
-			return c.buildFinding(u, v, baseline, probe1, probe2), nil
-		}
-	}
-	return nil, nil
-}
 
 // timingHit reports whether the probe latency is anomalous relative to
 // the baseline. We require both the relative threshold (probe lands at
@@ -806,57 +727,3 @@ func readH2Frame(conn net.Conn) (ftype, flags byte, streamID uint32, payload []b
 	return ftype, flags, streamID, payload, nil
 }
 
-// buildFinding assembles the per-host finding once a variant has
-// confirmed on both probe attempts. Severity is High: a confirmed
-// front/back parser disagreement is reliably exploitable for cache
-// poisoning, request hijacking, and security-control bypass, and
-// remediation usually requires a coordinated change on the proxy
-// stack rather than an application patch.
-func (c *RequestSmuggling) buildFinding(u *url.URL, v smugglingVariant, baseline, probe1, probe2 time.Duration) *Finding {
-	target := u.Scheme + "://" + u.Host
-	detail := fmt.Sprintf(
-		"The front-end and back-end disagree on request framing (%s variant: %s). "+
-			"A timing-only probe induced a back-end hang on two independent attempts "+
-			"(baseline %s, probe-1 %s, probe-2 %s); the threshold for confirmation "+
-			"was %s above baseline. An attacker can exploit this disagreement to "+
-			"smuggle a request prefix onto another user's connection, enabling "+
-			"cache poisoning, header injection, session fixation, and bypass of "+
-			"front-end security controls (WAF, auth proxies, ACLs).",
-		v.label, v.description,
-		baseline.Round(time.Millisecond),
-		probe1.Round(time.Millisecond),
-		probe2.Round(time.Millisecond),
-		smugglingHangThreshold,
-	)
-	return &Finding{
-		Check:    "request-smuggling",
-		Target:   target,
-		URL:      target,
-		Severity: SeverityHigh,
-		Title:    fmt.Sprintf("HTTP request smuggling (%s desynchronization)", v.label),
-		Detail:   detail,
-		CWE:      "CWE-444",
-		OWASP:    "A03:2021 Injection",
-		Remediation: "Normalize request framing at the front-end: reject any HTTP/1.1 request that " +
-			"carries both Content-Length and Transfer-Encoding, and reject any Transfer-Encoding " +
-			"value other than \"chunked\". For HTTP/2 front-ends, validate that content-length matches " +
-			"the actual DATA frame size before downgrading to an HTTP/1.1 back-end, or use HTTP/2 end-to-end. " +
-			"Configure both front-end and back-end to use identical HTTP parsers where possible, and " +
-			"disable HTTP keep-alive on the front-to-back connection if the framing risk cannot be " +
-			"eliminated at the parser level.",
-		Evidence: &Evidence{
-			Method:     http.MethodPost,
-			RequestURL: target,
-			Snippet: fmt.Sprintf(
-				"Variant: %s (front=%s, back=%s)\n"+
-					"Baseline: %s\nProbe 1:  %s\nProbe 2:  %s\nThreshold: %s above baseline (or absolute floor)\n",
-				v.label, v.frontEnd, v.backEnd,
-				baseline.Round(time.Millisecond),
-				probe1.Round(time.Millisecond),
-				probe2.Round(time.Millisecond),
-				smugglingHangThreshold,
-			),
-		},
-		DedupeKey: MakeKey("request-smuggling", ScopeHost, target, v.label),
-	}
-}

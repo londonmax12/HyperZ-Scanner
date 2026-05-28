@@ -6,41 +6,6 @@ import (
 	"strings"
 )
 
-// SecretsInBody scans response bodies for high-confidence credential
-// patterns: cloud provider keys, VCS / package registry tokens, payment
-// / messaging service keys, AI provider keys, observability tokens,
-// SaaS tokens, PEM private key blocks, and JWTs. It is the catch-all
-// for "someone shipped a secret in the response" leaks - the canonical
-// case is an inline <script> or a JS bundle that bakes a developer's
-// API key into client-facing markup, but the same patterns show up in
-// JSON error messages, debug dumps, and HTML comments.
-//
-// The check is intentionally conservative: every pattern is anchored on
-// a service-specific prefix or structure (AKIA..., ghp_..., sk-ant-...,
-// -----BEGIN ... PRIVATE KEY-----, eyJ...) so the false-positive rate
-// stays low without any entropy guessing. Matches are redacted before
-// they reach the report so a finding never re-leaks the value it just
-// flagged.
-//
-// Severity scales with how directly the leaked material grants access:
-// long-lived production credentials (cloud keys, GitHub PATs, Stripe
-// live keys, AI provider keys, Shopify admin tokens, private keys) are
-// Critical; scoped service API keys are High; JWTs and DSNs (often
-// legitimate session bearers or write-only telemetry endpoints) are
-// Medium.
-//
-// The catalogue itself lives in secrets_in_body_patterns.go; this file
-// only owns the runtime - body iteration, dedup, content-type filter,
-// redaction.
-type SecretsInBody struct{}
-
-// secretsBodyCap bounds the body we scan. Modern SPA bundles commonly
-// hit 3-5 MiB; an undersized cap silently truncates the tail of a
-// vendor chunk, exactly where a build-time-baked constant is most
-// likely to live. 8 MiB covers the realistic long tail without letting
-// a pathological response pin a worker.
-const secretsBodyCap = 8 << 20
-
 // secretHit groups every position where one specific secret value was
 // found in the body. Multiple occurrences of the same token collapse to
 // one hit (with count incremented) so a JS bundle that bakes a key into

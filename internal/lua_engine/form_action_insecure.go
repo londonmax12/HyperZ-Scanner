@@ -2,9 +2,7 @@ package lua_engine
 
 import (
 	"bytes"
-	"fmt"
 	"net/url"
-	"sort"
 	"strings"
 
 	"golang.org/x/net/html"
@@ -23,8 +21,6 @@ import (
 // credentials stays High because the leak surface is smaller but still
 // real (session cookies, CSRF tokens, free-form PII).
 type FormActionInsecure struct{}
-
-const formActionInsecureBodyCap = 2 << 20
 
 // sensitiveFieldNamePatterns is a lower-cased substring set against which
 // <input name=...> values are matched to detect credential-shaped fields.
@@ -358,93 +354,3 @@ func isSensitiveField(name, typ string) bool {
 	return false
 }
 
-// classifySeverity maps a form's input inventory to a finding severity.
-// Returns the severity and whether a credential-shaped field was the
-// reason for any escalation (used to phrase the finding title / detail).
-func classifySeverity(inputs []formInput) (Severity, bool) {
-	for _, in := range inputs {
-		if in.sensitive {
-			return SeverityCritical, true
-		}
-	}
-	return SeverityHigh, false
-}
-
-// buildTitle composes the finding title from severity context. The phrasing
-// differentiates the credential-bearing case (the worst variant of this bug)
-// from the generic plaintext-submit case, and tags formaction overrides so
-// the reviewer knows the buggy attribute is on a button/input rather than
-// the parent <form>.
-func buildTitle(hasCredentialField, override bool) string {
-	subject := "form"
-	if override {
-		subject = "formaction override"
-	}
-	if hasCredentialField {
-		return subject + " on HTTPS page submits credentials to plaintext http:// (cleartext credential leak)"
-	}
-	return subject + " on HTTPS page submits to plaintext http:// (data integrity / leak risk)"
-}
-
-// buildDetail composes the long-form finding detail. It lists the form's
-// named inputs (with their types) so reviewers can immediately see what
-// data the submit would send in cleartext, and flags GET-method forms
-// because for those even the URL itself - logged in proxies and browser
-// history - carries the submitted values.
-func buildDetail(pageURL string, cand formCandidate, resolved string, inputs []formInput, hasCredentialField bool) string {
-	var b strings.Builder
-	subject := "Form"
-	if cand.override {
-		subject = "Submit-button formaction override"
-	}
-	fmt.Fprintf(&b, "%s on HTTPS page %s has action=%q which resolves to %s (method %s).", subject, pageURL, cand.raw, resolved, cand.method)
-	if cand.method == "GET" {
-		b.WriteString(" Because this is a GET submission, the submitted values are appended to the URL itself, " +
-			"leaving copies in browser history, HTTP referer headers, and any intermediate proxy access logs.")
-	}
-	if hasCredentialField {
-		b.WriteString(" The form carries at least one credential-shaped field (see below); ")
-		b.WriteString("any password / token / payment value the user enters is transmitted in cleartext and ")
-		b.WriteString("trivially recoverable by anyone on the network path despite the page itself being served over TLS.")
-	} else {
-		b.WriteString(" Any data the form submits (session tokens, CSRF tokens, free-form PII) is transmitted in cleartext ")
-		b.WriteString("and recoverable by anyone on the network path despite the page itself being served over TLS.")
-	}
-	if names := formatInputs(inputs); names != "" {
-		fmt.Fprintf(&b, " Form fields: %s.", names)
-	}
-	return b.String()
-}
-
-// formatInputs renders the input inventory as a stable, comma-separated
-// "name (type)" list with the sensitive subset called out. Output is
-// alphabetized so reports diff cleanly across runs even when the HTML
-// parser visits fields in document order.
-func formatInputs(inputs []formInput) string {
-	if len(inputs) == 0 {
-		return ""
-	}
-	pieces := make([]string, 0, len(inputs))
-	for _, in := range inputs {
-		entry := fmt.Sprintf("%s (%s)", in.name, in.typ)
-		if in.sensitive {
-			entry += " [sensitive]"
-		}
-		pieces = append(pieces, entry)
-	}
-	sort.Strings(pieces)
-	return strings.Join(pieces, ", ")
-}
-
-// buildRemediation tailors the fix advice to the form's method. POST forms
-// have a clean "switch the URL" remediation; GET forms additionally need to
-// reconsider whether sensitive data should ride in the URL at all.
-func buildRemediation(method string) string {
-	base := "Change the form's action to an https:// URL on the same origin (or a trusted origin). " +
-		"If the form must POST off-host, ensure the target supports HTTPS and use that URL. " +
-		"Protocol-relative URLs (//host/path) or same-origin relative URLs both inherit the page scheme and are safe on HTTPS pages."
-	if method == "GET" {
-		base += " For forms that handle credentials or other sensitive data, also change the form's method to POST so submitted values are not appended to the request URL where they would persist in browser history and proxy access logs."
-	}
-	return base
-}

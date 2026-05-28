@@ -6,7 +6,6 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -98,13 +97,6 @@ const (
 	// pair, but not so many that the sequential TLS dial phase
 	// dominates the budget.
 	raceParallel = 10
-
-	// raceReadCap is the response body cap per probe. We need the
-	// status line and a few headers for the variance oracle; the
-	// body is hashed for finer-grained variance detection but the
-	// cap stops a misbehaving target from streaming megabytes back
-	// on every probe.
-	raceReadCap = 8 << 10
 
 	// raceMaxBodyBytes bounds how large a request body the check
 	// is willing to assemble. A 1 MiB ceiling is more than enough
@@ -376,45 +368,6 @@ func raceTargetKey(t raceTarget) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// probeTarget runs the single-packet attack against t and emits a
-// finding when the N parallel responses show status-code variance.
-// A baseline request runs first to confirm the target is actually
-// reachable; if the baseline fails the probe is reported as an
-// error rather than emitting a false "no race" verdict.
-func (c *RaceCondition) probeTarget(ctx context.Context, pageURL string, t raceTarget) (*Finding, error) {
-	parsed, err := url.Parse(t.URL)
-	if err != nil {
-		return nil, fmt.Errorf("parse target url: %w", err)
-	}
-	host, port := splitHostPortDefault(parsed)
-	addr := net.JoinHostPort(host, port)
-	tlsCfg := &tls.Config{
-		ServerName:         host,
-		InsecureSkipVerify: true,
-		NextProtos:         []string{"http/1.1"},
-	}
-
-	// Baseline: one sequential request via the same raw transport
-	// so any "the host isn't reachable on h1" failure surfaces here
-	// rather than as a confusing zero-variance result later.
-	baseStatus, _, baseErr := c.sendOne(ctx, parsed, addr, tlsCfg, t)
-	if baseErr != nil {
-		return nil, fmt.Errorf("baseline: %w", baseErr)
-	}
-
-	// Single-packet probe phase. Returns the per-connection results
-	// in arrival order; a partial result set (some connections
-	// failed to dial / write) still flows through the oracle so a
-	// flaky target doesn't suppress an otherwise-strong signal.
-	results := c.probeSinglePacketH1(ctx, parsed, addr, tlsCfg, t)
-
-	verdict := evaluateRaceVerdict(baseStatus, results)
-	if !verdict.Race {
-		return nil, nil
-	}
-	return c.buildRaceFinding(pageURL, t, baseStatus, results, verdict), nil
-}
-
 // raceProbeResult is one connection's outcome from the single-packet
 // fan-out. Status is the HTTP status code (0 when no response was
 // received), BodyHash is a short prefix of the SHA-1 of the response
@@ -537,163 +490,6 @@ collect:
 	close(barrier)
 	wg.Wait()
 	return results
-}
-
-// raceVerdict is the oracle output: Race signals whether status
-// variance was observed, StatusCounts gives the histogram for the
-// finding evidence.
-type raceVerdict struct {
-	Race         bool
-	StatusCounts map[int]int
-	BodyVariety  int
-	Reason       string
-}
-
-// evaluateRaceVerdict inspects N probe results plus the baseline
-// status code and decides whether the variance pattern points at a
-// race. The decision tree:
-//
-//  1. Drop results that errored out before reaching the response
-//     (the variance oracle should only see complete probes; partial
-//     fan-outs are noise here).
-//  2. If fewer than 2 complete probes survived, no verdict.
-//  3. If at least 2 distinct status codes appeared among complete
-//     probes AND at least one is in the 2xx range, RACE: the dedup
-//     logic took different paths.
-//  4. If every probe matched the baseline status exactly, no race
-//     signal (truly idempotent or all-raced - indistinguishable
-//     from the outside, returned as no finding to avoid false
-//     positives).
-func evaluateRaceVerdict(baseStatus int, results []raceProbeResult) raceVerdict {
-	statuses := map[int]int{}
-	bodies := map[string]struct{}{}
-	complete := 0
-	hasSuccess := false
-	for _, r := range results {
-		if r.Err != nil {
-			continue
-		}
-		if r.Status == 0 {
-			continue
-		}
-		complete++
-		statuses[r.Status]++
-		if r.BodyHash != "" {
-			bodies[r.BodyHash] = struct{}{}
-		}
-		if r.Status >= 200 && r.Status < 300 {
-			hasSuccess = true
-		}
-	}
-	v := raceVerdict{StatusCounts: statuses, BodyVariety: len(bodies)}
-	if complete < 2 {
-		v.Reason = fmt.Sprintf("only %d/%d probes completed", complete, len(results))
-		return v
-	}
-	if len(statuses) < 2 {
-		v.Reason = fmt.Sprintf("all %d probes returned status %d (no variance)", complete, firstKey(statuses))
-		return v
-	}
-	if !hasSuccess {
-		v.Reason = "status variance present but no 2xx response in the batch"
-		return v
-	}
-	v.Race = true
-	v.Reason = fmt.Sprintf("baseline status=%d; parallel batch produced %d distinct status codes", baseStatus, len(statuses))
-	return v
-}
-
-// firstKey returns one key from m, used for human-readable reason
-// strings when a single-status batch needs to name that status.
-func firstKey(m map[int]int) int {
-	for k := range m {
-		return k
-	}
-	return 0
-}
-
-func (c *RaceCondition) buildRaceFinding(pageURL string, t raceTarget, baseStatus int, results []raceProbeResult, v raceVerdict) *Finding {
-	statusList := histogramString(v.StatusCounts)
-	failures := 0
-	for _, r := range results {
-		if r.Err != nil {
-			failures++
-		}
-	}
-
-	return &Finding{
-		Check:    "race-condition",
-		Target:   pageURL,
-		URL:      t.URL,
-		Severity: SeverityMedium,
-		Title:    fmt.Sprintf("Race condition signal in %s %s", t.Method, raceTitlePath(t.URL)),
-		Detail: fmt.Sprintf(
-			"The endpoint at %s %s produced different HTTP status codes when %d identical requests were "+
-				"landed within a sub-millisecond arrival window via a single-packet attack (status histogram: %s; "+
-				"baseline status=%d; %d connections failed to participate). A properly idempotent endpoint returns "+
-				"the same status for every duplicate (cached result or a consistent 'already done' error); status "+
-				"variance under parallel pressure is the racy half of a check-then-act split.\n\n"+
-				"Severity is fixed at Medium because the business impact (double-redeem, double-spend, vote stuffing, "+
-				"duplicate account creation) depends on what the endpoint does - confirm impact manually and grade "+
-				"the finding higher when the racy operation moves money or violates a uniqueness constraint.",
-			t.Method, t.URL, len(results)-failures, statusList, baseStatus, failures),
-		Details: []string{
-			fmt.Sprintf("target source: %s", t.Source),
-			fmt.Sprintf("baseline response status: %d", baseStatus),
-			fmt.Sprintf("parallel batch size: %d (failures: %d)", len(results), failures),
-			fmt.Sprintf("status histogram: %s", statusList),
-			fmt.Sprintf("response-body variety: %d distinct response hashes", v.BodyVariety),
-			"reproduce with Burp's Repeater + Send group in parallel (single-packet attack), or any HTTP/2 client that supports parallel streams on one connection",
-		},
-		CWE:   "CWE-362",
-		OWASP: "A04:2021 Insecure Design",
-		Remediation: "Wrap the racy operation in a transaction with a unique constraint or row-level lock so the " +
-			"check-then-act window cannot interleave. For coupon / voucher / one-shot resources, store a 'consumed' " +
-			"marker on the resource and use an atomic compare-and-set ('UPDATE ... WHERE consumed=0' returning the " +
-			"row count) instead of a SELECT-then-UPDATE. For vote / like / follow toggles, enforce uniqueness with " +
-			"a (user_id, target_id) unique index and treat duplicate-key errors as the idempotent 'already done' " +
-			"response. For account-creation flows, lean on the database's uniqueness constraint rather than an " +
-			"application-level SELECT-then-INSERT.",
-		Evidence: &Evidence{
-			Method:     t.Method,
-			RequestURL: t.URL,
-			Status:     baseStatus,
-			Snippet:    statusList,
-		},
-		DedupeKey: MakeKey("race-condition", ScopePage, t.URL, "method:"+t.Method, "body:"+raceTargetKey(t)),
-	}
-}
-
-// histogramString renders a status-count map as a compact "200x7
-// 409x3" string sorted by status code for readability.
-func histogramString(counts map[int]int) string {
-	if len(counts) == 0 {
-		return "(no responses)"
-	}
-	keys := make([]int, 0, len(counts))
-	for k := range counts {
-		keys = append(keys, k)
-	}
-	sort.Ints(keys)
-	parts := make([]string, 0, len(keys))
-	for _, k := range keys {
-		parts = append(parts, fmt.Sprintf("%dx%d", k, counts[k]))
-	}
-	return strings.Join(parts, " ")
-}
-
-// raceTitlePath returns a short path label for the finding title.
-// The full URL appears in Detail; the title only needs enough path
-// to disambiguate one endpoint from another on the same host.
-func raceTitlePath(rawurl string) string {
-	u, err := url.Parse(rawurl)
-	if err != nil {
-		return rawurl
-	}
-	if u.Path == "" {
-		return "/"
-	}
-	return u.Path
 }
 
 // dial picks plain TCP or TLS based on the target's scheme. Mirrors
@@ -828,7 +624,3 @@ func hashPrefix(body []byte) string {
 	return hex.EncodeToString(h[:])[:8]
 }
 
-// errProbeUnreachable surfaces from probeTarget when the baseline
-// could not be established. Unused outside this file but kept
-// distinct so future callers (e.g. a CLI subcommand) can match it.
-var errProbeUnreachable = errors.New("race-condition: target unreachable")

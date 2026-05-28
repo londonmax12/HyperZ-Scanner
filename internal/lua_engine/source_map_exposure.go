@@ -2,62 +2,20 @@ package lua_engine
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"mime"
 	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
-
-	"github.com/londonmax12/hyperz/internal/httpclient"
-	"github.com/londonmax12/hyperz/internal/scope"
 )
 
-// SourceMapExposure detects publicly-served JavaScript / CSS source maps.
-// A source map carries the pre-minified original: file paths (often
-// leaking the project's internal directory layout and naming intent),
-// comments, full variable names, and not-uncommonly literals the
-// minifier preserved verbatim - build-time API endpoints, internal
-// hostnames, and the occasional credential. None of that is meant to
-// reach the public web.
-//
-// Detection chains two signals so the check stays high-confidence:
-//
-//  1. A JS or CSS response advertises a source map. Acceptable forms:
-//     - a SourceMap / X-SourceMap / X-Source-Map response header, or
-//     - a trailing `//# sourceMappingURL=` (JS) / `/*# sourceMappingURL= */`
-//     (CSS) comment near the end of the body. The legacy `//@` /
-//     `/*@` variants emitted by older bundlers are also recognized.
-//
-//  2. The referenced URL fetches successfully AND the body parses as a
-//     Source Map document ("version" + "sources"/"mappings" JSON keys).
-//     A `data:` URI counts as confirmed exposure without a follow-up
-//     fetch: the map is already embedded in the bundle every visitor
-//     downloads.
-//
-// Signal #1 alone (a comment pointing at a 404'd map) is intentionally
-// suppressed: a stale reference is not exposure, and surfacing it would
-// dilute the report.
-type SourceMapExposure struct{}
-
 const (
-	// sourceMapBodyCap bounds the host JS / CSS body we inspect. The
-	// sourceMappingURL marker lives near the end of the file; 4 MiB
-	// covers heavy SPA bundles without letting a misbehaving server
-	// pin the worker on a long stream.
-	sourceMapBodyCap = 4 << 20
-
 	// sourceMapTail is how many trailing bytes of the host body we scan
 	// for the comment marker. Bundlers always emit it on the last line;
 	// 4 KiB is a generous overestimate that tolerates a license footer
 	// or post-build banner pushed in after the bundler ran.
 	sourceMapTail = 4 << 10
-
-	// sourceMapProbeBodyCap bounds the body of the verification GET.
-	// We only need the leading JSON keys to confirm Source Map shape;
-	// 64 KiB clears that header even on large bundles.
-	sourceMapProbeBodyCap = 64 << 10
 )
 
 // JS form: //# sourceMappingURL=<url>  (also //@ on legacy bundlers)
@@ -155,46 +113,6 @@ func resolveSourceMapURL(base, ref string) (string, error) {
 	return res.String(), nil
 }
 
-// probeSourceMap GETs target and reports whether the response confirms a
-// served source map. Returns (false, status, headers, nil) for any
-// 2xx-with-wrong-shape or non-2xx response - that is a non-finding, not
-// an error.
-//
-// Redirects are followed: production .map files often sit behind a CDN
-// redirect (asset host, cache layer, or a same-origin /assets path
-// rewritten to a long-lived bucket URL) and a no-follow probe would
-// silently miss a real exposure. To keep the scope guarantee intact
-// when the chain crosses hosts, the final response URL is re-checked
-// against sc; an out-of-scope final URL is treated as a non-finding
-// rather than a confirmed leak.
-func (c SourceMapExposure) probeSourceMap(ctx context.Context, client *httpclient.Client, sc *scope.Scope, target string) (bool, int, http.Header, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
-	if err != nil {
-		return false, 0, nil, err
-	}
-	resp, err := client.Do(ctx, req)
-	if err != nil {
-		return false, 0, nil, err
-	}
-	defer resp.Body.Close()
-	if sc != nil && resp.Request != nil && resp.Request.URL != nil && !sc.Allows(resp.Request.URL) {
-		// Redirect chain landed off-scope. Drop the finding rather than
-		// silently report on an out-of-scope host.
-		return false, resp.StatusCode, resp.Header, nil
-	}
-	if resp.StatusCode != http.StatusOK {
-		return false, resp.StatusCode, resp.Header, nil
-	}
-	body, err := httpclient.ReadBody(resp, sourceMapProbeBodyCap)
-	if err != nil {
-		return false, resp.StatusCode, resp.Header, err
-	}
-	if !looksLikeSourceMap(body) {
-		return false, resp.StatusCode, resp.Header, nil
-	}
-	return true, resp.StatusCode, resp.Header, nil
-}
-
 // looksLikeSourceMap reports whether body's leading bytes look like a
 // Source Map v3 document. Anchored on the structural keys rather than
 // "version":3 alone so an arbitrary JSON file carrying a version field
@@ -204,49 +122,4 @@ func looksLikeSourceMap(body []byte) bool {
 		return false
 	}
 	return sourceMapSourcesRE.Match(body) || sourceMapMappingsRE.Match(body)
-}
-
-func (c SourceMapExposure) inlineFinding(jsURL, dataURI string, snap snapshot) []Finding {
-	preview := dataURI
-	if len(preview) > 80 {
-		preview = preview[:80] + "..."
-	}
-	return []Finding{{
-		Check:    "source-map-exposure",
-		Target:   jsURL,
-		URL:      jsURL,
-		Severity: SeverityMedium,
-		Title:    "inline source map embedded in deployed bundle",
-		Detail: fmt.Sprintf(
-			"%s carries an inline `sourceMappingURL=data:...` declaration. The full pre-minified source (original file paths, comments, variable names, and any literals the minifier preserved) is base64-embedded in the bundle every visitor downloads.",
-			jsURL,
-		),
-		CWE:   "CWE-540",
-		OWASP: "A05:2021 Security Misconfiguration",
-		Remediation: "Disable inline source maps in the production build (webpack `devtool: 'hidden-source-map'` or false, Vite `build.sourcemap: false` or 'hidden', Rollup `sourcemap: false`, esbuild `--sourcemap=external` paired with deploy-time exclusion). " +
-			"If maps are needed for crash deobfuscation, upload them to a private symbol service (Sentry, Datadog, Bugsnag) at build time and ship the bundle without the embedded copy.",
-		Evidence:  BuildEvidence("GET", jsURL, snap.Status, snap.Headers, "sourceMappingURL: "+preview),
-		DedupeKey: MakeKey("source-map-exposure", ScopeHost, jsURL, "inline:"+jsURL),
-	}}
-}
-
-func (c SourceMapExposure) externalFinding(jsURL, mapURL string, status int, headers http.Header) []Finding {
-	return []Finding{{
-		Check:    "source-map-exposure",
-		Target:   jsURL,
-		URL:      mapURL,
-		Severity: SeverityMedium,
-		Title:    "source map exposed at " + mapURL,
-		Detail: fmt.Sprintf(
-			"%s advertises a source map at %s, and that URL returns a valid Source Map document. The map exposes the pre-minified source: original file paths (revealing internal directory structure and naming intent), comments, full variable names, and any literals the minifier preserved (build-time constants, internal URLs, occasionally credentials).",
-			jsURL, mapURL,
-		),
-		CWE:   "CWE-540",
-		OWASP: "A05:2021 Security Misconfiguration",
-		Remediation: "Stop serving .map files from the public document root. Either build production bundles without source maps (webpack `devtool: false`, Vite `build.sourcemap: false`) or generate them and upload to a private symbol service (Sentry, Datadog) for crash deobfuscation instead of the asset host. " +
-			"If maps must remain on disk for tooling, add a web-server rule that returns 404 for `*.map` requests and strip the `sourceMappingURL` reference from the bundle (webpack/Vite `'hidden-source-map'`). " +
-			"Before remediating, audit the leaked map for hardcoded API keys, internal hostnames, and unreleased feature names; rotate or remove anything sensitive.",
-		Evidence:  BuildEvidence("GET", mapURL, status, headers, ""),
-		DedupeKey: MakeKey("source-map-exposure", ScopeHost, jsURL, "map:"+mapURL),
-	}}
 }

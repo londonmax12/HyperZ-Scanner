@@ -85,11 +85,6 @@ type StoredXSSState struct {
 // plant-shaped token from a re-fetched body in one pass.
 var canaryRe = regexp.MustCompile(`hpzc[0-9a-f]{12}`)
 
-// storedXSSBodyCap bounds the response body we scan for canary
-// echoes and harvest links from. Matches the Go check's cap so
-// truncation behaviour aligns on both impls.
-const storedXSSBodyCap = 256 << 10
-
 // PlantOnce records a first-time plant for the (method, url, loc,
 // name) composite. Returns true when this is the first observation
 // of the sink across all pages in the scan; false when an earlier

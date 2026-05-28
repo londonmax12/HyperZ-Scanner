@@ -1,9 +1,6 @@
 package lua_engine
 
 import (
-	"fmt"
-	"sort"
-
 	lua "github.com/yuin/gopher-lua"
 )
 
@@ -74,17 +71,6 @@ func optString(L *lua.LState, pos int, fallback string) string {
 	return fallback
 }
 
-// tableField returns t[name] as the requested LValue type. The bool
-// reports whether the field was present and matched the type; a typed
-// caller (readCheckMeta, marshalFindings) decides whether absence is
-// an error.
-func tableField(t *lua.LTable, name string) lua.LValue {
-	if t == nil {
-		return lua.LNil
-	}
-	return t.RawGetString(name)
-}
-
 // stringList reads an array-style Lua table at t[name] and returns its
 // values as a Go []string. Non-string entries are coerced via
 // lvalString (so a numeric dedupe part still serializes deterministically);
@@ -119,28 +105,3 @@ func pushStringList(L *lua.LState, strs []string) *lua.LTable {
 	return t
 }
 
-// tableKeys returns the string keys of t in sorted order. Used by
-// the header-flattening path in evidence builders: Lua-side authors
-// may emit headers in any order, but evidence snippets need a
-// deterministic header list.
-func tableKeys(t *lua.LTable) []string {
-	var keys []string
-	t.ForEach(func(k, _ lua.LValue) {
-		if s, ok := k.(lua.LString); ok {
-			keys = append(keys, string(s))
-		}
-	})
-	sort.Strings(keys)
-	return keys
-}
-
-// errMsg formats the error returned by L.PCall (or a panic recovered
-// from a binding) so it carries the check name. Centralized so every
-// error site uses the same shape; an authoring mistake should always
-// say which check produced it.
-func errMsg(checkName string, err error) error {
-	if err == nil {
-		return nil
-	}
-	return fmt.Errorf("%s: %w", checkName, err)
-}

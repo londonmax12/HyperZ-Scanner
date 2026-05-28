@@ -34,10 +34,6 @@ func setEnv(L *lua.LState, env *runEnv) {
 	L.G.Registry.RawSetString(envRegistryKey, ud)
 }
 
-func clearEnv(L *lua.LState) {
-	L.G.Registry.RawSetString(envRegistryKey, lua.LNil)
-}
-
 // currentEnv returns the *runEnv attached to L by the active Run.
 // Returns nil when called outside a Run (e.g. during VM warmup or
 // after a release that cleared the env). Bindings should treat nil

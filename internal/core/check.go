@@ -174,16 +174,6 @@ func RecordExchange(req *http.Request, reqBody []byte, reqTruncated bool, resp *
 	return ex
 }
 
-// statusOf returns resp.StatusCode or 0 when resp is nil. Centralized so
-// active-check probes can build Snapshot / Evidence values without each
-// open-coding the nil guard at every call site.
-func statusOf(resp *http.Response) int {
-	if resp == nil {
-		return 0
-	}
-	return resp.StatusCode
-}
-
 // Finding is the report-facing record of one issue at one location.
 //
 // Target is the scan root the user supplied. URL is where the issue was
