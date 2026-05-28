@@ -8,6 +8,12 @@ import (
 
 	"github.com/londonmax12/hyperz/internal/core"
 	"github.com/londonmax12/hyperz/internal/lua_engine"
+
+	// Side-effect imports: each subpackage's init() registers its
+	// helper tables and stateful evaluators into lua_engine. Without
+	// these, a check that calls ctx.takeover.evaluate(...) (et al)
+	// would see a nil namespace.
+	_ "github.com/londonmax12/hyperz/internal/lua_engine/checks/discovery"
 )
 
 // registry returns every check shipped with hyperz. Detection logic

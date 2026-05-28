@@ -19,11 +19,11 @@ type helperTableBuilder func(*lua.LState) *lua.LTable
 
 var helperTableBuilders = map[string]helperTableBuilder{}
 
-// registerHelperTable installs name -> build at init time. Panics on a
+// RegisterHelperTable installs name -> build at init time. Panics on a
 // duplicate registration so a typo (two api_*.go files reaching for the
 // same Lua-side name) fails loudly at package load rather than after
 // silent overwrite.
-func registerHelperTable(name string, build helperTableBuilder) {
+func RegisterHelperTable(name string, build helperTableBuilder) {
 	if _, dup := helperTableBuilders[name]; dup {
 		panic("lua_engine: duplicate helper table registration for " + name)
 	}

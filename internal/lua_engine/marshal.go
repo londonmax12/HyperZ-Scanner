@@ -12,7 +12,7 @@ import (
 //
 // Use this for free-form metadata (cwe, title, detail). For inputs
 // that must be a string (a header name, a redirect URL), prefer
-// requireString so the bridge surfaces a useful argument-position
+// RequireString so the bridge surfaces a useful argument-position
 // error.
 func lvalString(v lua.LValue) string {
 	if v == nil || v == lua.LNil {
@@ -43,12 +43,12 @@ func lvalBool(v lua.LValue) bool {
 	return lua.LVAsBool(v)
 }
 
-// requireString returns the string value at stack position pos or
+// RequireString returns the string value at stack position pos or
 // raises a Lua argument error. Use at the entry of every Lua-callable
 // Go function that needs a non-empty string argument; the resulting
 // error surfaces in the running check's runErr return rather than as
 // a Go panic.
-func requireString(L *lua.LState, pos int) string {
+func RequireString(L *lua.LState, pos int) string {
 	v := L.Get(pos)
 	if s, ok := v.(lua.LString); ok {
 		return string(s)
@@ -58,7 +58,7 @@ func requireString(L *lua.LState, pos int) string {
 }
 
 // optString returns the string at pos or fallback if pos is absent or
-// nil. Distinct from requireString in that a missing argument is
+// nil. Distinct from RequireString in that a missing argument is
 // allowed - useful for optional flags like dedupe scope overrides.
 func optString(L *lua.LState, pos int, fallback string) string {
 	v := L.Get(pos)

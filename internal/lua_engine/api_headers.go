@@ -66,7 +66,7 @@ func headersFromArg(L *lua.LState) *headersUserData {
 // reads a header sees the same value the equivalent Go check would.
 func headersGet(L *lua.LState) int {
 	h := headersFromArg(L).h
-	name := requireString(L, 2)
+	name := RequireString(L, 2)
 	L.Push(lua.LString(h.Get(name)))
 	return 1
 }
@@ -77,7 +77,7 @@ func headersGet(L *lua.LState) int {
 // is not enough.
 func headersValues(L *lua.LState) int {
 	h := headersFromArg(L).h
-	name := requireString(L, 2)
+	name := RequireString(L, 2)
 	L.Push(pushStringList(L, h.Values(name)))
 	return 1
 }
@@ -105,7 +105,7 @@ func headersNames(L *lua.LState) int {
 // content.
 func headersHas(L *lua.LState) int {
 	h := headersFromArg(L).h
-	name := requireString(L, 2)
+	name := RequireString(L, 2)
 	_, ok := h[http.CanonicalHeaderKey(name)]
 	L.Push(lua.LBool(ok))
 	return 1

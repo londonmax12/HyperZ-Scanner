@@ -55,7 +55,7 @@ func jsonEncode(L *lua.LState) int {
 }
 
 func jsonDecode(L *lua.LState) int {
-	src := requireString(L, 1)
+	src := RequireString(L, 1)
 	var goValue any
 	if err := json.Unmarshal([]byte(src), &goValue); err != nil {
 		L.Push(lua.LNil)
@@ -189,5 +189,5 @@ func stringer(v any) string {
 }
 
 func init() {
-	registerHelperTable("json", buildJSONTable)
+	RegisterHelperTable("json", buildJSONTable)
 }

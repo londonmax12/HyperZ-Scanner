@@ -72,5 +72,5 @@ func cookieTable(L *lua.LState, ck *http.Cookie) *lua.LTable {
 }
 
 func init() {
-	registerHelperTable("cookies", buildCookiesTable)
+	RegisterHelperTable("cookies", buildCookiesTable)
 }

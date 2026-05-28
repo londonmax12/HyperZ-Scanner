@@ -43,7 +43,7 @@ func smugglingScan(L *lua.LState) int {
 	if env == nil {
 		L.RaiseError("ctx.smuggling.scan called outside a check run")
 	}
-	catalogue := requireString(L, 1)
+	catalogue := RequireString(L, 1)
 	rs := env.Check.AuxOrCreate(smugglingCheckKey{}, func() any {
 		return &RequestSmuggling{}
 	}).(*RequestSmuggling)
@@ -99,5 +99,5 @@ func smugglingFactToLua(L *lua.LState, hostFact *SmugglingHostFact) *lua.LTable 
 }
 
 func init() {
-	registerHelperTable("smuggling", buildSmugglingTable)
+	RegisterHelperTable("smuggling", buildSmugglingTable)
 }

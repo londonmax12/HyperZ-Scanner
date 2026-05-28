@@ -132,5 +132,5 @@ func toString(v any) string {
 }
 
 func init() {
-	registerHelperTable("jwt", buildJWTTable)
+	RegisterHelperTable("jwt", buildJWTTable)
 }

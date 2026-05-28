@@ -93,7 +93,7 @@ func tlsHandshake(L *lua.LState) int {
 		L.Push(lua.LString("ctx.tls.handshake called outside a check run"))
 		return 2
 	}
-	addr := requireString(L, 1)
+	addr := RequireString(L, 1)
 	serverName := optString(L, 2, "")
 	if serverName == "" {
 		host, _, err := net.SplitHostPort(addr)
@@ -237,11 +237,11 @@ func tlsCertHasEmbeddedSCT(L *lua.LState) int {
 
 func tlsCertVerifiesHostname(L *lua.LState) int {
 	c := tlsCertFromArg(L).c
-	host := requireString(L, 2)
+	host := RequireString(L, 2)
 	L.Push(lua.LBool(TLSAuditCertVerifyHostname(c, host)))
 	return 1
 }
 
 func init() {
-	registerHelperTable("tls", buildTLSTable)
+	RegisterHelperTable("tls", buildTLSTable)
 }

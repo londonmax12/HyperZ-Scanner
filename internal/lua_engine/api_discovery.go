@@ -73,7 +73,7 @@ func discoveryEntries(L *lua.LState) int {
 	if env == nil {
 		L.RaiseError("ctx.discovery.entries called outside a check run")
 	}
-	catalogue := requireString(L, 1)
+	catalogue := RequireString(L, 1)
 	aggressive := lvalBool(L.Get(2))
 	hostname := optString(L, 3, "")
 	stack := StackFrom(env.Ctx)
@@ -94,7 +94,7 @@ func discoveryFollowUps(L *lua.LState) int {
 	if env == nil {
 		L.RaiseError("ctx.discovery.follow_ups called outside a check run")
 	}
-	catalogue := requireString(L, 1)
+	catalogue := RequireString(L, 1)
 	_ = optString(L, 2, "")
 	hits := readPathSet(L.Get(3))
 	probed := readPathSet(L.Get(4))
@@ -148,12 +148,12 @@ func pushDiscoveryEntry(L *lua.LState, e ContentDiscoveryEntryLua) *lua.LTable {
 }
 
 func discoveryBodyHashPrefix(L *lua.LState) int {
-	L.Push(lua.LString(ContentDiscoveryBodyHashPrefixLua([]byte(requireString(L, 1)))))
+	L.Push(lua.LString(ContentDiscoveryBodyHashPrefixLua([]byte(RequireString(L, 1)))))
 	return 1
 }
 
 func discoveryContentTypeFamily(L *lua.LState) int {
-	L.Push(lua.LString(ContentDiscoveryContentTypeFamilyLua(requireString(L, 1))))
+	L.Push(lua.LString(ContentDiscoveryContentTypeFamilyLua(RequireString(L, 1))))
 	return 1
 }
 
@@ -188,5 +188,5 @@ func discoveryBodyCap(L *lua.LState) int {
 
 
 func init() {
-	registerHelperTable("discovery", buildDiscoveryTable)
+	RegisterHelperTable("discovery", buildDiscoveryTable)
 }

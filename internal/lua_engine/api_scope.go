@@ -66,7 +66,7 @@ func scopeAllows(L *lua.LState) int {
 	if !ok {
 		L.ArgError(1, "expected scope userdata")
 	}
-	raw := requireString(L, 2)
+	raw := RequireString(L, 2)
 	u, err := url.Parse(raw)
 	if err != nil || u.Host == "" {
 		L.Push(lua.LBool(false))

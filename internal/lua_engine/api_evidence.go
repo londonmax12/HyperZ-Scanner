@@ -205,5 +205,5 @@ func evidenceFromArg(v lua.LValue) *Evidence {
 }
 
 func init() {
-	registerHelperTable("evidence", buildEvidenceTable)
+	RegisterHelperTable("evidence", buildEvidenceTable)
 }

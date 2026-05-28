@@ -56,11 +56,11 @@ func dedupeKey(L *lua.LState) int {
 }
 
 func dedupeHostScope(L *lua.LState) int {
-	raw := requireString(L, 1)
+	raw := RequireString(L, 1)
 	L.Push(lua.LString(HostScope(raw)))
 	return 1
 }
 
 func init() {
-	registerHelperTable("dedupe", buildDedupeTable)
+	RegisterHelperTable("dedupe", buildDedupeTable)
 }

@@ -336,17 +336,17 @@ func storedXSSStateFromArg(L *lua.LState, pos int) *StoredXSSState {
 
 func storedXSSStatePlantOnce(L *lua.LState) int {
 	s := storedXSSStateFromArg(L, 1)
-	method := requireString(L, 2)
-	urlStr := requireString(L, 3)
-	loc := requireString(L, 4)
-	name := requireString(L, 5)
+	method := RequireString(L, 2)
+	urlStr := RequireString(L, 3)
+	loc := RequireString(L, 4)
+	name := RequireString(L, 5)
 	L.Push(lua.LBool(s.PlantOnce(method, urlStr, loc, name)))
 	return 1
 }
 
 func storedXSSStateRecordCanary(L *lua.LState) int {
 	s := storedXSSStateFromArg(L, 1)
-	canary := requireString(L, 2)
+	canary := RequireString(L, 2)
 	opts := L.CheckTable(3)
 	s.RecordCanary(
 		canary,
@@ -365,7 +365,7 @@ func storedXSSStateRecordCanary(L *lua.LState) int {
 
 func storedXSSStateLookupCanary(L *lua.LState) int {
 	s := storedXSSStateFromArg(L, 1)
-	token := requireString(L, 2)
+	token := RequireString(L, 2)
 	p := s.LookupCanary(token)
 	if p == nil {
 		L.Push(lua.LNil)
@@ -402,7 +402,7 @@ func storedXSSStateAbsorbDetectURLs(L *lua.LState) int {
 	if env == nil {
 		L.RaiseError("absorb_detect_urls called outside a check run")
 	}
-	plantURL := requireString(L, 2)
+	plantURL := RequireString(L, 2)
 	loc := optString(L, 3, "")
 	body := optString(L, 4, "")
 	harvestPlantResponseURLs(plantURL, loc, []byte(body), func(u string) {
@@ -413,21 +413,21 @@ func storedXSSStateAbsorbDetectURLs(L *lua.LState) int {
 
 func storedXSSStateDetectFireOnce(L *lua.LState) int {
 	s := storedXSSStateFromArg(L, 1)
-	method := requireString(L, 2)
-	urlStr := requireString(L, 3)
-	loc := requireString(L, 4)
-	name := requireString(L, 5)
+	method := RequireString(L, 2)
+	urlStr := RequireString(L, 3)
+	loc := RequireString(L, 4)
+	name := RequireString(L, 5)
 	L.Push(lua.LBool(s.DetectFireOnce(method, urlStr, loc, name)))
 	return 1
 }
 
 func storedXSSStateFindCanaries(L *lua.LState) int {
 	_ = storedXSSStateFromArg(L, 1)
-	body := requireString(L, 2)
+	body := RequireString(L, 2)
 	L.Push(pushStringList(L, canaryRe.FindAllString(body, -1)))
 	return 1
 }
 
 func init() {
-	registerHelperTable("stored_xss", buildStoredXSSTable)
+	RegisterHelperTable("stored_xss", buildStoredXSSTable)
 }

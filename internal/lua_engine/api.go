@@ -19,7 +19,7 @@ import (
 // The helper set is open: each api_*.go registers its builder under a
 // Lua-side namespace name in init(); this function only iterates the
 // registry. To add a new namespace, drop a new api_*.go with a build
-// function and an init() that calls registerHelperTable.
+// function and an init() that calls RegisterHelperTable.
 func bindHyperzAPI(L *lua.LState) {
 	// Constant vocabularies (cms, framework, methods, severity, ...)
 	// live in Lua globals so meta-table fields evaluated at module-load

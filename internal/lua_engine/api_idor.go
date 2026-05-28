@@ -119,8 +119,8 @@ func corpusIngestPage(L *lua.LState) int {
 // name).
 func corpusClassify(L *lua.LState) int {
 	c := corpusFromArg(L, 1)
-	name := requireString(L, 2)
-	value := requireString(L, 3)
+	name := RequireString(L, 2)
+	value := RequireString(L, 3)
 	p := c.c.Classify(name, value)
 	if p == nil {
 		L.Push(lua.LNil)
@@ -142,8 +142,8 @@ func corpusClassify(L *lua.LState) int {
 // Lua caller fails as "no candidates" rather than a Lua-level error.
 func corpusGenerate(L *lua.LState) int {
 	c := corpusFromArg(L, 1)
-	name := requireString(L, 2)
-	seed := requireString(L, 3)
+	name := RequireString(L, 2)
+	seed := RequireString(L, 3)
 	want := L.CheckInt(4)
 	if want <= 0 {
 		L.Push(L.NewTable())
@@ -209,8 +209,8 @@ func idorControlPayload(L *lua.LState) int {
 	if env == nil {
 		L.RaiseError("ctx.idor.control_payload called outside a check run")
 	}
-	name := requireString(L, 1)
-	seed := requireString(L, 2)
+	name := RequireString(L, 1)
+	seed := RequireString(L, 2)
 	c := env.Check.AuxOrCreate(idorCorpusKey{}, func() any {
 		return NewCorpus()
 	}).(*Corpus)
@@ -238,7 +238,7 @@ func idorPathSinks(L *lua.LState) int {
 	if env == nil {
 		L.RaiseError("ctx.idor.path_sinks called outside a check run")
 	}
-	pageURL := requireString(L, 1)
+	pageURL := RequireString(L, 1)
 	u, err := url.Parse(pageURL)
 	if err != nil || u.Path == "" {
 		L.Push(L.NewTable())
@@ -350,5 +350,5 @@ func intToStr(i int) string {
 }
 
 func init() {
-	registerHelperTable("idor", buildIDORTable)
+	RegisterHelperTable("idor", buildIDORTable)
 }

@@ -173,7 +173,7 @@ func oobHits(L *lua.LState) int {
 		L.Push(out)
 		return 1
 	}
-	token := requireString(L, 2)
+	token := RequireString(L, 2)
 	for i, h := range srv.Hits(token) {
 		entry := L.NewTable()
 		entry.RawSetString("method", lua.LString(h.Method))

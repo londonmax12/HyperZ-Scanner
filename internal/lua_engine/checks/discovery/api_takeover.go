@@ -1,7 +1,9 @@
-package lua_engine
+package discovery
 
 import (
 	lua "github.com/yuin/gopher-lua"
+
+	"github.com/londonmax12/hyperz/internal/lua_engine"
 )
 
 // buildTakeoverTable returns the ctx.takeover helper namespace. The
@@ -59,12 +61,12 @@ type takeoverEvaluatorKey struct{}
 // facts is intentional: the rule lives in Lua, the scanner algorithm
 // lives in Go.
 func takeoverEvaluate(L *lua.LState) int {
-	env := CurrentEnv(L)
+	env := lua_engine.CurrentEnv(L)
 	if env == nil {
 		L.RaiseError("ctx.takeover.evaluate called outside a check run")
 	}
-	catalogue := requireString(L, 1)
-	pageURL := requireString(L, 2)
+	catalogue := lua_engine.RequireString(L, 1)
+	pageURL := lua_engine.RequireString(L, 2)
 	eval := env.Check.AuxOrCreate(takeoverEvaluatorKey{}, func() any {
 		return &SubdomainTakeover{}
 	}).(*SubdomainTakeover)
@@ -103,5 +105,5 @@ func takeoverEvaluate(L *lua.LState) int {
 }
 
 func init() {
-	registerHelperTable("takeover", buildTakeoverTable)
+	lua_engine.RegisterHelperTable("takeover", buildTakeoverTable)
 }

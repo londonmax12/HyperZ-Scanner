@@ -148,5 +148,5 @@ func browserVisit(L *lua.LState) int {
 }
 
 func init() {
-	registerHelperTable("browser", buildBrowserTable)
+	RegisterHelperTable("browser", buildBrowserTable)
 }

@@ -37,7 +37,7 @@ func buildHTMLTable(L *lua.LState) *lua.LTable {
 // optional tag-set array, delegates to IterHTMLTags, and
 // converts the result into Lua tables.
 func htmlIterTags(L *lua.LState) int {
-	body := requireString(L, 1)
+	body := RequireString(L, 1)
 	var interesting map[string]bool
 	if tbl, ok := L.Get(2).(*lua.LTable); ok {
 		n := tbl.Len()
@@ -89,8 +89,8 @@ func htmlIterTags(L *lua.LState) int {
 // scheme inspection. The form-action-insecure port consumes this
 // directly and only owns the http:// branch decision + finding shape.
 func htmlScanFormActions(L *lua.LState) int {
-	body := requireString(L, 1)
-	base := requireString(L, 2)
+	body := RequireString(L, 1)
+	base := RequireString(L, 2)
 	cands := ScanFormActions([]byte(body), base)
 	out := L.NewTable()
 	for i, c := range cands {
@@ -120,8 +120,8 @@ func htmlScanFormActions(L *lua.LState) int {
 // shapes; the boolean second return matches the Go helper's ok return
 // so Lua-side `if ok then ... end` reads naturally.
 func htmlResolveRef(L *lua.LState) int {
-	base := requireString(L, 1)
-	ref := requireString(L, 2)
+	base := RequireString(L, 1)
+	ref := RequireString(L, 2)
 	resolved, ok := ResolveURLRef(base, ref)
 	if !ok {
 		L.Push(lua.LNil)
@@ -134,5 +134,5 @@ func htmlResolveRef(L *lua.LState) int {
 }
 
 func init() {
-	registerHelperTable("html", buildHTMLTable)
+	RegisterHelperTable("html", buildHTMLTable)
 }

@@ -108,7 +108,7 @@ func payloadsSSRFGenericParams(L *lua.LState) int {
 }
 
 func payloadsSSRFLooksProxyish(L *lua.LState) int {
-	L.Push(lua.LBool(SSRFLooksProxyish(requireString(L, 1))))
+	L.Push(lua.LBool(SSRFLooksProxyish(RequireString(L, 1))))
 	return 1
 }
 
@@ -144,7 +144,7 @@ func payloadsSSTIOOB(L *lua.LState) int {
 }
 
 func payloadsLocDescriptor(L *lua.LState) int {
-	L.Push(lua.LString(LocDescriptorLua(requireString(L, 1))))
+	L.Push(lua.LString(LocDescriptorLua(RequireString(L, 1))))
 	return 1
 }
 
@@ -242,7 +242,7 @@ func payloadsSSTIExprProbes(L *lua.LState) int {
 }
 
 func payloadsSSTIConfirmProbe(L *lua.LState) int {
-	template := requireString(L, 1)
+	template := RequireString(L, 1)
 	confirmTemplate, confirmExpected := SSTIConfirmProbeLua(template)
 	entry := L.NewTable()
 	entry.RawSetString("template", lua.LString(confirmTemplate))
@@ -293,7 +293,7 @@ func payloadsCachePoisonCanaryPath(L *lua.LState) int {
 // in one place rather than every check re-implementing the gsub pair,
 // so the placeholder vocabulary stays a single source of truth.
 func payloadsRender(L *lua.LState) int {
-	template := requireString(L, 1)
+	template := RequireString(L, 1)
 	token := optString(L, 2, "")
 	sleepSecs := 0
 	if L.GetTop() >= 3 {
@@ -313,5 +313,5 @@ func payloadsRender(L *lua.LState) int {
 }
 
 func init() {
-	registerHelperTable("payloads", buildPayloadsTable)
+	RegisterHelperTable("payloads", buildPayloadsTable)
 }

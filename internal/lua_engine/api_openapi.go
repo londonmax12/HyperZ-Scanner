@@ -53,7 +53,7 @@ func openapiDiscover(L *lua.LState) int {
 	if env == nil {
 		L.RaiseError("ctx.openapi.discover called outside a check run")
 	}
-	pageURL := requireString(L, 1)
+	pageURL := RequireString(L, 1)
 	eval := env.Check.AuxOrCreate(openapiEvaluatorKey{}, func() any {
 		return &OpenAPIAudit{}
 	}).(*OpenAPIAudit)
@@ -82,7 +82,7 @@ func openapiDiscover(L *lua.LState) int {
 // { scheme, raw, redacted } so the Lua port can dedupe / sort / render
 // without touching the redaction helper itself.
 func openapiScanExampleAuthMatches(L *lua.LState) int {
-	body := requireString(L, 1)
+	body := RequireString(L, 1)
 	hits := OpenAPIScanExampleAuthMatches([]byte(body))
 	out := L.NewTable()
 	for i, h := range hits {
@@ -114,7 +114,7 @@ func openapiScanExampleAuthMatches(L *lua.LState) int {
 // port from calling ctx.json.decode on a multi-MiB spec just to read
 // four fields.
 func openapiScanSecurityFacts(L *lua.LState) int {
-	body := requireString(L, 1)
+	body := RequireString(L, 1)
 	facts := OpenAPIScanSecurityFacts([]byte(body))
 	if facts == nil {
 		L.Push(lua.LNil)
@@ -138,5 +138,5 @@ func openapiScanSecurityFacts(L *lua.LState) int {
 }
 
 func init() {
-	registerHelperTable("openapi", buildOpenAPITable)
+	RegisterHelperTable("openapi", buildOpenAPITable)
 }

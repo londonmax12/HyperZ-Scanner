@@ -40,7 +40,7 @@ func buildWSTable(L *lua.LState) *lua.LTable {
 }
 
 func wsDiscoverEndpoints(L *lua.LState) int {
-	L.Push(pushStringList(L, WSAuditDiscoverEndpointsLua([]byte(requireString(L, 1)))))
+	L.Push(pushStringList(L, WSAuditDiscoverEndpointsLua([]byte(RequireString(L, 1)))))
 	return 1
 }
 
@@ -98,5 +98,5 @@ func wsMaxEndpointsPerPageFn(L *lua.LState) int {
 }
 
 func init() {
-	registerHelperTable("ws", buildWSTable)
+	RegisterHelperTable("ws", buildWSTable)
 }

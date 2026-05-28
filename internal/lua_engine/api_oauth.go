@@ -38,8 +38,8 @@ func oauthDiscover(L *lua.LState) int {
 	if env == nil {
 		L.RaiseError("ctx.oauth.discover called outside a check run")
 	}
-	catalogue := requireString(L, 1)
-	pageURL := requireString(L, 2)
+	catalogue := RequireString(L, 1)
+	pageURL := RequireString(L, 2)
 	eval := env.Check.AuxOrCreate(oauthEvaluatorKey{}, func() any {
 		return &OAuthDiscovery{}
 	}).(*OAuthDiscovery)
@@ -75,5 +75,5 @@ func oauthDiscover(L *lua.LState) int {
 }
 
 func init() {
-	registerHelperTable("oauth", buildOAuthTable)
+	RegisterHelperTable("oauth", buildOAuthTable)
 }

@@ -83,5 +83,5 @@ func raceFactsToLua(L *lua.LState, facts []RaceTargetFact) *lua.LTable {
 }
 
 func init() {
-	registerHelperTable("race", buildRaceTable)
+	RegisterHelperTable("race", buildRaceTable)
 }

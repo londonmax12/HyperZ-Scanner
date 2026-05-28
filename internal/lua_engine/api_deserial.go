@@ -53,7 +53,7 @@ func buildDeserialTable(L *lua.LState) *lua.LTable {
 }
 
 func deserialFormats(L *lua.LState) int {
-	catalogue := requireString(L, 1)
+	catalogue := RequireString(L, 1)
 	out := L.NewTable()
 	for i, f := range DeserialFormatListLua(catalogue) {
 		entry := L.NewTable()
@@ -68,33 +68,33 @@ func deserialFormats(L *lua.LState) int {
 }
 
 func deserialClassify(L *lua.LState) int {
-	catalogue := requireString(L, 1)
-	name, label := DeserialClassifyValueLua(catalogue, requireString(L, 2))
+	catalogue := RequireString(L, 1)
+	name, label := DeserialClassifyValueLua(catalogue, RequireString(L, 2))
 	L.Push(lua.LString(name))
 	L.Push(lua.LString(label))
 	return 2
 }
 
 func deserialMatchAll(L *lua.LState) int {
-	catalogue := requireString(L, 1)
-	body := requireString(L, 2)
+	catalogue := RequireString(L, 1)
+	body := RequireString(L, 2)
 	L.Push(pushStringList(L, DeserialMatchAllLua(catalogue, []byte(body))))
 	return 1
 }
 
 func deserialMatchFormat(L *lua.LState) int {
-	catalogue := requireString(L, 1)
-	body := requireString(L, 2)
-	name := requireString(L, 3)
+	catalogue := RequireString(L, 1)
+	body := RequireString(L, 2)
+	name := RequireString(L, 3)
 	L.Push(pushStringList(L, DeserialMatchFormatLua(catalogue, []byte(body), name)))
 	return 1
 }
 
 func deserialBodyMarker(L *lua.LState) int {
-	L.Push(lua.LString(DeserialBodyMarkerLua([]byte(requireString(L, 1)))))
+	L.Push(lua.LString(DeserialBodyMarkerLua([]byte(RequireString(L, 1)))))
 	return 1
 }
 
 func init() {
-	registerHelperTable("deserial", buildDeserialTable)
+	RegisterHelperTable("deserial", buildDeserialTable)
 }

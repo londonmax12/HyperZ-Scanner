@@ -130,7 +130,7 @@ func bodyIsJSONResponse(L *lua.LState) int {
 // the .lua port reads the same GCD-of-indent-widths the Go check uses
 // to detect the json-spaces gadget firing.
 func bodyJSONIndentWidth(L *lua.LState) int {
-	L.Push(lua.LNumber(ProtoPollutionJSONIndentWidth([]byte(requireString(L, 1)))))
+	L.Push(lua.LNumber(ProtoPollutionJSONIndentWidth([]byte(RequireString(L, 1)))))
 	return 1
 }
 
@@ -138,7 +138,7 @@ func bodyJSONIndentWidth(L *lua.LState) int {
 // appears in body (case-insensitive). The .lua port subtracts the
 // baseline set itself.
 func bodyXXEErrorPatterns(L *lua.LState) int {
-	L.Push(pushStringList(L, XXEErrorPatternsLua([]byte(requireString(L, 1)))))
+	L.Push(pushStringList(L, XXEErrorPatternsLua([]byte(RequireString(L, 1)))))
 	return 1
 }
 
@@ -146,7 +146,7 @@ func bodyXXEErrorPatterns(L *lua.LState) int {
 // in body (case-sensitive). Used by the .lua xxe port's file-
 // disclosure phase as a fallback when the plaintext path doesn't hit.
 func bodyXXEBase64Markers(L *lua.LState) int {
-	L.Push(pushStringList(L, XXEBase64MarkersLua([]byte(requireString(L, 1)))))
+	L.Push(pushStringList(L, XXEBase64MarkersLua([]byte(RequireString(L, 1)))))
 	return 1
 }
 
@@ -164,7 +164,7 @@ func bodyStatusText(L *lua.LState) int {
 // the Go check gate on the exact same content-type rule (parameter-
 // stripping + case-insensitive compare against text/event-stream).
 func bodyIsEventStream(L *lua.LState) int {
-	L.Push(lua.LBool(IsEventStreamContentType(requireString(L, 1))))
+	L.Push(lua.LBool(IsEventStreamContentType(RequireString(L, 1))))
 	return 1
 }
 
@@ -174,7 +174,7 @@ func bodyIsEventStream(L *lua.LState) int {
 // gopher-lua's pattern library cannot express it; the Lua port resolves
 // each capture against a base URL and dedupes/sorts itself.
 func bodyFindEventSourceLiterals(L *lua.LState) int {
-	L.Push(pushStringList(L, FindEventSourceLiteralsLua([]byte(requireString(L, 1)))))
+	L.Push(pushStringList(L, FindEventSourceLiteralsLua([]byte(RequireString(L, 1)))))
 	return 1
 }
 
@@ -183,7 +183,7 @@ func bodyFindEventSourceLiterals(L *lua.LState) int {
 // by the ssrf Lua port to discriminate "the server fetched the canary
 // and the library leaked the error" from a clean response.
 func bodySSRFMatchesError(L *lua.LState) int {
-	L.Push(lua.LString(SSRFMatchesError([]byte(requireString(L, 1)))))
+	L.Push(lua.LString(SSRFMatchesError([]byte(RequireString(L, 1)))))
 	return 1
 }
 
@@ -215,8 +215,8 @@ func bodyCmdInjectionMargin(L *lua.LState) int {
 // future tightening (new sink shapes, false-positive fixes) only
 // needs to land once.
 func bodyFindRedirectSink(L *lua.LState) int {
-	body := requireString(L, 1)
-	host := requireString(L, 2)
+	body := RequireString(L, 1)
+	host := RequireString(L, 2)
 	target, kind := FindBodyRedirectSink([]byte(body), host)
 	L.Push(lua.LString(target))
 	L.Push(lua.LString(kind))
@@ -224,12 +224,12 @@ func bodyFindRedirectSink(L *lua.LState) int {
 }
 
 func bodyIsHTMLCT(L *lua.LState) int {
-	L.Push(lua.LBool(IsHTMLContentType(requireString(L, 1))))
+	L.Push(lua.LBool(IsHTMLContentType(RequireString(L, 1))))
 	return 1
 }
 
 func bodyIsScannableCT(L *lua.LState) int {
-	L.Push(lua.LBool(IsScannableContentType(requireString(L, 1))))
+	L.Push(lua.LBool(IsScannableContentType(RequireString(L, 1))))
 	return 1
 }
 
@@ -237,7 +237,7 @@ func bodyIsScannableCT(L *lua.LState) int {
 // already-sorted hit list. The pre-redacted value is stamped on each
 // entry so the Lua port does not have to call redact_secret again.
 func bodyFindSecrets(L *lua.LState) int {
-	body := requireString(L, 1)
+	body := RequireString(L, 1)
 	hits := ScanSecretsInBody([]byte(body))
 	out := L.NewTable()
 	for i, h := range hits {
@@ -255,7 +255,7 @@ func bodyFindSecrets(L *lua.LState) int {
 }
 
 func bodyRedactSecret(L *lua.LState) int {
-	L.Push(lua.LString(RedactSecret(requireString(L, 1))))
+	L.Push(lua.LString(RedactSecret(RequireString(L, 1))))
 	return 1
 }
 
@@ -264,7 +264,7 @@ func bodyRedactSecret(L *lua.LState) int {
 // the structural-error array carries the spec-fatal duplicates the Go
 // parser surfaces separately.
 func bodyParseHSTS(L *lua.LState) int {
-	parsed := ParseHSTSHeader(requireString(L, 1))
+	parsed := ParseHSTSHeader(RequireString(L, 1))
 	out := L.NewTable()
 	dirs := L.NewTable()
 	for k, v := range parsed.Directives {
@@ -284,7 +284,7 @@ func bodyParseHSTS(L *lua.LState) int {
 }
 
 func bodySourceMapKind(L *lua.LState) int {
-	kind, ok := SourceMapKind(requireString(L, 1))
+	kind, ok := SourceMapKind(RequireString(L, 1))
 	L.Push(lua.LString(kind))
 	L.Push(lua.LBool(ok))
 	return 2
@@ -300,14 +300,14 @@ func bodyFindSourceMapRef(L *lua.LState) int {
 	if ok {
 		h = hud.h
 	}
-	body := requireString(L, 2)
-	kind := requireString(L, 3)
+	body := RequireString(L, 2)
+	kind := RequireString(L, 3)
 	L.Push(lua.LString(FindSourceMapReference(h, []byte(body), kind)))
 	return 1
 }
 
 func bodyLooksLikeSourceMap(L *lua.LState) int {
-	L.Push(lua.LBool(LooksLikeSourceMap([]byte(requireString(L, 1)))))
+	L.Push(lua.LBool(LooksLikeSourceMap([]byte(RequireString(L, 1)))))
 	return 1
 }
 
@@ -317,7 +317,7 @@ func bodyLooksLikeSourceMap(L *lua.LState) int {
 // but no vulnerable version row matched; the Lua port discriminates
 // info vs medium severity on `#vulnerabilities == 0`.
 func bodyScanKnownJSLibs(L *lua.LState) int {
-	body := requireString(L, 1)
+	body := RequireString(L, 1)
 	hits := ScanScriptTagsForKnownJSLibraries([]byte(body))
 	out := L.NewTable()
 	for i, h := range hits {
@@ -364,7 +364,7 @@ func bodyAnalyzeCSP(L *lua.LState) int {
 // style-src / base-uri off a raw CSP header value the same way the
 // csp-bypass Go check does internally.
 func bodyCSPParseDirectives(L *lua.LState) int {
-	dirs := CSPParseDirectivesLua(requireString(L, 1))
+	dirs := CSPParseDirectivesLua(RequireString(L, 1))
 	out := L.NewTable()
 	for name, sources := range dirs {
 		out.RawSetString(name, pushStringList(L, sources))
@@ -427,7 +427,7 @@ func bodyCSPBaseURIHijackable(L *lua.LState) int {
 // quote the matched token in finding detail.
 func bodyCSPScriptSrcAllowsHost(L *lua.LState) int {
 	srcs := readStringList(L.Get(1))
-	host := requireString(L, 2)
+	host := RequireString(L, 2)
 	matched, ok := CSPScriptSrcAllowsHostLua(srcs, host)
 	L.Push(lua.LString(matched))
 	L.Push(lua.LBool(ok))
@@ -439,9 +439,9 @@ func bodyCSPScriptSrcAllowsHost(L *lua.LState) int {
 // canary-followed-by-paren) lives in one place so this remains a thin
 // forwarder.
 func bodyCSPConfirmsJSONP(L *lua.LState) int {
-	ct := requireString(L, 1)
-	body := requireString(L, 2)
-	canary := requireString(L, 3)
+	ct := RequireString(L, 1)
+	body := RequireString(L, 2)
+	canary := RequireString(L, 3)
 	L.Push(lua.LBool(CSPConfirmsJSONPLua(ct, []byte(body), canary)))
 	return 1
 }
@@ -450,7 +450,7 @@ func bodyCSPConfirmsJSONP(L *lua.LState) int {
 // values found in body, in sorted order. Skips absolute (scheme:) and
 // protocol-relative (//) srcs - those are not affected by base-uri.
 func bodyCSPRelativeScriptSrcs(L *lua.LState) int {
-	L.Push(pushStringList(L, CSPBypassRelativeScriptSrcsLua([]byte(requireString(L, 1)))))
+	L.Push(pushStringList(L, CSPBypassRelativeScriptSrcsLua([]byte(RequireString(L, 1)))))
 	return 1
 }
 
@@ -487,7 +487,7 @@ func bodyCSPBypassBodyCap(L *lua.LState) int {
 // (200-byte truncation + cap-reached suffix). Centralised so Go and
 // Lua produce byte-identical Evidence.Snippet on the same probe body.
 func bodyCSPBypassJSONPSnippet(L *lua.LState) int {
-	body := requireString(L, 1)
+	body := RequireString(L, 1)
 	truncated := lvalBool(L.Get(2))
 	L.Push(lua.LString(JSONPEvidenceSnippetLua([]byte(body), truncated)))
 	return 1
@@ -497,7 +497,7 @@ func bodyCSPBypassJSONPSnippet(L *lua.LState) int {
 // that appear in body but did not appear in baseline. Both args are
 // strings; nil/missing slots collapse to empty.
 func bodySQLiErrorNewMatches(L *lua.LState) int {
-	body := requireString(L, 1)
+	body := RequireString(L, 1)
 	baseline := ""
 	if L.GetTop() >= 2 {
 		baseline = lvalString(L.Get(2))
@@ -525,7 +525,7 @@ func bodySQLiErrorPayloads(L *lua.LState) int {
 // the Lua port can baseline-then-probe in the same shape it uses for
 // the sister check.
 func bodyTraversalNewMarkers(L *lua.LState) int {
-	body := requireString(L, 1)
+	body := RequireString(L, 1)
 	baseline := ""
 	if L.GetTop() >= 2 {
 		baseline = lvalString(L.Get(2))
@@ -535,7 +535,7 @@ func bodyTraversalNewMarkers(L *lua.LState) int {
 }
 
 func bodyTraversalMarkers(L *lua.LState) int {
-	L.Push(pushStringList(L, TraversalMarkerHits([]byte(requireString(L, 1)))))
+	L.Push(pushStringList(L, TraversalMarkerHits([]byte(RequireString(L, 1)))))
 	return 1
 }
 
@@ -545,7 +545,7 @@ func bodyTraversalMarkers(L *lua.LState) int {
 // line because the per-check helpers in checks/lua_helpers.go own the
 // catalogue + matcher; the bridge surface stays a pure forwarder.
 func bodyLDAPErrorNewMatches(L *lua.LState) int {
-	body := requireString(L, 1)
+	body := RequireString(L, 1)
 	baseline := ""
 	if L.GetTop() >= 2 {
 		baseline = lvalString(L.Get(2))
@@ -555,7 +555,7 @@ func bodyLDAPErrorNewMatches(L *lua.LState) int {
 }
 
 func bodyMongoErrorNewMatches(L *lua.LState) int {
-	body := requireString(L, 1)
+	body := RequireString(L, 1)
 	baseline := ""
 	if L.GetTop() >= 2 {
 		baseline = lvalString(L.Get(2))
@@ -565,7 +565,7 @@ func bodyMongoErrorNewMatches(L *lua.LState) int {
 }
 
 func bodySSTIErrorNewMatches(L *lua.LState) int {
-	body := requireString(L, 1)
+	body := RequireString(L, 1)
 	baseline := ""
 	if L.GetTop() >= 2 {
 		baseline = lvalString(L.Get(2))
@@ -579,7 +579,7 @@ func bodySSTIErrorNewMatches(L *lua.LState) int {
 // list) matches the cmd-injection-blind check's verdict shape, which
 // only records one error string per finding.
 func bodyCmdErrorFirstMatch(L *lua.LState) int {
-	body := requireString(L, 1)
+	body := RequireString(L, 1)
 	L.Push(lua.LString(CmdErrorFirstMatch([]byte(body))))
 	return 1
 }
@@ -590,14 +590,14 @@ func bodyCmdErrorFirstMatch(L *lua.LState) int {
 // matched Context (so a Lua-side comparator does not need to know the
 // numeric enum). Header is "" for body matches.
 func bodyFindReflections(L *lua.LState) int {
-	body := requireString(L, 1)
+	body := RequireString(L, 1)
 	var headers http.Header
 	if ud, ok := L.Get(2).(*lua.LUserData); ok && ud != nil {
 		if h, ok := ud.Value.(*headersUserData); ok {
 			headers = h.h
 		}
 	}
-	token := requireString(L, 3)
+	token := RequireString(L, 3)
 	hits := FindReflectionsLua([]byte(body), headers, token)
 	out := L.NewTable()
 	for i, r := range hits {
@@ -644,13 +644,13 @@ func bodyPathSinkCandidate(L *lua.LState) int {
 }
 
 func bodyLDAPiSinkProbable(L *lua.LState) int {
-	loc := requireString(L, 1)
+	loc := RequireString(L, 1)
 	L.Push(lua.LBool(LDAPiSinkProbable(loc)))
 	return 1
 }
 
 func bodyNoSQLiSinkProbable(L *lua.LState) int {
-	loc := requireString(L, 1)
+	loc := RequireString(L, 1)
 	L.Push(lua.LBool(NoSQLiSinkProbable(loc)))
 	return 1
 }
@@ -665,8 +665,8 @@ func bodyNoSQLiBuildOperatorRequest(L *lua.LState) int {
 	if !ok {
 		L.ArgError(1, "expected sink userdata")
 	}
-	opName := requireString(L, 2)
-	opValue := requireString(L, 3)
+	opName := RequireString(L, 2)
+	opValue := RequireString(L, 3)
 	env := CurrentEnv(L)
 	if env == nil {
 		L.RaiseError("ctx.body.nosqli_build_operator_request called outside a check run")
@@ -700,14 +700,14 @@ func bodyCachePoisonHasCacheHint(L *lua.LState) int {
 // are needle, headers userdata, body string, baseline body string;
 // returns (location_string, ok_bool).
 func bodyCachePoisonFindReflection(L *lua.LState) int {
-	needle := requireString(L, 1)
+	needle := RequireString(L, 1)
 	var headers http.Header
 	if ud, ok := L.Get(2).(*lua.LUserData); ok && ud != nil {
 		if hu, ok := ud.Value.(*headersUserData); ok {
 			headers = hu.h
 		}
 	}
-	body := requireString(L, 3)
+	body := RequireString(L, 3)
 	baseline := optString(L, 4, "")
 	where, ok := CachePoisonFindReflection(needle, headers, []byte(body), []byte(baseline))
 	L.Push(lua.LString(where))
@@ -720,7 +720,7 @@ func bodyCachePoisonFindReflection(L *lua.LState) int {
 // length divergence).
 func bodyCachePoisonResponseDiverged(L *lua.LState) int {
 	status := L.CheckInt(1)
-	body := requireString(L, 2)
+	body := RequireString(L, 2)
 	baseStatus := L.CheckInt(3)
 	baseBody := optString(L, 4, "")
 	L.Push(lua.LBool(CachePoisonResponseDiverged(status, []byte(body), baseStatus, []byte(baseBody))))
@@ -728,24 +728,24 @@ func bodyCachePoisonResponseDiverged(L *lua.LState) int {
 }
 
 func bodyCachePoisonBodiesMatch(L *lua.LState) int {
-	deceived := requireString(L, 1)
-	baseline := requireString(L, 2)
+	deceived := RequireString(L, 1)
+	baseline := RequireString(L, 2)
 	L.Push(lua.LBool(CachePoisonBodiesMatch([]byte(deceived), []byte(baseline))))
 	return 1
 }
 
 func bodyCachePoisonCCForbidsStorage(L *lua.LState) int {
-	L.Push(lua.LBool(CachePoisonCacheControlForbidsStorage(requireString(L, 1))))
+	L.Push(lua.LBool(CachePoisonCacheControlForbidsStorage(RequireString(L, 1))))
 	return 1
 }
 
 func bodyCachePoisonIsAuthLikelyPath(L *lua.LState) int {
-	L.Push(lua.LBool(CachePoisonIsAuthLikelyPath(requireString(L, 1))))
+	L.Push(lua.LBool(CachePoisonIsAuthLikelyPath(RequireString(L, 1))))
 	return 1
 }
 
 func bodyCachePoisonDeceptionURL(L *lua.LState) int {
-	deceived, err := CachePoisonDeceptionURL(requireString(L, 1))
+	deceived, err := CachePoisonDeceptionURL(RequireString(L, 1))
 	if err != nil {
 		L.Push(lua.LString(""))
 		L.Push(lua.LString(err.Error()))
@@ -756,7 +756,7 @@ func bodyCachePoisonDeceptionURL(L *lua.LState) int {
 }
 
 func bodyCachePoisonParseVary(L *lua.LState) int {
-	L.Push(pushStringList(L, CachePoisonParseVary(requireString(L, 1))))
+	L.Push(pushStringList(L, CachePoisonParseVary(RequireString(L, 1))))
 	return 1
 }
 
@@ -767,7 +767,7 @@ func bodyCachePoisonParseVary(L *lua.LState) int {
 // will already have rejected via url.parse, so the err return is a
 // belt-and-braces signal rather than an expected branch.
 func bodyCachePoisonProbeURL(L *lua.LState) int {
-	out, err := CachePoisonProbeURL(requireString(L, 1))
+	out, err := CachePoisonProbeURL(RequireString(L, 1))
 	if err != nil {
 		L.Push(lua.LString(""))
 		L.Push(lua.LString(err.Error()))
@@ -800,5 +800,5 @@ func readStringList(v lua.LValue) []string {
 }
 
 func init() {
-	registerHelperTable("body", buildBodyTable)
+	RegisterHelperTable("body", buildBodyTable)
 }

@@ -42,8 +42,8 @@ func buildURLTable(L *lua.LState) *lua.LTable {
 // checks call this to gate same-organization probing when the
 // operator has not pinned a scope host allowlist.
 func urlSameSite(L *lua.LState) int {
-	a := requireString(L, 1)
-	b := requireString(L, 2)
+	a := RequireString(L, 1)
+	b := RequireString(L, 2)
 	L.Push(lua.LBool(scope.SameSite(a, b)))
 	return 1
 }
@@ -52,9 +52,9 @@ func urlSameSite(L *lua.LState) int {
 // csp-bypass nonce-reuse probe builds the same cache-busting URL the
 // Go check does. Returns (resolved_string, err_string).
 func urlAppendQueryParam(L *lua.LState) int {
-	rawurl := requireString(L, 1)
-	key := requireString(L, 2)
-	val := requireString(L, 3)
+	rawurl := RequireString(L, 1)
+	key := RequireString(L, 2)
+	val := RequireString(L, 3)
 	out, err := CSPBypassAppendQueryParamLua(rawurl, key, val)
 	if err != nil {
 		L.Push(lua.LString(""))
@@ -69,7 +69,7 @@ func urlAppendQueryParam(L *lua.LState) int {
 // Lua-side scanners that walk script src attrs gate on this to drop
 // hijack-immune entries (absolute or "//host/...") from candidate lists.
 func urlIsAbsoluteOrProtocolRelative(L *lua.LState) int {
-	L.Push(lua.LBool(CSPIsAbsoluteOrProtocolRelativeLua(requireString(L, 1))))
+	L.Push(lua.LBool(CSPIsAbsoluteOrProtocolRelativeLua(RequireString(L, 1))))
 	return 1
 }
 
@@ -119,8 +119,8 @@ func urlEncodeValues(L *lua.LState) int {
 // URLs (e.g. EventSource('/stream')) up to absolute form before they
 // route through ctx.client.
 func urlResolve(L *lua.LState) int {
-	baseRaw := requireString(L, 1)
-	refRaw := requireString(L, 2)
+	baseRaw := RequireString(L, 1)
+	refRaw := RequireString(L, 2)
 	base, err := url.Parse(baseRaw)
 	if err != nil {
 		L.Push(lua.LString(""))
@@ -141,7 +141,7 @@ func urlResolve(L *lua.LState) int {
 // fields and discovering they are all empty - this matches the
 // idiomatic shape of every Go check that calls url.Parse.
 func urlParse(L *lua.LState) int {
-	raw := requireString(L, 1)
+	raw := RequireString(L, 1)
 	u, err := url.Parse(raw)
 	if err != nil {
 		L.Push(lua.LNil)
@@ -166,7 +166,7 @@ func urlParse(L *lua.LState) int {
 // parse() when the author only wants the host - skipping the full
 // table build keeps hot loops (per-page host checks) lean.
 func urlHost(L *lua.LState) int {
-	raw := requireString(L, 1)
+	raw := RequireString(L, 1)
 	u, err := url.Parse(raw)
 	if err != nil {
 		L.Push(lua.LString(""))
@@ -177,7 +177,7 @@ func urlHost(L *lua.LState) int {
 }
 
 func urlPath(L *lua.LState) int {
-	raw := requireString(L, 1)
+	raw := RequireString(L, 1)
 	u, err := url.Parse(raw)
 	if err != nil {
 		L.Push(lua.LString(""))
@@ -188,7 +188,7 @@ func urlPath(L *lua.LState) int {
 }
 
 func urlScheme(L *lua.LState) int {
-	raw := requireString(L, 1)
+	raw := RequireString(L, 1)
 	u, err := url.Parse(raw)
 	if err != nil {
 		L.Push(lua.LString(""))
@@ -205,8 +205,8 @@ func urlScheme(L *lua.LState) int {
 // original, including the backslash-collapse / multi-slash-collapse
 // passes that catch real-world bypass variants.
 func urlLocationTargetsHost(L *lua.LState) int {
-	s := requireString(L, 1)
-	host := requireString(L, 2)
+	s := RequireString(L, 1)
+	host := RequireString(L, 2)
 	L.Push(lua.LBool(LocationTargetsHost(s, host)))
 	return 1
 }
@@ -218,7 +218,7 @@ func urlLocationTargetsHost(L *lua.LState) int {
 // keyword list - kept in one place so the gating heuristic doesn't
 // drift between the Go and Lua authoring paths.
 func urlLooksRedirectish(L *lua.LState) int {
-	path := requireString(L, 1)
+	path := RequireString(L, 1)
 	L.Push(lua.LBool(LooksRedirectish(path)))
 	return 1
 }
@@ -242,7 +242,7 @@ func urlIsRedirectStatus(L *lua.LState) int {
 // http.Header.Get / Values and keeps the common case (single-value
 // query) ergonomic.
 func urlQuery(L *lua.LState) int {
-	raw := requireString(L, 1)
+	raw := RequireString(L, 1)
 	u, err := url.Parse(raw)
 	if err != nil {
 		L.Push(L.NewTable())
@@ -262,5 +262,5 @@ func urlQuery(L *lua.LState) int {
 }
 
 func init() {
-	registerHelperTable("url", buildURLTable)
+	RegisterHelperTable("url", buildURLTable)
 }

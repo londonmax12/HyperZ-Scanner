@@ -104,7 +104,7 @@ func ctxReport(L *lua.LState) int {
 	if env == nil {
 		L.RaiseError("ctx:report called outside a check run")
 	}
-	msg := requireString(L, 2)
+	msg := RequireString(L, 2)
 	Report(env.Ctx, errors.New(msg))
 	return 0
 }
@@ -119,7 +119,7 @@ func ctxLevelAtLeast(L *lua.LState) int {
 	if env == nil {
 		L.RaiseError("ctx:level_at_least called outside a check run")
 	}
-	want, err := ParseLevel(requireString(L, 2))
+	want, err := ParseLevel(RequireString(L, 2))
 	if err != nil {
 		L.ArgError(2, err.Error())
 	}

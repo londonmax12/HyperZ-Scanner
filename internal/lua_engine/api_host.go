@@ -102,7 +102,7 @@ func hostClaimOnce(L *lua.LState) int {
 	if env == nil {
 		L.RaiseError("ctx.host.claim_once called outside a check run")
 	}
-	hostRoot := requireString(L, 1)
+	hostRoot := RequireString(L, 1)
 	claims := env.Check.AuxOrCreate(hostClaimsKey{}, func() any {
 		return &hostClaims{set: map[string]struct{}{}}
 	}).(*hostClaims)
@@ -118,5 +118,5 @@ func hostClaimOnce(L *lua.LState) int {
 }
 
 func init() {
-	registerHelperTable("host", buildHostTable)
+	RegisterHelperTable("host", buildHostTable)
 }

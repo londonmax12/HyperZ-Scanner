@@ -116,7 +116,7 @@ func sinksForHeaders(L *lua.LState) int {
 	if env == nil {
 		L.RaiseError("ctx.sinks.for_headers called outside a check run")
 	}
-	pageURL := requireString(L, 1)
+	pageURL := RequireString(L, 1)
 	names := L.CheckTable(2)
 
 	n := names.Len()
@@ -220,7 +220,7 @@ func sinkMutateRequest(L *lua.LState) int {
 	if !ok {
 		L.ArgError(1, "expected sink userdata")
 	}
-	payload := requireString(L, 2)
+	payload := RequireString(L, 2)
 	env := CurrentEnv(L)
 	if env == nil {
 		L.RaiseError("sink:mutate_request called outside a check run")
@@ -236,5 +236,5 @@ func sinkMutateRequest(L *lua.LState) int {
 }
 
 func init() {
-	registerHelperTable("sinks", buildSinksTable)
+	RegisterHelperTable("sinks", buildSinksTable)
 }

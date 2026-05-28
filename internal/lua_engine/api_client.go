@@ -271,7 +271,7 @@ func clientFromArg(L *lua.LState, pos int) *clientUserData {
 // scanner's cancel signal automatically.
 func clientGet(L *lua.LState) int {
 	c := clientFromArg(L, 1)
-	rawurl := requireString(L, 2)
+	rawurl := RequireString(L, 2)
 	env := CurrentEnv(L)
 	if env == nil {
 		L.RaiseError("client:get called outside a check run")

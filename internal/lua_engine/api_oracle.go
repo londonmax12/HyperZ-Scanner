@@ -89,8 +89,8 @@ func oracleTimingCompare(L *lua.LState) int {
 }
 
 func oracleSimilarity(L *lua.LState) int {
-	a := requireString(L, 1)
-	b := requireString(L, 2)
+	a := RequireString(L, 1)
+	b := RequireString(L, 2)
 	L.Push(lua.LNumber(Similarity([]byte(a), []byte(b))))
 	return 1
 }
@@ -111,5 +111,5 @@ func lvalNumber(v lua.LValue) float64 {
 }
 
 func init() {
-	registerHelperTable("oracle", buildOracleTable)
+	RegisterHelperTable("oracle", buildOracleTable)
 }
