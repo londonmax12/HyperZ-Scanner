@@ -68,9 +68,6 @@ func buildBodyTable(L *lua.LState) *lua.LTable {
 	t.RawSetString("mongo_error_new_matches", L.NewFunction(bodyMongoErrorNewMatches))
 	t.RawSetString("ssti_error_new_matches", L.NewFunction(bodySSTIErrorNewMatches))
 	t.RawSetString("cmd_error_first_match", L.NewFunction(bodyCmdErrorFirstMatch))
-	t.RawSetString("find_reflections", L.NewFunction(bodyFindReflections))
-	t.RawSetString("xss_payloads_for_contexts", L.NewFunction(bodyXSSPayloadsForContexts))
-	t.RawSetString("xss_context_summary", L.NewFunction(bodyXSSContextSummary))
 	t.RawSetString("path_sink_candidate", L.NewFunction(bodyPathSinkCandidate))
 	t.RawSetString("ldapi_sink_probable", L.NewFunction(bodyLDAPiSinkProbable))
 	t.RawSetString("nosqli_sink_probable", L.NewFunction(bodyNoSQLiSinkProbable))
@@ -358,51 +355,6 @@ func bodySSTIErrorNewMatches(L *lua.LState) int {
 func bodyCmdErrorFirstMatch(L *lua.LState) int {
 	body := RequireString(L, 1)
 	L.Push(lua.LString(CmdErrorFirstMatch([]byte(body))))
-	return 1
-}
-
-// bodyFindReflections runs the HTML / JS state machine reflection
-// scanner against body / headers and returns an array of
-// {context, offset, header} tables. context is the string name of the
-// matched Context (so a Lua-side comparator does not need to know the
-// numeric enum). Header is "" for body matches.
-func bodyFindReflections(L *lua.LState) int {
-	body := RequireString(L, 1)
-	var headers http.Header
-	if ud, ok := L.Get(2).(*lua.LUserData); ok && ud != nil {
-		if h, ok := ud.Value.(*headersUserData); ok {
-			headers = h.h
-		}
-	}
-	token := RequireString(L, 3)
-	hits := FindReflectionsLua([]byte(body), headers, token)
-	out := L.NewTable()
-	for i, r := range hits {
-		entry := L.NewTable()
-		entry.RawSetString("context", lua.LString(r.Context))
-		entry.RawSetString("offset", lua.LNumber(r.Offset))
-		entry.RawSetString("header", lua.LString(r.Header))
-		out.RawSetInt(i+1, entry)
-	}
-	L.Push(out)
-	return 1
-}
-
-// bodyXSSPayloadsForContexts picks the context-matched XSS payload
-// subset for the supplied reflection contexts (an array of context
-// strings) at the active scan level. Returns an ordered array of
-// {name, template} tables; mirrors the Go check's payloadsForContexts
-// shape so the Lua port iterates payloads in the same order.
-func bodyXSSPayloadsForContexts(L *lua.LState) int {
-	contexts := readStringList(L.Get(1))
-	level := OptString(L, 2, "default")
-	src := XSSPayloadsForContextsLua(contexts, level)
-	return pushPayloadList(L, src)
-}
-
-func bodyXSSContextSummary(L *lua.LState) int {
-	contexts := readStringList(L.Get(1))
-	L.Push(lua.LString(XSSContextSummaryLua(contexts)))
 	return 1
 }
 

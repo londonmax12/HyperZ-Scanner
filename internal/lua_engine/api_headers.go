@@ -60,6 +60,23 @@ func headersFromArg(L *lua.LState) *headersUserData {
 	return ud
 }
 
+// UnwrapHeaders extracts the http.Header value behind a Lua userdata
+// that was produced by pushHeaders. Returns (nil, false) for any other
+// Lua value, including LNil. Exposed so per-family subpackages can
+// accept headers arguments through the bridge without each having to
+// know the private headersUserData shape.
+func UnwrapHeaders(v lua.LValue) (http.Header, bool) {
+	ud, ok := v.(*lua.LUserData)
+	if !ok || ud == nil {
+		return nil, false
+	}
+	hu, ok := ud.Value.(*headersUserData)
+	if !ok {
+		return nil, false
+	}
+	return hu.h, true
+}
+
 // headersGet implements headers:get(name). Returns the first value
 // for name using net/http canonicalization (case-insensitive), or
 // "" when absent. Matches http.Header.Get exactly so a Lua check that

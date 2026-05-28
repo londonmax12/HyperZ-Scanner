@@ -1,5 +1,5 @@
 -- reflected-xss: per sink:
---   1. Send a bare canary. ctx.body.find_reflections classifies the
+--   1. Send a bare canary. ctx.xss.find_reflections classifies the
 --      surrounding HTML / JS context. Non-reflecting sinks are dropped
 --      here so the per-page request count stays bounded.
 --   2. For each reflection context, render the curated XSS payload
@@ -9,7 +9,7 @@
 --      and "reflected with HTML-encoding" (safe).
 --
 -- The context-to-payload mapping and level-based ordering live behind
--- ctx.body.xss_payloads_for_contexts.
+-- ctx.xss.xss_payloads_for_contexts.
 
 local check = {
   name        = "reflected-xss",
@@ -51,7 +51,7 @@ local function probe(ctx, sink)
   if send_err then return nil, send_err end
 
   local headers1 = resp1 and resp1:headers() or nil
-  local reflections = ctx.body.find_reflections(body1, headers1, canary)
+  local reflections = ctx.xss.find_reflections(body1, headers1, canary)
   if #reflections == 0 then
     if canary_truncated then
       ctx:report(string.format("probe %s %s=%s: canary response body truncated at %d bytes, reflection may have been missed",
@@ -67,7 +67,7 @@ local function probe(ctx, sink)
     context_strings[i] = r.context
   end
 
-  local payloads = ctx.body.xss_payloads_for_contexts(context_strings, ctx.level)
+  local payloads = ctx.xss.xss_payloads_for_contexts(context_strings, ctx.level)
   if #payloads == 0 then return nil end
 
   local any_truncated = canary_truncated
@@ -79,7 +79,7 @@ local function probe(ctx, sink)
     if truncated then any_truncated = true end
     if string.find(body2, rendered, 1, true) then
       local probe_url = req:url()
-      local context_summary = ctx.body.xss_context_summary(context_strings)
+      local context_summary = ctx.xss.xss_context_summary(context_strings)
       return {
         severity = severity.high,
         url      = probe_url,

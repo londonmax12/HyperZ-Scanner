@@ -54,7 +54,6 @@ func buildPayloadsTable(L *lua.LState) *lua.LTable {
 	t.RawSetString("sqli_time", L.NewFunction(payloadsSQLiTime))
 	t.RawSetString("cmd_inject", L.NewFunction(payloadsCmdInject))
 	t.RawSetString("cmd_inject_blind", L.NewFunction(payloadsCmdInjectBlind))
-	t.RawSetString("xss", L.NewFunction(payloadsXSS))
 
 	t.RawSetString("sqli_boolean_pairs", L.NewFunction(payloadsSQLiBooleanPairs))
 	t.RawSetString("ldapi_boolean_pairs", L.NewFunction(payloadsLDAPiBooleanPairs))
@@ -148,10 +147,12 @@ func payloadsLocDescriptor(L *lua.LState) int {
 	return 1
 }
 
-// pushPayloadList pushes a Lua array of {name, template} tables for
+// PushPayloadList pushes a Lua array of {name, template} tables for
 // the supplied projection. Centralised so the per-class helpers stay
-// one-liners and the table shape can not drift between them.
-func pushPayloadList(L *lua.LState, src []SQLiErrorPayload) int {
+// one-liners and the table shape can not drift between them. Exported
+// so per-family subpackages can build the same {name, template} arrays
+// without re-implementing the shape.
+func PushPayloadList(L *lua.LState, src []SQLiErrorPayload) int {
 	out := L.NewTable()
 	for i, p := range src {
 		entry := L.NewTable()
@@ -163,6 +164,13 @@ func pushPayloadList(L *lua.LState, src []SQLiErrorPayload) int {
 	return 1
 }
 
+// pushPayloadList is the package-private shorthand the root-level
+// per-class helpers use. Forwards to PushPayloadList so the surface
+// stays a single implementation.
+func pushPayloadList(L *lua.LState, src []SQLiErrorPayload) int {
+	return PushPayloadList(L, src)
+}
+
 func payloadsTraversal(L *lua.LState) int { return pushPayloadList(L, TraversalPayloadsLua()) }
 func payloadsSQLiError(L *lua.LState) int { return pushPayloadList(L, SQLiErrorPayloads()) }
 func payloadsSQLiTime(L *lua.LState) int  { return pushPayloadList(L, SQLiTimePayloadsLua()) }
@@ -170,7 +178,6 @@ func payloadsCmdInject(L *lua.LState) int { return pushPayloadList(L, CmdInjectP
 func payloadsCmdInjectBlind(L *lua.LState) int {
 	return pushPayloadList(L, CmdInjectBlindPayloadsLua())
 }
-func payloadsXSS(L *lua.LState) int { return pushPayloadList(L, XSSPayloadsLua()) }
 
 func payloadsSQLiBooleanPairs(L *lua.LState) int {
 	src := SQLiBooleanPairsLua()
