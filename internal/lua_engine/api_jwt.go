@@ -102,7 +102,7 @@ func jwtFactsToLua(L *lua.LState, facts []JWTFact) *lua.LTable {
 			case bool:
 				params.RawSetString(k, lua.LBool(tv))
 			case []string:
-				params.RawSetString(k, pushStringList(L, tv))
+				params.RawSetString(k, PushStringList(L, tv))
 			default:
 				// Coerce anything else to its Go fmt; the Lua side
 				// reads it as a string and a typo at the consumer

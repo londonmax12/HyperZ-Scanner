@@ -30,7 +30,9 @@ func bindHyperzAPI(L *lua.LState) {
 
 	h := make(staticHelpers, len(helperTableBuilders))
 	for name, build := range helperTableBuilders {
-		h[name] = build(L)
+		table := build(L)
+		applyHelperTableExtenders(L, name, table)
+		h[name] = table
 	}
 	storeStaticHelpers(L, h)
 }

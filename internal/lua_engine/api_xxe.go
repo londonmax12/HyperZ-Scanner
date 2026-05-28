@@ -41,12 +41,12 @@ func buildXXETable(L *lua.LState) *lua.LTable {
 }
 
 func xxeFileDiscloseDocsFn(L *lua.LState) int {
-	L.Push(pushStringList(L, XXEFileDiscloseDocsLua()))
+	L.Push(PushStringList(L, XXEFileDiscloseDocsLua()))
 	return 1
 }
 
 func xxeErrorDocsFn(L *lua.LState) int {
-	L.Push(pushStringList(L, XXEErrorDocsLua()))
+	L.Push(PushStringList(L, XXEErrorDocsLua()))
 	return 1
 }
 

@@ -78,7 +78,7 @@ func headersGet(L *lua.LState) int {
 func headersValues(L *lua.LState) int {
 	h := headersFromArg(L).h
 	name := RequireString(L, 2)
-	L.Push(pushStringList(L, h.Values(name)))
+	L.Push(PushStringList(L, h.Values(name)))
 	return 1
 }
 

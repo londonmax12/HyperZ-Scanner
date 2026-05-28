@@ -2,6 +2,8 @@ package lua_engine
 
 import (
 	lua "github.com/yuin/gopher-lua"
+
+	"github.com/londonmax12/hyperz/internal/lua_engine/checks/html"
 )
 
 // buildHTMLTable returns the ctx.html helper table. The helpers wrap
@@ -91,7 +93,7 @@ func htmlIterTags(L *lua.LState) int {
 func htmlScanFormActions(L *lua.LState) int {
 	body := RequireString(L, 1)
 	base := RequireString(L, 2)
-	cands := ScanFormActions([]byte(body), base)
+	cands := html.ScanFormActions([]byte(body), base)
 	out := L.NewTable()
 	for i, c := range cands {
 		entry := L.NewTable()

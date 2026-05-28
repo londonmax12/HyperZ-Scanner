@@ -40,7 +40,7 @@ func buildWSTable(L *lua.LState) *lua.LTable {
 }
 
 func wsDiscoverEndpoints(L *lua.LState) int {
-	L.Push(pushStringList(L, WSAuditDiscoverEndpointsLua([]byte(RequireString(L, 1)))))
+	L.Push(PushStringList(L, WSAuditDiscoverEndpointsLua([]byte(RequireString(L, 1)))))
 	return 1
 }
 

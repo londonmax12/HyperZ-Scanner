@@ -98,12 +98,12 @@ func payloadsSSRFBodyCap(L *lua.LState) int {
 }
 
 func payloadsSSRFSpecificParams(L *lua.LState) int {
-	L.Push(pushStringList(L, SSRFSpecificParamNamesLua()))
+	L.Push(PushStringList(L, SSRFSpecificParamNamesLua()))
 	return 1
 }
 
 func payloadsSSRFGenericParams(L *lua.LState) int {
-	L.Push(pushStringList(L, SSRFGenericParamNamesLua()))
+	L.Push(PushStringList(L, SSRFGenericParamNamesLua()))
 	return 1
 }
 
@@ -206,7 +206,7 @@ func payloadsLDAPiCanaryPlaceholder(L *lua.LState) int {
 }
 
 func payloadsLDAPiErrorPayloads(L *lua.LState) int {
-	L.Push(pushStringList(L, LDAPiErrorPayloadsLua()))
+	L.Push(PushStringList(L, LDAPiErrorPayloadsLua()))
 	return 1
 }
 
@@ -224,7 +224,7 @@ func payloadsNoSQLiBooleanOps(L *lua.LState) int {
 }
 
 func payloadsNoSQLiErrorPayloads(L *lua.LState) int {
-	L.Push(pushStringList(L, NoSQLiErrorPayloadsLua()))
+	L.Push(PushStringList(L, NoSQLiErrorPayloadsLua()))
 	return 1
 }
 
@@ -252,7 +252,7 @@ func payloadsSSTIConfirmProbe(L *lua.LState) int {
 }
 
 func payloadsSSTIErrorPayloads(L *lua.LState) int {
-	L.Push(pushStringList(L, SSTIErrorPayloadsLua()))
+	L.Push(PushStringList(L, SSTIErrorPayloadsLua()))
 	return 1
 }
 

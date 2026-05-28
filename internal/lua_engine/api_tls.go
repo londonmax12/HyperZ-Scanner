@@ -225,7 +225,7 @@ func tlsCertDNSNames(L *lua.LState) int {
 		L.Push(L.NewTable())
 		return 1
 	}
-	L.Push(pushStringList(L, c.DNSNames))
+	L.Push(PushStringList(L, c.DNSNames))
 	return 1
 }
 

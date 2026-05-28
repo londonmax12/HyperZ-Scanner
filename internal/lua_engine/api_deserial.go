@@ -60,7 +60,7 @@ func deserialFormats(L *lua.LState) int {
 		entry.RawSetString("name", lua.LString(f.Name))
 		entry.RawSetString("label", lua.LString(f.Label))
 		entry.RawSetString("probe_payload", lua.LString(f.ProbePayload))
-		entry.RawSetString("error_pats", pushStringList(L, f.ErrorPats))
+		entry.RawSetString("error_pats", PushStringList(L, f.ErrorPats))
 		out.RawSetInt(i+1, entry)
 	}
 	L.Push(out)
@@ -78,7 +78,7 @@ func deserialClassify(L *lua.LState) int {
 func deserialMatchAll(L *lua.LState) int {
 	catalogue := RequireString(L, 1)
 	body := RequireString(L, 2)
-	L.Push(pushStringList(L, DeserialMatchAllLua(catalogue, []byte(body))))
+	L.Push(PushStringList(L, DeserialMatchAllLua(catalogue, []byte(body))))
 	return 1
 }
 
@@ -86,7 +86,7 @@ func deserialMatchFormat(L *lua.LState) int {
 	catalogue := RequireString(L, 1)
 	body := RequireString(L, 2)
 	name := RequireString(L, 3)
-	L.Push(pushStringList(L, DeserialMatchFormatLua(catalogue, []byte(body), name)))
+	L.Push(PushStringList(L, DeserialMatchFormatLua(catalogue, []byte(body), name)))
 	return 1
 }
 

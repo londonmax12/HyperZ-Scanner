@@ -1,10 +1,11 @@
-package lua_engine
+package access
 
 import (
 	"net/url"
 	"strings"
 	"sync"
 
+	"github.com/londonmax12/hyperz/internal/lua_engine"
 	"github.com/londonmax12/hyperz/internal/page"
 )
 
@@ -42,7 +43,7 @@ type shapeRecord struct {
 
 // ringBuf is a fixed-capacity FIFO over strings. Newer entries push
 // older ones out so corpus memory stays bounded regardless of crawl
-// length. Snapshot returns values in insertion order (oldest first),
+// length. snapshot() returns values in insertion order (oldest first),
 // which keeps Pattern.Generate output deterministic for any fixed
 // corpus state.
 type ringBuf struct {
@@ -126,7 +127,7 @@ func NewCorpus() *Corpus {
 func (c *Corpus) IngestPage(p page.Page) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for _, s := range SinksFor(p) {
+	for _, s := range lua_engine.SinksFor(p) {
 		c.ingestLocked(s.Name, s.Value)
 	}
 	if u, err := url.Parse(p.URL); err == nil {

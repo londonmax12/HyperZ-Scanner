@@ -1,4 +1,6 @@
-package lua_engine
+package access
+
+import "github.com/londonmax12/hyperz/internal/lua_engine"
 
 // IDORVerdict is the exported view of the IDOR oracle's per-probe
 // decision. The Lua bridge reads it through IDORJudge; keeping the
@@ -20,7 +22,7 @@ type IDORVerdict struct {
 // can call it without re-implementing the verdict logic. Returning
 // the exported IDORVerdict mirror keeps the bridge ABI stable when
 // the private idorVerdict gains internal-only fields.
-func IDORJudge(baseline, tampered, control Snapshot) IDORVerdict {
+func IDORJudge(baseline, tampered, control lua_engine.Snapshot) IDORVerdict {
 	v := idorJudge(baseline, tampered, control)
 	return IDORVerdict{
 		Vulnerable:         v.Vulnerable,

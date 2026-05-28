@@ -64,7 +64,7 @@ func buildFormsTable(L *lua.LState, forms []page.Form) *lua.LTable {
 			it.RawSetString("type", lua.LString(in.Type))
 			it.RawSetString("value", lua.LString(in.Value))
 			if len(in.Options) > 0 {
-				it.RawSetString("options", pushStringList(L, in.Options))
+				it.RawSetString("options", PushStringList(L, in.Options))
 			}
 			inputs.RawSetInt(j+1, it)
 		}

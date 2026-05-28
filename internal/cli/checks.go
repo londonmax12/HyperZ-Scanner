@@ -13,6 +13,7 @@ import (
 	// helper tables and stateful evaluators into lua_engine. Without
 	// these, a check that calls ctx.takeover.evaluate(...) (et al)
 	// would see a nil namespace.
+	_ "github.com/londonmax12/hyperz/internal/lua_engine/checks/access"
 	_ "github.com/londonmax12/hyperz/internal/lua_engine/checks/discovery"
 )
 

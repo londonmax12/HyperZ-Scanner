@@ -255,7 +255,7 @@ func urlQuery(L *lua.LState) int {
 			t.RawSetString(k, lua.LString(vs[0]))
 			continue
 		}
-		t.RawSetString(k, pushStringList(L, vs))
+		t.RawSetString(k, PushStringList(L, vs))
 	}
 	L.Push(t)
 	return 1

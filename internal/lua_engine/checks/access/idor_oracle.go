@@ -1,9 +1,11 @@
-package lua_engine
+package access
 
 import (
 	"bytes"
 	"fmt"
 	"regexp"
+
+	"github.com/londonmax12/hyperz/internal/lua_engine"
 )
 
 // idorVerdict is what idorJudge returns. Vulnerable is the headline
@@ -32,11 +34,11 @@ const (
 
 	// idorMaxSim is the upper bound on baseline~tampered similarity
 	// that counts as "different content" for the IDOR oracle. Matches
-	// SimilarityThreshold so the cutoff is consistent with the boolean
+	// lua_engine.SimilarityThreshold so the cutoff is consistent with the boolean
 	// SQLi oracle - templated pages with header / footer cruft cluster
 	// near 0.99 when content is the same, drop below 0.97 when the
 	// middle (the user record) actually changed.
-	idorMaxSim = SimilarityThreshold
+	idorMaxSim = lua_engine.SimilarityThreshold
 )
 
 // idorJudge compares baseline (untampered request), tampered (request
@@ -57,7 +59,7 @@ const (
 // rises further when the tampered body contains markers that look
 // like another user's data (emails, name pairs, distinct identifiers
 // of the same shape).
-func idorJudge(baseline, tampered, control Snapshot) idorVerdict {
+func idorJudge(baseline, tampered, control lua_engine.Snapshot) idorVerdict {
 	res := idorVerdict{}
 	if !is2xx(baseline.Status) || !is2xx(tampered.Status) {
 		res.Detail = fmt.Sprintf(
@@ -65,8 +67,8 @@ func idorJudge(baseline, tampered, control Snapshot) idorVerdict {
 			baseline.Status, tampered.Status)
 		return res
 	}
-	res.TamperedSim = Similarity(baseline.Body, tampered.Body)
-	res.ControlSim = Similarity(baseline.Body, control.Body)
+	res.TamperedSim = lua_engine.Similarity(baseline.Body, tampered.Body)
+	res.ControlSim = lua_engine.Similarity(baseline.Body, control.Body)
 	if res.TamperedSim >= idorMaxSim {
 		res.Detail = fmt.Sprintf(
 			"tampered response ~ baseline (sim=%.3f); ID change had no effect on the body",
@@ -91,7 +93,7 @@ func idorJudge(baseline, tampered, control Snapshot) idorVerdict {
 		// every non-seed ID, then tampered diverging from baseline
 		// reflects "not the seed user's record" rather than broken
 		// authorization. Suppress.
-		res.TamperedControlSim = Similarity(tampered.Body, control.Body)
+		res.TamperedControlSim = lua_engine.Similarity(tampered.Body, control.Body)
 		if res.TamperedControlSim >= idorMaxSim {
 			res.Detail = fmt.Sprintf(
 				"control and tampered returned ~same content (sim=%.3f) - endpoint serves a generic body for any non-seed ID, suppressing finding",

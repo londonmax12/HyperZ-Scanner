@@ -97,7 +97,7 @@ func sinksForPage(L *lua.LState) int {
 
 	arr := L.NewTable()
 	for i := range out {
-		arr.RawSetInt(i+1, pushSink(L, &out[i]))
+		arr.RawSetInt(i+1, PushSink(L, &out[i]))
 	}
 	L.Push(arr)
 	return 1
@@ -136,7 +136,7 @@ func sinksForHeaders(L *lua.LState) int {
 
 	arr := L.NewTable()
 	for i := range out {
-		arr.RawSetInt(i+1, pushSink(L, &out[i]))
+		arr.RawSetInt(i+1, PushSink(L, &out[i]))
 	}
 	L.Push(arr)
 	return 1
@@ -151,7 +151,7 @@ type sinkUserData struct {
 	s *Sink
 }
 
-func pushSink(L *lua.LState, s *Sink) lua.LValue {
+func PushSink(L *lua.LState, s *Sink) lua.LValue {
 	ud := L.NewUserData()
 	ud.Value = &sinkUserData{s: s}
 	ud.Metatable = ensureSinkMT(L)

@@ -424,7 +424,7 @@ func storedXSSStateDetectFireOnce(L *lua.LState) int {
 func storedXSSStateFindCanaries(L *lua.LState) int {
 	_ = storedXSSStateFromArg(L, 1)
 	body := RequireString(L, 2)
-	L.Push(pushStringList(L, canaryRe.FindAllString(body, -1)))
+	L.Push(PushStringList(L, canaryRe.FindAllString(body, -1)))
 	return 1
 }
 

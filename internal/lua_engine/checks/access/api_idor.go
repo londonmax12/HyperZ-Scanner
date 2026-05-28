@@ -1,4 +1,4 @@
-package lua_engine
+package access
 
 import (
 	"net/http"
@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	lua "github.com/yuin/gopher-lua"
+
+	"github.com/londonmax12/hyperz/internal/lua_engine"
 )
 
 // buildIDORTable returns the ctx.idor helper namespace. IDOR keeps a
@@ -23,7 +25,7 @@ import (
 //	     pii_hints[] }.
 //
 //	ctx.idor.path_sinks(page_url, classify_fn)
-//	   - Synthesizes LocPath sinks for ID-looking path segments. Takes
+//	   - Synthesizes lua_engine.LocPath sinks for ID-looking path segments. Takes
 //	     a Lua callback that classifies a (name, value) pair so the
 //	     bridge does not need to second-guess corpus state.
 //
@@ -55,7 +57,7 @@ type corpusUserData struct {
 }
 
 func idorCorpus(L *lua.LState) int {
-	env := CurrentEnv(L)
+	env := lua_engine.CurrentEnv(L)
 	if env == nil {
 		L.RaiseError("ctx.idor.corpus called outside a check run")
 	}
@@ -100,7 +102,7 @@ func corpusFromArg(L *lua.LState, pos int) *corpusUserData {
 // the same as in the Go check.
 func corpusIngestPage(L *lua.LState) int {
 	c := corpusFromArg(L, 1)
-	env := CurrentEnv(L)
+	env := lua_engine.CurrentEnv(L)
 	if env == nil {
 		L.RaiseError("corpus:ingest_page called outside a check run")
 	}
@@ -119,8 +121,8 @@ func corpusIngestPage(L *lua.LState) int {
 // name).
 func corpusClassify(L *lua.LState) int {
 	c := corpusFromArg(L, 1)
-	name := RequireString(L, 2)
-	value := RequireString(L, 3)
+	name := lua_engine.RequireString(L, 2)
+	value := lua_engine.RequireString(L, 3)
 	p := c.c.Classify(name, value)
 	if p == nil {
 		L.Push(lua.LNil)
@@ -142,8 +144,8 @@ func corpusClassify(L *lua.LState) int {
 // Lua caller fails as "no candidates" rather than a Lua-level error.
 func corpusGenerate(L *lua.LState) int {
 	c := corpusFromArg(L, 1)
-	name := RequireString(L, 2)
-	seed := RequireString(L, 3)
+	name := lua_engine.RequireString(L, 2)
+	seed := lua_engine.RequireString(L, 3)
 	want := L.CheckInt(4)
 	if want <= 0 {
 		L.Push(L.NewTable())
@@ -154,7 +156,7 @@ func corpusGenerate(L *lua.LState) int {
 		L.Push(L.NewTable())
 		return 1
 	}
-	L.Push(pushStringList(L, pat.Generate(seed, c.c, want)))
+	L.Push(lua_engine.PushStringList(L, pat.Generate(seed, c.c, want)))
 	return 1
 }
 
@@ -183,9 +185,9 @@ func findPatternByName(c *Corpus, name string) *Pattern {
 // so the Lua port produces byte-identical decisions to the Go check
 // on the same wire.
 func idorJudgeFn(L *lua.LState) int {
-	baseline := readSnapshotArg(L.Get(1))
-	tampered := readSnapshotArg(L.Get(2))
-	control := readSnapshotArg(L.Get(3))
+	baseline := lua_engine.ReadSnapshotArg(L.Get(1))
+	tampered := lua_engine.ReadSnapshotArg(L.Get(2))
+	control := lua_engine.ReadSnapshotArg(L.Get(3))
 	v := IDORJudge(baseline, tampered, control)
 	out := L.NewTable()
 	out.RawSetString("vulnerable", lua.LBool(v.Vulnerable))
@@ -194,7 +196,7 @@ func idorJudgeFn(L *lua.LState) int {
 	out.RawSetString("tampered_sim", lua.LNumber(v.TamperedSim))
 	out.RawSetString("control_sim", lua.LNumber(v.ControlSim))
 	out.RawSetString("tampered_control_sim", lua.LNumber(v.TamperedControlSim))
-	out.RawSetString("pii_hints", pushStringList(L, v.PIIHints))
+	out.RawSetString("pii_hints", lua_engine.PushStringList(L, v.PIIHints))
 	L.Push(out)
 	return 1
 }
@@ -205,12 +207,12 @@ func idorJudgeFn(L *lua.LState) int {
 // given pattern, which keeps dedupe keys and false-positive backstop
 // behavior aligned across both impls.
 func idorControlPayload(L *lua.LState) int {
-	env := CurrentEnv(L)
+	env := lua_engine.CurrentEnv(L)
 	if env == nil {
 		L.RaiseError("ctx.idor.control_payload called outside a check run")
 	}
-	name := RequireString(L, 1)
-	seed := RequireString(L, 2)
+	name := lua_engine.RequireString(L, 1)
+	seed := lua_engine.RequireString(L, 2)
 	c := env.Check.AuxOrCreate(idorCorpusKey{}, func() any {
 		return NewCorpus()
 	}).(*Corpus)
@@ -224,7 +226,7 @@ func idorControlPayload(L *lua.LState) int {
 }
 
 // idorPathSinks scans page_url for ID-looking segments and returns a
-// list of Sink userdata describing each, ready for sink:mutate_request.
+// list of lua_engine.Sink userdata describing each, ready for sink:mutate_request.
 // Classification routes through the active corpus so a learned shape
 // promoted earlier in the scan is honored.
 //
@@ -234,11 +236,11 @@ func idorControlPayload(L *lua.LState) int {
 // slug burns requests without adding signal. The filter matches the
 // Go check's identifierSinks pathSinks branch.
 func idorPathSinks(L *lua.LState) int {
-	env := CurrentEnv(L)
+	env := lua_engine.CurrentEnv(L)
 	if env == nil {
 		L.RaiseError("ctx.idor.path_sinks called outside a check run")
 	}
-	pageURL := RequireString(L, 1)
+	pageURL := lua_engine.RequireString(L, 1)
 	u, err := url.Parse(pageURL)
 	if err != nil || u.Path == "" {
 		L.Push(L.NewTable())
@@ -271,15 +273,15 @@ func idorPathSinks(L *lua.LState) int {
 		placeholderSegs := make([]string, len(segs))
 		copy(placeholderSegs, segs)
 		placeholderSegs[i] = "{" + segName + "}"
-		s := &Sink{
+		s := &lua_engine.Sink{
 			Method: http.MethodGet,
 			URL:    joinPathPlaceholderURL(u, placeholderSegs),
-			Loc:    LocPath,
+			Loc:    lua_engine.LocPath,
 			Name:   segName,
 			Value:  decoded,
 		}
 		entry := L.NewTable()
-		entry.RawSetString("sink", pushSink(L, s))
+		entry.RawSetString("sink", lua_engine.PushSink(L, s))
 		entry.RawSetString("pattern", lua.LString(pat.Name))
 		entry.RawSetString("learned", lua.LBool(pat.Learned))
 		entry.RawSetString("precedence", lua.LNumber(pat.Precedence))
@@ -299,7 +301,7 @@ func pathSegName(i int) string {
 // segs. The URL is assembled by hand because url.URL.String() would
 // percent-encode the braces around any `{segN}` placeholder in segs,
 // leaving the resulting sink with a URL like /user/%7Bseg2%7D that
-// Sink.MutateRequest's literal-placeholder lookup can't match. Segs other
+// lua_engine.Sink.MutateRequest's literal-placeholder lookup can't match. Segs other
 // than the placeholder are already in escaped form (they came from
 // EscapedPath); the placeholder is intended to round-trip verbatim until
 // MutateRequest substitutes a value.
@@ -350,5 +352,5 @@ func intToStr(i int) string {
 }
 
 func init() {
-	RegisterHelperTable("idor", buildIDORTable)
+	lua_engine.RegisterHelperTable("idor", buildIDORTable)
 }

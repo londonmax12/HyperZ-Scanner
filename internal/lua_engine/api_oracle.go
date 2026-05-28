@@ -43,7 +43,7 @@ func buildOracleTable(L *lua.LState) *lua.LTable {
 	return t
 }
 
-func readSnapshotArg(v lua.LValue) Snapshot {
+func ReadSnapshotArg(v lua.LValue) Snapshot {
 	t, ok := v.(*lua.LTable)
 	if !ok {
 		return Snapshot{}
@@ -55,9 +55,9 @@ func readSnapshotArg(v lua.LValue) Snapshot {
 }
 
 func oracleBooleanCompare(L *lua.LState) int {
-	baseline := readSnapshotArg(L.Get(1))
-	truthy := readSnapshotArg(L.Get(2))
-	falsy := readSnapshotArg(L.Get(3))
+	baseline := ReadSnapshotArg(L.Get(1))
+	truthy := ReadSnapshotArg(L.Get(2))
+	falsy := ReadSnapshotArg(L.Get(3))
 	res := BooleanCompare(baseline, truthy, falsy)
 	out := L.NewTable()
 	out.RawSetString("decision", lua.LString(string(res.Decision)))
