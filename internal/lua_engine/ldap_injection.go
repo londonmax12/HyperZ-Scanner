@@ -4,14 +4,6 @@ import (
 	"bytes"
 )
 
-// LDAPi probes for LDAP filter injection against parameters whose values
-// are concatenated into an LDAP search filter by the backend.
-//
-// The detection logic lives in the .lua file; the Go side exposes the
-// payload catalogue, the boolean pair set, the error-pattern matcher,
-// and the per-sink probe gate via lua_helpers.go.
-type LDAPi struct{}
-
 // ldapiCanaryPlaceholder marks the slot in a falsy template where the
 // per-pair canary is rendered. Hard-coded rather than computed so the
 // payload definitions read as plain strings.
@@ -106,12 +98,12 @@ var ldapErrorPatterns = []string{
 	"ldap: filter is invalid",
 }
 
-// sinkProbable reports whether sink.Loc carries LDAP-filter-
+// ldapiSinkProbable reports whether sink.Loc carries LDAP-filter-
 // concatenation risk. Query, form, JSON, and path values commonly flow
 // into search filters (login forms, user lookup endpoints, directory
 // search). Headers and cookies are not used to construct LDAP filters
 // in practice, so probing them would just waste requests.
-func (LDAPi) sinkProbable(s Sink) bool {
+func ldapiSinkProbable(s Sink) bool {
 	switch s.Loc {
 	case LocQuery, LocForm, LocJSON, LocPath:
 		return true

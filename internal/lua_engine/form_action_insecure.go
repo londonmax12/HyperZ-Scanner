@@ -8,20 +8,6 @@ import (
 	"golang.org/x/net/html"
 )
 
-// FormActionInsecure detects <form action=...> (or <button formaction=...> /
-// <input formaction=...> overrides) that resolve to a plaintext http:// URL
-// when the containing page is served over HTTPS. Any field the user submits
-// (passwords, session tokens, payment data, PII) is then transmitted in
-// cleartext and is trivially recoverable by anyone on the network path,
-// even though the page that hosted the form looked secure.
-//
-// Severity escalates to Critical when the affected form carries a password
-// input or another credential-shaped field (name matches "password" /
-// "pwd" / "secret" / "card" / etc.). A vanilla HTTPS->HTTP submit without
-// credentials stays High because the leak surface is smaller but still
-// real (session cookies, CSRF tokens, free-form PII).
-type FormActionInsecure struct{}
-
 // sensitiveFieldNamePatterns is a lower-cased substring set against which
 // <input name=...> values are matched to detect credential-shaped fields.
 // Hit semantics are conservative: matching any one of these bumps the
@@ -72,13 +58,13 @@ type formInput struct {
 	sensitive bool
 }
 
-// parse walks the document once, collecting the input inventory per <form>
-// and emitting one formCandidate for the form's own action plus one for
-// each <button formaction=...> / <input formaction=...> override. baseURL
-// (initialized to pageURL) is updated when a <base href="..."> is observed
-// so relative actions resolve against the document base rather than the
-// page URL when an explicit base is in play.
-func (c FormActionInsecure) parse(body []byte, pageURL *url.URL) ([]parsedForm, []formCandidate) {
+// parseFormActions walks the document once, collecting the input inventory
+// per <form> and emitting one formCandidate for the form's own action plus
+// one for each <button formaction=...> / <input formaction=...> override.
+// baseURL (initialized to pageURL) is updated when a <base href="..."> is
+// observed so relative actions resolve against the document base rather
+// than the page URL when an explicit base is in play.
+func parseFormActions(body []byte, pageURL *url.URL) ([]parsedForm, []formCandidate) {
 	z := html.NewTokenizer(bytes.NewReader(body))
 
 	baseURL := *pageURL

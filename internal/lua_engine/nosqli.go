@@ -10,16 +10,6 @@ import (
 	"strings"
 )
 
-// NoSQLi probes for NoSQL (MongoDB / Mongoose-shaped) operator injection
-// against parameters whose values may be deserialized into query operators
-// by the backend framework.
-//
-// The detection logic lives in the .lua file; the Go side exposes the
-// operator catalogue, the error payload list, the Mongo error matcher,
-// the per-sink probe gate, and the operator-bracketed request builder
-// via lua_helpers.go.
-type NoSQLi struct{}
-
 // nosqliOp is one Mongo operator the boolean phase exercises by
 // rewriting the param name with a bracket suffix. KeySuffix is what
 // appears after the param name on the URL / form wire (`[$eq]`,
@@ -95,11 +85,11 @@ var mongoErrorPatterns = []string{
 	"exception: parse error",
 }
 
-// sinkProbable reports whether a sink Loc carries operator-parsing risk.
+// nosqliSinkProbable reports whether a sink Loc carries operator-parsing risk.
 // Only query / form / JSON body inputs get auto-deserialized by common
 // frameworks; header / cookie / path values are taken as strings and
 // never reach a query parser.
-func (NoSQLi) sinkProbable(s Sink) bool {
+func nosqliSinkProbable(s Sink) bool {
 	switch s.Loc {
 	case LocQuery, LocForm, LocJSON:
 		return true
@@ -107,13 +97,13 @@ func (NoSQLi) sinkProbable(s Sink) bool {
 	return false
 }
 
-// buildOperatorRequest rewrites sink with op-injected param structure.
+// nosqliBuildOperatorRequest rewrites sink with op-injected param structure.
 // For LocQuery / LocForm this swaps the literal name for the bracket-
 // suffixed form so a qs-style parser deserializes it into an operator
 // object on the backend. For LocJSON it nests op.JSONValue(opValue)
 // inside the JSON body's field value directly - bracket notation has
 // no analogue on the JSON wire, but the structural shape is identical.
-func (c NoSQLi) buildOperatorRequest(ctx context.Context, sink Sink, op nosqliOp, opValue string) (*http.Request, error) {
+func nosqliBuildOperatorRequest(ctx context.Context, sink Sink, op nosqliOp, opValue string) (*http.Request, error) {
 	method := strings.ToUpper(sink.Method)
 	if method == "" {
 		method = http.MethodGet

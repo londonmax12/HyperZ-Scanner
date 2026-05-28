@@ -6,8 +6,6 @@ import (
 	"golang.org/x/net/html"
 )
 
-type JSLibsKnownVuln struct{}
-
 type libDetails struct {
 	version         string
 	vulnerabilities []string

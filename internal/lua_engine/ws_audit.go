@@ -20,32 +20,6 @@ import (
 	"github.com/londonmax12/hyperz/internal/page"
 )
 
-// WSAudit probes WebSocket endpoints discovered on a crawled page for
-// Cross-Site WebSocket Hijacking (CSWSH) and cleartext-on-HTTPS exposure.
-//
-// Discovery is cheap: scan the already-fetched body for ws:// / wss://
-// URL literals (script src, anchor href, JS string constants, inline JSON
-// config). Each discovered endpoint that the scope allows is then probed
-// with a real RFC 6455 handshake carrying a foreign Origin header. If the
-// server replies with 101 Switching Protocols and a valid
-// Sec-WebSocket-Accept derived from our Sec-WebSocket-Key, the handshake
-// succeeded - which means Origin is not being validated and any
-// attacker-controlled page can open the same socket from a victim's
-// browser. With cookie-based session auth that is read+write access to
-// the live channel; even without auth, message traffic and rate limits
-// can be enumerated.
-//
-// The check fires HTTP/1.1 upgrade requests directly over a TCP (or TLS)
-// connection because the http.Client transport will not let us inspect a
-// 101 response cleanly. The handshake bypasses the configured rate
-// limiter and budget - the cost is bounded by the small number of
-// endpoints discoverable on any one page, but operators should know that
-// a /loop scan against the same page will issue 1-3 handshakes per pass.
-//
-// Active (LevelDefault) check. Sends one Origin-spoofed handshake per
-// unique endpoint; never sends data frames after the handshake.
-type WSAudit struct{}
-
 const (
 	// wsBodyCap bounds how much of the page body we scan for ws:// URL
 	// literals. Endpoint references almost always appear in the head /

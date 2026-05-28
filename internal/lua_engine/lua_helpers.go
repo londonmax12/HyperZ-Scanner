@@ -796,7 +796,7 @@ func ScanFormActions(body []byte, baseURL string) []FormActionCandidate {
 	if err != nil || pageURL == nil {
 		return nil
 	}
-	forms, cands := (FormActionInsecure{}).parse(body, pageURL)
+	forms, cands := parseFormActions(body, pageURL)
 	out := make([]FormActionCandidate, 0, len(cands))
 	for _, c := range cands {
 		var inputs []FormActionInput
@@ -940,9 +940,9 @@ func LDAPiErrorPayloadsLua() []string {
 	return out
 }
 
-// LDAPiSinkProbable forwards (LDAPi).sinkProbable so the Lua port
+// LDAPiSinkProbable forwards ldapiSinkProbable so the Lua port
 // drops the same Loc set the Go check skips (header / cookie).
-func LDAPiSinkProbable(loc string) bool { return (LDAPi{}).sinkProbable(Sink{Loc: Loc(loc)}) }
+func LDAPiSinkProbable(loc string) bool { return ldapiSinkProbable(Sink{Loc: Loc(loc)}) }
 
 // MongoErrorNewMatches / NoSQLiBooleanOpsLua / NoSQLiErrorPayloadsLua
 // expose the NoSQLi check's private pattern + operator + payload sets.
@@ -974,9 +974,9 @@ func NoSQLiErrorPayloadsLua() []string {
 	return out
 }
 
-// NoSQLiSinkProbable forwards (NoSQLi).sinkProbable so the Lua port
+// NoSQLiSinkProbable forwards nosqliSinkProbable so the Lua port
 // gates on the same Loc set the Go check accepts (query / form / json).
-func NoSQLiSinkProbable(loc string) bool { return (NoSQLi{}).sinkProbable(Sink{Loc: Loc(loc)}) }
+func NoSQLiSinkProbable(loc string) bool { return nosqliSinkProbable(Sink{Loc: Loc(loc)}) }
 
 // NoSQLiBuildOperatorRequest builds an *http.Request that applies the
 // named operator (op_name = "eq" / "in-array") to sink with opValue.
@@ -994,7 +994,7 @@ func NoSQLiBuildOperatorRequest(ctx context.Context, sink Sink, opName, opValue 
 	if op == nil {
 		return nil, fmt.Errorf("nosqli: unknown operator %q", opName)
 	}
-	return (NoSQLi{}).buildOperatorRequest(ctx, sink, *op, opValue)
+	return nosqliBuildOperatorRequest(ctx, sink, *op, opValue)
 }
 
 // CmdErrorFirstMatch returns the first cmd-error pattern that appears

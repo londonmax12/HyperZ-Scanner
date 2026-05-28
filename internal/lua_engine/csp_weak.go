@@ -5,27 +5,6 @@ import (
 	"strings"
 )
 
-// CSPWeak inspects the value of a present Content-Security-Policy and flags
-// directives that defeat the policy's protection: wildcards in script-src,
-// 'unsafe-inline' / 'unsafe-eval' without mitigating nonce or hash sources,
-// scheme-only allowlists, missing object-src / base-uri / frame-ancestors,
-// and Report-Only-without-enforcement.
-//
-// This complements [SecurityHeaders], which only fires when the CSP header
-// is absent entirely. A site that ships a header reading
-//
-//	default-src *; script-src 'unsafe-inline' 'unsafe-eval' https: http:; object-src *
-//
-// passes the "has a CSP" bar but is not actually defended against XSS, and
-// without this check would slip through every passive scan unflagged.
-//
-// Severity climbs with how completely the weakness undoes the policy:
-// 'unsafe-inline' in script-src (without a neutralizing nonce/hash) is the
-// canonical "CSP is decorative" foot-gun and lands at Critical; missing
-// object-src / base-uri are Medium because they require an attacker to
-// already have an HTML-injection foothold to abuse.
-type CSPWeak struct{}
-
 // cspWeakness is one (directive, problem) pair surfaced during analysis.
 // The check consolidates every weakness in a policy into a single Finding
 // (mirroring [SecurityHeaders]) so a header with seven problems produces
