@@ -43,9 +43,9 @@ local function probe(ctx, sink)
   local anchor = sink.value
   if anchor == "" then anchor = FILLER_VALUE end
 
-  local cand_sleep = ctx.body.cmd_injection_sleep_seconds()
+  local cand_sleep = ctx.injection.cmd_injection_sleep_seconds()
   local conf_sleep = cand_sleep + 1
-  local margin = ctx.body.cmd_injection_margin()
+  local margin = ctx.injection.cmd_injection_margin()
 
   -- Baseline with a benign canary tail; latency is what the rest of
   -- the oracle compares against.
@@ -53,7 +53,7 @@ local function probe(ctx, sink)
   local base_latency, base_err = send_for_timing(ctx, sink, anchor .. canary)
   if base_err then return nil, base_err end
 
-  for _, payload in ipairs(ctx.payloads.cmd_inject()) do
+  for _, payload in ipairs(ctx.injection.cmd_inject()) do
     local cand_wire = anchor .. ctx.payloads.render(payload.template, "", cand_sleep)
     local cand_latency, cand_err = send_for_timing(ctx, sink, cand_wire)
     if cand_err then

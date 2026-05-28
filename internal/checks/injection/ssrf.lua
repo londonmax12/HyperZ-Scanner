@@ -30,14 +30,14 @@ local check = {
 }
 
 local function probe_inband(ctx, target, sink)
-  local canary = ctx.payloads.ssrf_canary()
+  local canary = ctx.injection.ssrf_canary()
   local req, mut_err = sink:mutate_request(canary)
   if mut_err then return nil, mut_err end
   local resp, do_err = ctx.client:do_no_follow(req)
   if do_err then return nil, do_err end
-  local body, truncated, rerr = resp:read_body_capped(ctx.payloads.ssrf_body_cap())
+  local body, truncated, rerr = resp:read_body_capped(ctx.injection.ssrf_body_cap())
   if rerr then return nil, rerr end
-  local pattern = ctx.body.ssrf_matches_error(body)
+  local pattern = ctx.injection.ssrf_matches_error(body)
   if pattern == "" then return nil end
 
   local probe_url = req:url()
@@ -91,14 +91,14 @@ function check.run(ctx)
   if perr or not u or u.scheme == "" or u.host == "" then return nil end
   if not ctx.scope:allows(ctx.page.url) then return nil end
 
-  local sweep = ctx:level_at_least("aggressive") or ctx.payloads.ssrf_looks_proxyish(u.path)
+  local sweep = ctx:level_at_least("aggressive") or ctx.injection.ssrf_looks_proxyish(u.path)
 
   local sweep_params = {}
-  for _, name in ipairs(ctx.payloads.ssrf_specific_params()) do
+  for _, name in ipairs(ctx.injection.ssrf_specific_params()) do
     sweep_params[#sweep_params + 1] = name
   end
   if sweep then
-    for _, name in ipairs(ctx.payloads.ssrf_generic_params()) do
+    for _, name in ipairs(ctx.injection.ssrf_generic_params()) do
       sweep_params[#sweep_params + 1] = name
     end
   end

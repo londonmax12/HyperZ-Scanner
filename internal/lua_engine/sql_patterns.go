@@ -7,7 +7,9 @@ import (
 // MatchSQLPatterns returns every SQLErrorPatterns entry that appears in
 // body. Body is lower-cased once per call (the pattern list is already
 // lower-cased) so the substring scan is case-insensitive without per-
-// pattern allocations.
+// pattern allocations. Used by the SQLi-error injection port and any
+// other check (JWT alg-confusion, ...) that needs to recognise driver
+// error leakage in a response body.
 func MatchSQLPatterns(body []byte) []string {
 	if len(body) == 0 {
 		return nil
@@ -25,6 +27,9 @@ func MatchSQLPatterns(body []byte) []string {
 // SubtractPatterns returns the elements of hits that are not in baseline.
 // Used to drop patterns that were already present before our probe ran -
 // the difference is the part attributable to the injection attempt.
+// Generic enough that multiple per-family subpackages call into it
+// (sqli-error, sqli-time, ldap-injection, nosqli, ssti, traversal,
+// xxe), so it lives in the bridge root rather than any one family.
 func SubtractPatterns(hits, baseline []string) []string {
 	if len(baseline) == 0 {
 		return hits

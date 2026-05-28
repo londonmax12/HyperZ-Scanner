@@ -3,7 +3,7 @@
 --      Mongo operator suffix (`name[$eq]`, `name[$in][0]`) or
 --      equivalent nested-JSON shape, oscillating the value between
 --      sink.value (truthy) and a fresh canary (falsy). The wire-shape
---      rewrite is produced by ctx.body.nosqli_build_operator_request.
+--      rewrite is produced by ctx.injection.nosqli_build_operator_request.
 --   2. Error-based: append payloads engineered to break Mongo /
 --      Mongoose driver parsing. A driver-error pattern not already
 --      in baseline body fires the finding.
@@ -68,7 +68,7 @@ local function send_value(ctx, sink, wire_value)
 end
 
 local function send_operator(ctx, sink, op_name, op_value)
-  local req, build_err = ctx.body.nosqli_build_operator_request(sink, op_name, op_value)
+  local req, build_err = ctx.injection.nosqli_build_operator_request(sink, op_name, op_value)
   if build_err then return nil, nil, nil, false, build_err end
   local resp, do_err = ctx.client:do_no_follow(req)
   if do_err then return req, nil, nil, false, do_err end
@@ -85,7 +85,7 @@ local function probe(ctx, sink)
   local base_prep = strip_all(base_body, sink.value)
   local baseline_snap = { status = base_status, body = base_prep }
 
-  for _, op in ipairs(ctx.payloads.nosqli_boolean_ops()) do
+  for _, op in ipairs(ctx.injection.nosqli_boolean_ops()) do
     local canary = new_canary()
     local _, t_resp, t_body, _, t_err = send_operator(ctx, sink, op.name, sink.value)
     if t_err then
@@ -133,14 +133,14 @@ local function probe(ctx, sink)
     end
   end
 
-  for _, payload in ipairs(ctx.payloads.nosqli_error_payloads()) do
+  for _, payload in ipairs(ctx.injection.nosqli_error_payloads()) do
     local wire = sink.value .. payload
     local req, resp, body, truncated, err = send_value(ctx, sink, wire)
     if err then
       ctx:report(string.format("nosqli error-based %s %s=%s payload=%q: %s",
         sink.loc, sink.name, sink.url, payload, err))
     else
-      local new_hits = ctx.body.mongo_error_new_matches(body, base_body)
+      local new_hits = ctx.injection.mongo_error_new_matches(body, base_body)
       if #new_hits > 0 then
         local probe_url = req:url()
         return {
@@ -179,7 +179,7 @@ function check.run(ctx)
   local first_err
   local probed_any = false
   for _, sink in ipairs(sinks) do
-    if ctx.body.nosqli_sink_probable(sink.loc) and ctx.scope:allows(sink.url) then
+    if ctx.injection.nosqli_sink_probable(sink.loc) and ctx.scope:allows(sink.url) then
       local f, err = probe(ctx, sink)
       if err then
         ctx:report(string.format("probe %s %s=%s: %s", sink.loc, sink.name, sink.url, err))

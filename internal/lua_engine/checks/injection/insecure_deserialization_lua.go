@@ -1,4 +1,4 @@
-package lua_engine
+package injection
 
 // This file exposes the insecure-deserialization check's helpers to
 // the Lua bridge. Sibling to insecure_deserialization.go: forwards

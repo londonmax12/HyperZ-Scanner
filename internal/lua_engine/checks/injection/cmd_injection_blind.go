@@ -1,4 +1,4 @@
-package lua_engine
+package injection
 
 // cmdInjectionBlindOOBPayload describes one canary-fetching command
 // injection. Tmpl carries a {{URL}} placeholder substituted with the

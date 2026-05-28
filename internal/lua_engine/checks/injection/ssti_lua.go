@@ -1,6 +1,10 @@
-package lua_engine
+package injection
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/londonmax12/hyperz/internal/lua_engine"
+)
 
 // This file exposes the ssti check's helpers to the Lua bridge.
 // Sibling to ssti.go: forwards into the package-private pattern
@@ -11,13 +15,11 @@ import "strings"
 // SSTIErrorNewMatches exposes the SSTI check's pattern catalogue
 // against the Lua port's baseline + payload-stage subtraction.
 func SSTIErrorNewMatches(body, baseline []byte) []string {
-	return SubtractPatterns(matchSSTIErrors(body), matchSSTIErrors(baseline))
+	return lua_engine.SubtractPatterns(matchSSTIErrors(body), matchSSTIErrors(baseline))
 }
 
 func SSTIErrorPayloadsLua() []string {
-	out := make([]string, len(sstiErrorPayloads))
-	copy(out, sstiErrorPayloads)
-	return out
+	return lua_engine.SSTIErrorPayloads()
 }
 
 // SSTIConfirmProbeLua returns the (template, expected) pair derived
@@ -50,4 +52,4 @@ func SSTIOOBPayloadsLua() []SSTIOOBPayloadLua {
 // LocDescriptorLua forwards the locDescriptor helper so the Lua port
 // renders titles like "header" / "cookie" / "parameter" the same way
 // the Go check does. Drops the need for a per-port lookup table.
-func LocDescriptorLua(loc string) string { return locDescriptor(Loc(loc)) }
+func LocDescriptorLua(loc string) string { return locDescriptor(lua_engine.Loc(loc)) }

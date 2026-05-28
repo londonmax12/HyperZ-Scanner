@@ -51,14 +51,14 @@ local function probe(ctx, sink)
   local anchor = sink.value
   if anchor == "" then anchor = FILLER_VALUE end
 
-  local sleep_secs = ctx.body.sqli_time_sleep_seconds()
-  local margin = ctx.body.sqli_time_margin()
+  local sleep_secs = ctx.injection.sqli_time_sleep_seconds()
+  local margin = ctx.injection.sqli_time_margin()
 
   local canary = new_canary()
   local _, _, _, _, base_latency, base_err = send(ctx, sink, anchor .. canary)
   if base_err then return nil, base_err end
 
-  for _, payload in ipairs(ctx.payloads.sqli_time()) do
+  for _, payload in ipairs(ctx.injection.sqli_time()) do
     local rendered = ctx.payloads.render(payload.template, "", sleep_secs)
 
     -- Cache-bust suffix per probe. Every PayloadSQLiTime template ends

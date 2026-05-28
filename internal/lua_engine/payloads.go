@@ -367,6 +367,16 @@ func SSTIErrorPatterns() []string {
 	return out
 }
 
+// SSTIErrorPayloads returns the curated SSTI error-payload list (the
+// leading-token shapes the .lua port appends to a sink value to provoke
+// a template-engine parse error). Exported so the injection subpackage
+// can surface the catalogue to ssti.lua without re-declaring it.
+func SSTIErrorPayloads() []string {
+	out := make([]string, len(sstiErrorPayloads))
+	copy(out, sstiErrorPayloads)
+	return out
+}
+
 // Every SSTIProbe template pivots on the literal "7*7" so a follow-up probe
 // can derive a fresh expression in the same engine syntax by string-replacing
 // the operands - see SSTI.confirmProbe. Keep this invariant when adding new

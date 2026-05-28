@@ -74,9 +74,9 @@ local function probe(ctx, sink)
   local base_prep = strip_all(base_body, sink.value)
   local baseline_snap = { status = base_status, body = base_prep }
 
-  local placeholder = ctx.payloads.ldapi_canary_placeholder()
+  local placeholder = ctx.injection.ldapi_canary_placeholder()
 
-  for _, pair in ipairs(ctx.payloads.ldapi_boolean_pairs()) do
+  for _, pair in ipairs(ctx.injection.ldapi_boolean_pairs()) do
     local canary = new_canary()
     local falsy_suffix = string.gsub(pair.falsy_template, placeholder, canary)
     local truthy_wire = sink.value .. pair.truthy
@@ -128,14 +128,14 @@ local function probe(ctx, sink)
     end
   end
 
-  for _, payload in ipairs(ctx.payloads.ldapi_error_payloads()) do
+  for _, payload in ipairs(ctx.injection.ldapi_error_payloads()) do
     local wire = sink.value .. payload
     local req, resp, body, truncated, err = send(ctx, sink, wire)
     if err then
       ctx:report(string.format("ldapi error-based %s %s=%s payload=%q: %s",
         sink.loc, sink.name, sink.url, payload, err))
     else
-      local new_hits = ctx.body.ldap_error_new_matches(body, base_body)
+      local new_hits = ctx.injection.ldap_error_new_matches(body, base_body)
       if #new_hits > 0 then
         local probe_url = req:url()
         return {
@@ -174,7 +174,7 @@ function check.run(ctx)
   local first_err
   local probed_any = false
   for _, sink in ipairs(sinks) do
-    if ctx.body.ldapi_sink_probable(sink.loc) and ctx.scope:allows(sink.url) then
+    if ctx.injection.ldapi_sink_probable(sink.loc) and ctx.scope:allows(sink.url) then
       local f, err = probe(ctx, sink)
       if err then
         ctx:report(string.format("probe %s %s=%s: %s", sink.loc, sink.name, sink.url, err))

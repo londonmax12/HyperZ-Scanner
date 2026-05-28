@@ -1,4 +1,8 @@
-package lua_engine
+package injection
+
+import (
+	"github.com/londonmax12/hyperz/internal/lua_engine"
+)
 
 // This file exposes the ldap-injection check's helpers to the Lua
 // bridge. Sibling to ldap_injection.go: forwards into the package-
@@ -10,7 +14,7 @@ package lua_engine
 // catalogue and the matcher live in Go; the Lua port owns the per-sink
 // orchestration only.
 func LDAPErrorNewMatches(body, baseline []byte) []string {
-	return SubtractPatterns(matchLDAPErrors(body), matchLDAPErrors(baseline))
+	return lua_engine.SubtractPatterns(matchLDAPErrors(body), matchLDAPErrors(baseline))
 }
 
 // LDAPiBooleanProbePair carries one LDAPi truthy/falsy probe pair.
@@ -45,4 +49,6 @@ func LDAPiErrorPayloadsLua() []string {
 
 // LDAPiSinkProbable forwards ldapiSinkProbable so the Lua port
 // drops the same Loc set the Go check skips (header / cookie).
-func LDAPiSinkProbable(loc string) bool { return ldapiSinkProbable(Sink{Loc: Loc(loc)}) }
+func LDAPiSinkProbable(loc string) bool {
+	return ldapiSinkProbable(lua_engine.Sink{Loc: lua_engine.Loc(loc)})
+}

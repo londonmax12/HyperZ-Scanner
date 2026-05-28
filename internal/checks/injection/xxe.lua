@@ -137,17 +137,17 @@ end
 local function probe(ctx, target, cand)
   local _, _, base_body, _, base_err = send(ctx, cand, ctx.xxe.baseline_doc())
   if base_err then return nil, base_err end
-  local baseline_markers = ctx.body.traversal_markers(base_body)
-  local baseline_errors  = ctx.body.xxe_error_patterns(base_body)
-  local baseline_b64     = ctx.body.xxe_base64_markers(base_body)
+  local baseline_markers = ctx.injection.traversal_markers(base_body)
+  local baseline_errors  = ctx.injection.xxe_error_patterns(base_body)
+  local baseline_b64     = ctx.injection.xxe_base64_markers(base_body)
 
   -- Phase 1: file disclosure.
   for _, doc in ipairs(ctx.xxe.file_disclose_docs()) do
     local req, resp, body, truncated, err = send(ctx, cand, doc)
     if err then return nil, err end
-    local new_hits = subtract_patterns(ctx.body.traversal_markers(body), baseline_markers)
+    local new_hits = subtract_patterns(ctx.injection.traversal_markers(body), baseline_markers)
     if #new_hits == 0 then
-      local b64 = subtract_patterns(ctx.body.xxe_base64_markers(body), baseline_b64)
+      local b64 = subtract_patterns(ctx.injection.xxe_base64_markers(body), baseline_b64)
       if #b64 > 0 then new_hits = b64 end
     end
     if #new_hits > 0 then
@@ -178,7 +178,7 @@ local function probe(ctx, target, cand)
   for _, doc in ipairs(ctx.xxe.error_docs()) do
     local req, resp, body, truncated, err = send(ctx, cand, doc)
     if err then return nil, err end
-    local new_hits = subtract_patterns(ctx.body.xxe_error_patterns(body), baseline_errors)
+    local new_hits = subtract_patterns(ctx.injection.xxe_error_patterns(body), baseline_errors)
     if #new_hits > 0 then
       local probe_url = req:url()
       return {

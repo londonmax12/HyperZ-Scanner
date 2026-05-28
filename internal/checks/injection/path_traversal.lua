@@ -3,10 +3,10 @@
 -- traversal payload catalogue. A finding fires on the first payload
 -- whose response introduces a TraversalMarkers substring (root:x:0:0:,
 -- the Windows hosts header) that the baseline did not already carry.
--- Baseline subtraction lives behind ctx.body.traversal_new_markers.
+-- Baseline subtraction lives behind ctx.injection.traversal_new_markers.
 --
 -- Sweep gating: at LevelDefault only path-ish sinks are probed
--- (ctx.body.path_sink_candidate); LevelAggressive lifts the gate and
+-- (ctx.injection.path_sink_candidate); LevelAggressive lifts the gate and
 -- probes every sink.
 
 local check = {
@@ -42,7 +42,7 @@ local function probe(ctx, sink)
   local _, _, baseline_body, _, base_err = send(ctx, sink, canary)
   if base_err then return nil, base_err end
 
-  for _, payload in ipairs(ctx.payloads.traversal()) do
+  for _, payload in ipairs(ctx.injection.traversal()) do
     -- Traversal payloads must replace the value entirely - prepending
     -- the original ("42../../../../etc/passwd") doesn't traverse on
     -- any backend that joins inputs as a path component.
@@ -51,7 +51,7 @@ local function probe(ctx, sink)
       ctx:report(string.format("path-traversal payload %s %s=%s pl=%s: %s",
         sink.loc, sink.name, sink.url, payload.name, err))
     else
-      local new_hits = ctx.body.traversal_new_markers(body, baseline_body)
+      local new_hits = ctx.injection.traversal_new_markers(body, baseline_body)
       if #new_hits > 0 then
         local probe_url = req:url()
         return {
@@ -91,7 +91,7 @@ function check.run(ctx)
   local first_err
   local probed_any = false
   for _, sink in ipairs(sinks) do
-    if (sweep_all or ctx.body.path_sink_candidate(sink)) and ctx.scope:allows(sink.url) then
+    if (sweep_all or ctx.injection.path_sink_candidate(sink)) and ctx.scope:allows(sink.url) then
       local f, err = probe(ctx, sink)
       if err then
         ctx:report(string.format("probe %s %s=%s: %s", sink.loc, sink.name, sink.url, err))

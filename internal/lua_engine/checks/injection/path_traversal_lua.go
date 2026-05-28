@@ -1,4 +1,8 @@
-package lua_engine
+package injection
+
+import (
+	"github.com/londonmax12/hyperz/internal/lua_engine"
+)
 
 // This file exposes the path-traversal check's helpers to the Lua
 // bridge. Sibling to path_traversal.go: forwards into the package-
@@ -11,7 +15,7 @@ package lua_engine
 // that did not already appear in baseline. Mirrors the SQLiErrorNewMatches
 // shape used by the existing sqli-error Lua port.
 func TraversalNewMarkers(body, baseline []byte) []string {
-	return SubtractPatterns(matchTraversalMarkers(body), matchTraversalMarkers(baseline))
+	return lua_engine.SubtractPatterns(matchTraversalMarkers(body), matchTraversalMarkers(baseline))
 }
 
 // TraversalMarkerHits returns the un-subtracted marker hits in body.
@@ -23,4 +27,4 @@ func TraversalMarkerHits(body []byte) []string { return matchTraversalMarkers(bo
 // PathSinkCandidate forwards pathSinkCandidate. The Lua port gates the
 // sweep on the same heuristic the Go check uses so the request count
 // stays identical between the two implementations.
-func PathSinkCandidate(s Sink) bool { return pathSinkCandidate(s) }
+func PathSinkCandidate(s lua_engine.Sink) bool { return pathSinkCandidate(s) }

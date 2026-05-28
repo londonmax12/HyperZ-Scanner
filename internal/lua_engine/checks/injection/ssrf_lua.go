@@ -1,4 +1,4 @@
-package lua_engine
+package injection
 
 // This file exposes the ssrf check's helpers to the Lua bridge.
 // Sibling to ssrf.go: forwards into the package-private canary URL,

@@ -1,7 +1,9 @@
-package lua_engine
+package injection
 
 import (
 	"bytes"
+
+	"github.com/londonmax12/hyperz/internal/lua_engine"
 )
 
 // ldapiCanaryPlaceholder marks the slot in a falsy template where the
@@ -103,9 +105,9 @@ var ldapErrorPatterns = []string{
 // into search filters (login forms, user lookup endpoints, directory
 // search). Headers and cookies are not used to construct LDAP filters
 // in practice, so probing them would just waste requests.
-func ldapiSinkProbable(s Sink) bool {
+func ldapiSinkProbable(s lua_engine.Sink) bool {
 	switch s.Loc {
-	case LocQuery, LocForm, LocJSON, LocPath:
+	case lua_engine.LocQuery, lua_engine.LocForm, lua_engine.LocJSON, lua_engine.LocPath:
 		return true
 	}
 	return false

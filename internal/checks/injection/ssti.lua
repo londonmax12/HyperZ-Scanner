@@ -61,7 +61,7 @@ local function probe(ctx, sink)
   if base_err then return nil, base_err end
   local any_truncated = baseline_truncated
 
-  for _, exp_probe in ipairs(ctx.payloads.ssti_expr_probes()) do
+  for _, exp_probe in ipairs(ctx.injection.ssti_expr_probes()) do
     local tok = new_canary()
     local wire = string.gsub(exp_probe.template, "{{TOKEN}}", tok)
     local req, resp, body, truncated, err = send(ctx, sink, wire)
@@ -70,7 +70,7 @@ local function probe(ctx, sink)
 
     local needle = tok .. exp_probe.expected .. tok
     if string.find(body, needle, 1, true) then
-      local confirm = ctx.payloads.ssti_confirm_probe(exp_probe.template)
+      local confirm = ctx.injection.ssti_confirm_probe(exp_probe.template)
       local confirm_tok = new_canary()
       local confirm_wire = string.gsub(confirm.template, "{{TOKEN}}", confirm_tok)
       local _, _, confirm_body, confirm_truncated, conf_err = send(ctx, sink, confirm_wire)
@@ -91,7 +91,7 @@ local function probe(ctx, sink)
       local sev = confirmed and severity.critical or severity.high
       local title_suffix = confirmed and "expression evaluation" or "expression evaluation, unconfirmed"
       local probe_url = req:url()
-      local loc_descriptor = ctx.payloads.loc_descriptor(sink.loc)
+      local loc_descriptor = ctx.injection.loc_descriptor(sink.loc)
       local math_source = string.gsub(exp_probe.template, "{{TOKEN}}", "")
       local confirm_source = string.gsub(confirm.template, "{{TOKEN}}", "")
       return {
@@ -118,14 +118,14 @@ local function probe(ctx, sink)
     end
   end
 
-  for _, error_payload in ipairs(ctx.payloads.ssti_error_payloads()) do
+  for _, error_payload in ipairs(ctx.injection.ssti_error_payloads()) do
     local req, resp, body, truncated, err = send(ctx, sink, error_payload)
     if err then return nil, err end
     if truncated then any_truncated = true end
-    local new_hits = ctx.body.ssti_error_new_matches(body, baseline_body)
+    local new_hits = ctx.injection.ssti_error_new_matches(body, baseline_body)
     if #new_hits > 0 then
       local probe_url = req:url()
-      local loc_descriptor = ctx.payloads.loc_descriptor(sink.loc)
+      local loc_descriptor = ctx.injection.loc_descriptor(sink.loc)
       return {
         severity = severity.high,
         url      = probe_url,
@@ -156,7 +156,7 @@ end
 
 local function probe_oob(ctx, sink)
   if not ctx.oob:attached() then return end
-  for _, pld in ipairs(ctx.payloads.ssti_oob_payloads()) do
+  for _, pld in ipairs(ctx.injection.ssti_oob_payloads()) do
     local canary = ctx.oob:register{
       target = ctx.page.url,
       sink   = sink.name,
@@ -246,7 +246,7 @@ function check.drain(ctx)
           .. 'treat as remote code execution unless the engine sandbox is independently verified.',
         sink_name, loc, engine, reg.http_url, #hits,
         hit.method, hit.source_addr, hit.user_agent or "", engine)
-      local loc_descriptor = ctx.payloads.loc_descriptor(loc)
+      local loc_descriptor = ctx.injection.loc_descriptor(loc)
       findings[#findings + 1] = {
         severity = severity.critical,
         target   = target,

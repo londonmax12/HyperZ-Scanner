@@ -158,6 +158,22 @@ func PushSink(L *lua.LState, s *Sink) lua.LValue {
 	return ud
 }
 
+// UnwrapSink returns the *Sink riding inside a Lua userdata value the
+// bridge pushed via PushSink. Exported so per-family subpackages can
+// reach the underlying Sink without re-declaring the wrapper type.
+// Returns (nil, false) when v is not a sink userdata.
+func UnwrapSink(v lua.LValue) (*Sink, bool) {
+	ud, ok := v.(*lua.LUserData)
+	if !ok {
+		return nil, false
+	}
+	wrapper, ok := ud.Value.(*sinkUserData)
+	if !ok {
+		return nil, false
+	}
+	return wrapper.s, true
+}
+
 // ensureSinkMT builds the per-VM sink metatable. __index is a
 // function rather than a methods table because we want both field
 // reads (sink.url, sink.method, ...) AND method calls (sink:mutate_request)
@@ -231,7 +247,7 @@ func sinkMutateRequest(L *lua.LState) int {
 		L.Push(lua.LString(err.Error()))
 		return 2
 	}
-	L.Push(pushRequest(L, req, nil, false))
+	L.Push(PushRequest(L, req, nil, false))
 	return 1
 }
 

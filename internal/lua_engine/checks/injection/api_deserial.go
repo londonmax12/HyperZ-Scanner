@@ -1,7 +1,9 @@
-package lua_engine
+package injection
 
 import (
 	lua "github.com/yuin/gopher-lua"
+
+	"github.com/londonmax12/hyperz/internal/lua_engine"
 )
 
 // buildDeserialTable returns the ctx.deserial helper namespace. The
@@ -53,14 +55,14 @@ func buildDeserialTable(L *lua.LState) *lua.LTable {
 }
 
 func deserialFormats(L *lua.LState) int {
-	catalogue := RequireString(L, 1)
+	catalogue := lua_engine.RequireString(L, 1)
 	out := L.NewTable()
 	for i, f := range DeserialFormatListLua(catalogue) {
 		entry := L.NewTable()
 		entry.RawSetString("name", lua.LString(f.Name))
 		entry.RawSetString("label", lua.LString(f.Label))
 		entry.RawSetString("probe_payload", lua.LString(f.ProbePayload))
-		entry.RawSetString("error_pats", PushStringList(L, f.ErrorPats))
+		entry.RawSetString("error_pats", lua_engine.PushStringList(L, f.ErrorPats))
 		out.RawSetInt(i+1, entry)
 	}
 	L.Push(out)
@@ -68,33 +70,33 @@ func deserialFormats(L *lua.LState) int {
 }
 
 func deserialClassify(L *lua.LState) int {
-	catalogue := RequireString(L, 1)
-	name, label := DeserialClassifyValueLua(catalogue, RequireString(L, 2))
+	catalogue := lua_engine.RequireString(L, 1)
+	name, label := DeserialClassifyValueLua(catalogue, lua_engine.RequireString(L, 2))
 	L.Push(lua.LString(name))
 	L.Push(lua.LString(label))
 	return 2
 }
 
 func deserialMatchAll(L *lua.LState) int {
-	catalogue := RequireString(L, 1)
-	body := RequireString(L, 2)
-	L.Push(PushStringList(L, DeserialMatchAllLua(catalogue, []byte(body))))
+	catalogue := lua_engine.RequireString(L, 1)
+	body := lua_engine.RequireString(L, 2)
+	L.Push(lua_engine.PushStringList(L, DeserialMatchAllLua(catalogue, []byte(body))))
 	return 1
 }
 
 func deserialMatchFormat(L *lua.LState) int {
-	catalogue := RequireString(L, 1)
-	body := RequireString(L, 2)
-	name := RequireString(L, 3)
-	L.Push(PushStringList(L, DeserialMatchFormatLua(catalogue, []byte(body), name)))
+	catalogue := lua_engine.RequireString(L, 1)
+	body := lua_engine.RequireString(L, 2)
+	name := lua_engine.RequireString(L, 3)
+	L.Push(lua_engine.PushStringList(L, DeserialMatchFormatLua(catalogue, []byte(body), name)))
 	return 1
 }
 
 func deserialBodyMarker(L *lua.LState) int {
-	L.Push(lua.LString(DeserialBodyMarkerLua([]byte(RequireString(L, 1)))))
+	L.Push(lua.LString(DeserialBodyMarkerLua([]byte(lua_engine.RequireString(L, 1)))))
 	return 1
 }
 
 func init() {
-	RegisterHelperTable("deserial", buildDeserialTable)
+	lua_engine.RegisterHelperTable("deserial", buildDeserialTable)
 }

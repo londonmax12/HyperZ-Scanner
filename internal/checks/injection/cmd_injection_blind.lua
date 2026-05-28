@@ -40,10 +40,10 @@ end
 
 local function probe_inband(ctx, sink)
   local anchor = sink.value
-  if anchor == "" then anchor = ctx.payloads.cmd_injection_filler_value() end
+  if anchor == "" then anchor = ctx.injection.cmd_injection_filler_value() end
 
   local canary = new_canary()
-  for _, payload in ipairs(ctx.payloads.cmd_inject_blind()) do
+  for _, payload in ipairs(ctx.injection.cmd_inject_blind()) do
     local wire = anchor .. ctx.payloads.render(payload.template, canary, 0)
     local req, mut_err = sink:mutate_request(wire)
     if mut_err then
@@ -62,7 +62,7 @@ local function probe_inband(ctx, sink)
         else
           local body_lower = string.lower(body)
           if string.find(body_lower, string.lower(canary), 1, true) then
-            local matched_error = ctx.body.cmd_error_first_match(body)
+            local matched_error = ctx.injection.cmd_error_first_match(body)
             if matched_error ~= "" then
               local probe_url = req:url()
               return {
@@ -97,9 +97,9 @@ end
 local function probe_oob(ctx, sink)
   if not ctx.oob:attached() then return end
   local anchor = sink.value
-  if anchor == "" then anchor = ctx.payloads.cmd_injection_filler_value() end
+  if anchor == "" then anchor = ctx.injection.cmd_injection_filler_value() end
 
-  for _, payload in ipairs(ctx.payloads.cmd_injection_blind_oob()) do
+  for _, payload in ipairs(ctx.injection.cmd_injection_blind_oob()) do
     local canary = ctx.oob:register{
       target  = ctx.page.url,
       sink    = sink.name,

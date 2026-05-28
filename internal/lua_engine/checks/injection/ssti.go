@@ -1,7 +1,9 @@
-package lua_engine
+package injection
 
 import (
 	"bytes"
+
+	"github.com/londonmax12/hyperz/internal/lua_engine"
 )
 
 // sstiOOBPayload describes one engine-specific blind probe: the template
@@ -44,11 +46,11 @@ var sstiOOBPayloads = []sstiOOBPayload{
 // locDescriptor returns the human-facing role for a Loc - "parameter" for
 // query/form/path/json inputs, "header" for headers, etc. - so the finding
 // title reads "in query parameter" rather than "in query query".
-func locDescriptor(l Loc) string {
+func locDescriptor(l lua_engine.Loc) string {
 	switch l {
-	case LocHeader:
+	case lua_engine.LocHeader:
 		return "header"
-	case LocCookie:
+	case lua_engine.LocCookie:
 		return "cookie"
 	default:
 		return "parameter"
@@ -63,7 +65,7 @@ func matchSSTIErrors(body []byte) []string {
 	}
 	lower := bytes.ToLower(body)
 	var hits []string
-	for _, pat := range SSTIErrorPatterns() {
+	for _, pat := range lua_engine.SSTIErrorPatterns() {
 		if bytes.Contains(lower, []byte(pat)) {
 			hits = append(hits, pat)
 		}

@@ -39,12 +39,14 @@ type requestUserData struct {
 	bodyTrunc bool
 }
 
-// pushRequest exposes req as a userdata with a methods metatable. The
+// PushRequest exposes req as a userdata with a methods metatable. The
 // optional bodySnap is the captured outgoing-body snapshot used for
 // evidence (see httpclient.SnapshotRequestBody and RecordExchange);
 // pass nil/false when the request has no body or the caller did not
-// capture one.
-func pushRequest(L *lua.LState, req *http.Request, bodySnap []byte, truncated bool) lua.LValue {
+// capture one. Exported so per-family subpackages can hand request
+// userdata back to Lua callers without re-implementing the metatable
+// wiring.
+func PushRequest(L *lua.LState, req *http.Request, bodySnap []byte, truncated bool) lua.LValue {
 	ud := L.NewUserData()
 	ud.Value = &requestUserData{req: req, bodySnap: bodySnap, bodyTrunc: truncated}
 	ud.Metatable = ensureRequestMT(L)
@@ -686,6 +688,6 @@ func clientNewRequest(L *lua.LState) int {
 	if bodyStr != "" {
 		snap = []byte(bodyStr)
 	}
-	L.Push(pushRequest(L, req, snap, trunc))
+	L.Push(PushRequest(L, req, snap, trunc))
 	return 1
 }

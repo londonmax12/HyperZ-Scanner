@@ -5,7 +5,7 @@
 -- precise on debug pages that legitimately echo driver text.
 --
 -- The pattern catalogue and new-match scanner live behind
--- ctx.body.sqli_error_payloads / ctx.body.sqli_error_new_matches so
+-- ctx.injection.sqli_error_payloads / ctx.injection.sqli_error_new_matches so
 -- the regex set is the single source of truth.
 
 local check = {
@@ -50,7 +50,7 @@ local function probe(ctx, sink)
   local _, _, baseline_body, _, base_err = send(ctx, sink, canary)
   if base_err then return nil, base_err end
 
-  for _, payload in ipairs(ctx.body.sqli_error_payloads()) do
+  for _, payload in ipairs(ctx.injection.sqli_error_payloads()) do
     -- Append onto the existing value rather than replace it: in a
     -- numeric context (id=42) `42'` produces an unterminated literal,
     -- while a bare `'` becomes `''` (valid empty string) and slips by.
@@ -58,7 +58,7 @@ local function probe(ctx, sink)
     local req, resp, body, truncated, err = send(ctx, sink, wire)
     if err then return nil, err end
 
-    local new_hits = ctx.body.sqli_error_new_matches(body, baseline_body)
+    local new_hits = ctx.injection.sqli_error_new_matches(body, baseline_body)
     if #new_hits > 0 then
       local probe_url = req:url()
       return {

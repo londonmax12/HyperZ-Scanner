@@ -95,9 +95,9 @@ local function pp_judge(ctx, baseline, observer, canary_val)
     }
   end
 
-  if ctx.body.is_json_response(observer.content_type or "", observer.body) then
-    local base_indent = ctx.body.json_indent_width(baseline.body)
-    local obs_indent = ctx.body.json_indent_width(observer.body)
+  if ctx.injection.is_json_response(observer.content_type or "", observer.body) then
+    local base_indent = ctx.injection.json_indent_width(baseline.body)
+    local obs_indent = ctx.injection.json_indent_width(observer.body)
     if obs_indent == PROTO_JSON_SPACES and base_indent ~= PROTO_JSON_SPACES then
       return {
         hit    = true,

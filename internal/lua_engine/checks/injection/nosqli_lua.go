@@ -1,9 +1,11 @@
-package lua_engine
+package injection
 
 import (
 	"context"
 	"fmt"
 	"net/http"
+
+	"github.com/londonmax12/hyperz/internal/lua_engine"
 )
 
 // This file exposes the nosqli check's helpers to the Lua bridge.
@@ -14,7 +16,7 @@ import (
 // MongoErrorNewMatches exposes the NoSQLi check's private pattern set
 // against the Lua port's baseline + payload-stage subtraction.
 func MongoErrorNewMatches(body, baseline []byte) []string {
-	return SubtractPatterns(matchMongoErrors(body), matchMongoErrors(baseline))
+	return lua_engine.SubtractPatterns(matchMongoErrors(body), matchMongoErrors(baseline))
 }
 
 // NoSQLiBooleanOperator carries one MongoDB operator the Lua port
@@ -43,14 +45,16 @@ func NoSQLiErrorPayloadsLua() []string {
 
 // NoSQLiSinkProbable forwards nosqliSinkProbable so the Lua port
 // gates on the same Loc set the Go check accepts (query / form / json).
-func NoSQLiSinkProbable(loc string) bool { return nosqliSinkProbable(Sink{Loc: Loc(loc)}) }
+func NoSQLiSinkProbable(loc string) bool {
+	return nosqliSinkProbable(lua_engine.Sink{Loc: lua_engine.Loc(loc)})
+}
 
 // NoSQLiBuildOperatorRequest builds an *http.Request that applies the
 // named operator (op_name = "eq" / "in-array") to sink with opValue.
 // Wraps the package-private buildOperatorRequest so the Lua port can
 // produce the wire-shape rewrites (bracket key for query / form,
 // nested JSON for body) without re-implementing the per-loc shape rules.
-func NoSQLiBuildOperatorRequest(ctx context.Context, sink Sink, opName, opValue string) (*http.Request, error) {
+func NoSQLiBuildOperatorRequest(ctx context.Context, sink lua_engine.Sink, opName, opValue string) (*http.Request, error) {
 	var op *nosqliOp
 	for i := range nosqliBooleanOps {
 		if nosqliBooleanOps[i].Name == opName {

@@ -1,4 +1,4 @@
-package lua_engine
+package injection
 
 import (
 	"bytes"
@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/londonmax12/hyperz/internal/lua_engine"
 )
 
 // nosqliOp is one Mongo operator the boolean phase exercises by
@@ -89,9 +91,9 @@ var mongoErrorPatterns = []string{
 // Only query / form / JSON body inputs get auto-deserialized by common
 // frameworks; header / cookie / path values are taken as strings and
 // never reach a query parser.
-func nosqliSinkProbable(s Sink) bool {
+func nosqliSinkProbable(s lua_engine.Sink) bool {
 	switch s.Loc {
-	case LocQuery, LocForm, LocJSON:
+	case lua_engine.LocQuery, lua_engine.LocForm, lua_engine.LocJSON:
 		return true
 	}
 	return false
@@ -103,14 +105,14 @@ func nosqliSinkProbable(s Sink) bool {
 // object on the backend. For LocJSON it nests op.JSONValue(opValue)
 // inside the JSON body's field value directly - bracket notation has
 // no analogue on the JSON wire, but the structural shape is identical.
-func nosqliBuildOperatorRequest(ctx context.Context, sink Sink, op nosqliOp, opValue string) (*http.Request, error) {
+func nosqliBuildOperatorRequest(ctx context.Context, sink lua_engine.Sink, op nosqliOp, opValue string) (*http.Request, error) {
 	method := strings.ToUpper(sink.Method)
 	if method == "" {
 		method = http.MethodGet
 	}
 	bracketed := sink.Name + op.KeySuffix
 	switch sink.Loc {
-	case LocQuery:
+	case lua_engine.LocQuery:
 		u, err := url.Parse(sink.URL)
 		if err != nil {
 			return nil, fmt.Errorf("parse url %q: %w", sink.URL, err)
@@ -120,7 +122,7 @@ func nosqliBuildOperatorRequest(ctx context.Context, sink Sink, op nosqliOp, opV
 		q.Set(bracketed, opValue)
 		u.RawQuery = q.Encode()
 		return http.NewRequestWithContext(ctx, method, u.String(), nil)
-	case LocForm:
+	case lua_engine.LocForm:
 		body := url.Values{}
 		body.Set(bracketed, opValue)
 		req, err := http.NewRequestWithContext(ctx, method, sink.URL, strings.NewReader(body.Encode()))
@@ -129,7 +131,7 @@ func nosqliBuildOperatorRequest(ctx context.Context, sink Sink, op nosqliOp, opV
 		}
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		return req, nil
-	case LocJSON:
+	case lua_engine.LocJSON:
 		body := map[string]any{sink.Name: op.JSONValue(opValue)}
 		b, err := json.Marshal(body)
 		if err != nil {

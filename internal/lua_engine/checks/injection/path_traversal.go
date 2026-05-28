@@ -1,8 +1,10 @@
-package lua_engine
+package injection
 
 import (
 	"bytes"
 	"strings"
+
+	"github.com/londonmax12/hyperz/internal/lua_engine"
 )
 
 // pathParamKeywords are param-name substrings that mark a sink as
@@ -34,7 +36,7 @@ var pathParamKeywords = []string{
 // already carries a path-shaped character. Either one moves the sink
 // out of "noise" territory; both are loose enough to err on the side
 // of coverage.
-func pathSinkCandidate(s Sink) bool {
+func pathSinkCandidate(s lua_engine.Sink) bool {
 	name := strings.ToLower(s.Name)
 	for _, kw := range pathParamKeywords {
 		if strings.Contains(name, kw) {
@@ -54,7 +56,7 @@ func matchTraversalMarkers(body []byte) []string {
 		return nil
 	}
 	var hits []string
-	for _, m := range TraversalMarkers() {
+	for _, m := range lua_engine.TraversalMarkers() {
 		if bytes.Contains(body, []byte(m)) {
 			hits = append(hits, m)
 		}

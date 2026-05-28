@@ -56,7 +56,7 @@ local function probe(ctx, sink)
   local base_status = base_resp and base_resp:status() or 0
   local baseline_snap = { status = base_status, body = base_body }
 
-  for _, pair in ipairs(ctx.payloads.sqli_boolean_pairs()) do
+  for _, pair in ipairs(ctx.injection.sqli_boolean_pairs()) do
     local truthy_wire = base_value .. pair.truthy
     local falsy_wire = base_value .. pair.falsy
 

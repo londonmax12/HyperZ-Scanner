@@ -1,4 +1,4 @@
-package lua_engine
+package injection
 
 // This file exposes the XXE check's private helpers to the Lua bridge.
 // Sibling to xxe.go: every helper here forwards into a package-private

