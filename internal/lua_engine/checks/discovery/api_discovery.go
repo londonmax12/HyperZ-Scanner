@@ -1,11 +1,21 @@
-package lua_engine
+package discovery
 
 import (
+	"net/http"
+
 	lua "github.com/yuin/gopher-lua"
+
+	"github.com/londonmax12/hyperz/internal/lua_engine"
 )
 
-// buildDiscoveryTable returns the ctx.discovery helper namespace.
-// Surface for the content-discovery Lua port:
+// buildDiscoveryTable returns the ctx.discovery helper namespace. The
+// surface covers both the content-discovery wordlist sweep and the
+// secrets-in-body / source-map-exposure family helpers that used to
+// live on ctx.body. Everything in this namespace is a passive body /
+// path scanner the discovery checks share, so a single ctx.discovery
+// surface keeps them grouped while still being per-family.
+//
+// Content-discovery entries:
 //
 //	ctx.discovery.entries(catalogue, aggressive_bool, hostname)
 //	  Returns the named wordlist for hostname filtered by level + the
@@ -48,6 +58,25 @@ import (
 //	ctx.discovery.body_cap() -> int (=16 KiB)
 //	  The per-probe body-read cap.
 //
+// Secrets-in-body entries:
+//
+//	ctx.discovery.find_secrets(body)
+//	  -> array of { id, label, severity, raw, redacted, count }
+//
+//	ctx.discovery.redact_secret(raw)
+//	  -> string. Identical output to the Go check's redactSecret.
+//
+// Source-map-exposure entries:
+//
+//	ctx.discovery.source_map_kind(content_type)
+//	  -> (kind_string, ok_bool) -> ("js"|"css"|"", false|true).
+//
+//	ctx.discovery.find_source_map_ref(headers, body, kind)
+//	  -> string (the sourceMappingURL value the response advertises).
+//
+//	ctx.discovery.looks_like_source_map(body)
+//	  -> bool. Anchors on the "version" + "sources"/"mappings" triple.
+//
 // Per-host once-fire is provided by ctx.host.claim_once in api_host.go;
 // content-discovery uses it the same way any host-scoped check does.
 func buildDiscoveryTable(L *lua.LState) *lua.LTable {
@@ -61,7 +90,49 @@ func buildDiscoveryTable(L *lua.LState) *lua.LTable {
 	t.RawSetString("canary_path", L.NewFunction(discoveryCanaryPath))
 	t.RawSetString("baseline_probes", L.NewFunction(discoveryBaselineProbes))
 	t.RawSetString("body_cap", L.NewFunction(discoveryBodyCap))
+	t.RawSetString("find_secrets", L.NewFunction(discoveryFindSecrets))
+	t.RawSetString("redact_secret", L.NewFunction(discoveryRedactSecret))
+	t.RawSetString("is_scannable_ct", L.NewFunction(discoveryIsScannableCT))
+	t.RawSetString("source_map_kind", L.NewFunction(discoverySourceMapKind))
+	t.RawSetString("find_source_map_ref", L.NewFunction(discoveryFindSourceMapRef))
+	t.RawSetString("looks_like_source_map", L.NewFunction(discoveryLooksLikeSourceMap))
 	return t
+}
+
+// readStringList accepts a Lua string, an array table of strings, or
+// nil, and returns the equivalent []string. Local copy of the same
+// helper the root-level bridge keeps; lives here so the discovery
+// helpers do not reach into the root for what is otherwise a one-
+// screen utility.
+func readStringList(v lua.LValue) []string {
+	if v == nil || v == lua.LNil {
+		return nil
+	}
+	if s, ok := v.(lua.LString); ok {
+		return []string{string(s)}
+	}
+	if tbl, ok := v.(*lua.LTable); ok {
+		n := tbl.Len()
+		out := make([]string, 0, n)
+		for i := 1; i <= n; i++ {
+			out = append(out, lua_engine.LValString(tbl.RawGetInt(i)))
+		}
+		return out
+	}
+	return nil
+}
+
+// lvalBool coerces a Lua value into a bool using the gopher-lua truth
+// table (LFalse and LNil are false; everything else is truthy). Used
+// by the optional aggressive-flag slot on the entries helper.
+func lvalBool(v lua.LValue) bool {
+	if v == nil || v == lua.LNil {
+		return false
+	}
+	if b, ok := v.(lua.LBool); ok {
+		return bool(b)
+	}
+	return true
 }
 
 // discoveryEntries reads catalogue + aggressive + hostname from Lua
@@ -69,14 +140,14 @@ func buildDiscoveryTable(L *lua.LState) *lua.LTable {
 // The fingerprint.Stack used for stack-restriction filtering comes
 // from the active env's context (set by the scanner via WithStack).
 func discoveryEntries(L *lua.LState) int {
-	env := CurrentEnv(L)
+	env := lua_engine.CurrentEnv(L)
 	if env == nil {
 		L.RaiseError("ctx.discovery.entries called outside a check run")
 	}
-	catalogue := RequireString(L, 1)
+	catalogue := lua_engine.RequireString(L, 1)
 	aggressive := lvalBool(L.Get(2))
-	hostname := OptString(L, 3, "")
-	stack := StackFrom(env.Ctx)
+	hostname := lua_engine.OptString(L, 3, "")
+	stack := lua_engine.StackFrom(env.Ctx)
 	out := L.NewTable()
 	for i, e := range ContentDiscoveryEntriesLua(catalogue, aggressive, hostname, stack) {
 		out.RawSetInt(i+1, pushDiscoveryEntry(L, e))
@@ -90,15 +161,15 @@ func discoveryEntries(L *lua.LState) int {
 // in hits and whose path is not in probed and whose stack constraint
 // matches.
 func discoveryFollowUps(L *lua.LState) int {
-	env := CurrentEnv(L)
+	env := lua_engine.CurrentEnv(L)
 	if env == nil {
 		L.RaiseError("ctx.discovery.follow_ups called outside a check run")
 	}
-	catalogue := RequireString(L, 1)
-	_ = OptString(L, 2, "")
+	catalogue := lua_engine.RequireString(L, 1)
+	_ = lua_engine.OptString(L, 2, "")
 	hits := readPathSet(L.Get(3))
 	probed := readPathSet(L.Get(4))
-	stack := StackFrom(env.Ctx)
+	stack := lua_engine.StackFrom(env.Ctx)
 	out := L.NewTable()
 	for i, e := range ContentDiscoveryFollowUpsLua(catalogue, hits, probed, stack) {
 		out.RawSetInt(i+1, pushDiscoveryEntry(L, e))
@@ -142,23 +213,23 @@ func pushDiscoveryEntry(L *lua.LState, e ContentDiscoveryEntryLua) *lua.LTable {
 	t.RawSetString("owasp", lua.LString(e.OWASP))
 	t.RawSetString("remediation", lua.LString(e.Remediation))
 	t.RawSetString("marker", lua.LString(e.Marker))
-	t.RawSetString("expected_content_types", PushStringList(L, e.ExpectedContentTypes))
+	t.RawSetString("expected_content_types", lua_engine.PushStringList(L, e.ExpectedContentTypes))
 	t.RawSetString("emit", lua.LBool(e.Emit))
 	return t
 }
 
 func discoveryBodyHashPrefix(L *lua.LState) int {
-	L.Push(lua.LString(ContentDiscoveryBodyHashPrefixLua([]byte(RequireString(L, 1)))))
+	L.Push(lua.LString(ContentDiscoveryBodyHashPrefixLua([]byte(lua_engine.RequireString(L, 1)))))
 	return 1
 }
 
 func discoveryContentTypeFamily(L *lua.LState) int {
-	L.Push(lua.LString(ContentDiscoveryContentTypeFamilyLua(RequireString(L, 1))))
+	L.Push(lua.LString(ContentDiscoveryContentTypeFamilyLua(lua_engine.RequireString(L, 1))))
 	return 1
 }
 
 func discoveryContentTypeFamilyAllowed(L *lua.LState) int {
-	ct := OptString(L, 1, "")
+	ct := lua_engine.OptString(L, 1, "")
 	allowed := readStringList(L.Get(2))
 	L.Push(lua.LBool(ContentDiscoveryContentTypeFamilyAllowedLua(ct, allowed)))
 	return 1
@@ -186,7 +257,64 @@ func discoveryBodyCap(L *lua.LState) int {
 	return 1
 }
 
+// discoveryFindSecrets runs the secrets-in-body scanner and returns
+// the already-sorted hit list. The pre-redacted value is stamped on
+// each entry so the Lua port does not have to call redact_secret again.
+func discoveryFindSecrets(L *lua.LState) int {
+	body := lua_engine.RequireString(L, 1)
+	hits := ScanSecretsInBody([]byte(body))
+	out := L.NewTable()
+	for i, h := range hits {
+		entry := L.NewTable()
+		entry.RawSetString("id", lua.LString(h.ID))
+		entry.RawSetString("label", lua.LString(h.Label))
+		entry.RawSetString("severity", lua.LString(string(h.Severity)))
+		entry.RawSetString("raw", lua.LString(h.Raw))
+		entry.RawSetString("redacted", lua.LString(lua_engine.RedactSecret(h.Raw)))
+		entry.RawSetString("count", lua.LNumber(h.Count))
+		out.RawSetInt(i+1, entry)
+	}
+	L.Push(out)
+	return 1
+}
+
+func discoveryRedactSecret(L *lua.LState) int {
+	L.Push(lua.LString(lua_engine.RedactSecret(lua_engine.RequireString(L, 1))))
+	return 1
+}
+
+func discoveryIsScannableCT(L *lua.LState) int {
+	L.Push(lua.LBool(IsScannableContentType(lua_engine.RequireString(L, 1))))
+	return 1
+}
+
+func discoverySourceMapKind(L *lua.LState) int {
+	kind, ok := SourceMapKind(lua_engine.RequireString(L, 1))
+	L.Push(lua.LString(kind))
+	L.Push(lua.LBool(ok))
+	return 2
+}
+
+// discoveryFindSourceMapRef accepts a headers userdata + body + kind
+// and returns the source-map reference the response advertises. The
+// header / body precedence rule lives in Go - this is a thin
+// forwarder, not a re-implementation.
+func discoveryFindSourceMapRef(L *lua.LState) int {
+	var h http.Header
+	if hdrs, ok := lua_engine.UnwrapHeaders(L.Get(1)); ok {
+		h = hdrs
+	}
+	body := lua_engine.RequireString(L, 2)
+	kind := lua_engine.RequireString(L, 3)
+	L.Push(lua.LString(FindSourceMapReference(h, []byte(body), kind)))
+	return 1
+}
+
+func discoveryLooksLikeSourceMap(L *lua.LState) int {
+	L.Push(lua.LBool(LooksLikeSourceMap([]byte(lua_engine.RequireString(L, 1)))))
+	return 1
+}
 
 func init() {
-	RegisterHelperTable("discovery", buildDiscoveryTable)
+	lua_engine.RegisterHelperTable("discovery", buildDiscoveryTable)
 }

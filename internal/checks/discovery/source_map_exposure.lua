@@ -80,10 +80,10 @@ end
 function check.run(ctx)
   local snap, err = ctx:ensure_response()
   if err then return nil, err end
-  local kind, ok = ctx.body.source_map_kind(snap.headers:get("Content-Type"))
+  local kind, ok = ctx.discovery.source_map_kind(snap.headers:get("Content-Type"))
   if not ok then return nil end
 
-  local ref = ctx.body.find_source_map_ref(snap.headers, snap.body, kind)
+  local ref = ctx.discovery.find_source_map_ref(snap.headers, snap.body, kind)
   if ref == "" then return nil end
 
   -- Inline (data:) map - the .map content is embedded in the bundle
@@ -117,7 +117,7 @@ function check.run(ctx)
     ctx:report("source-map-exposure read " .. resolved .. ": " .. read_err)
     return nil
   end
-  if not ctx.body.looks_like_source_map(body) then return nil end
+  if not ctx.discovery.looks_like_source_map(body) then return nil end
 
   return { external_finding(ctx, resp, resolved) }
 end

@@ -1,8 +1,7 @@
-package lua_engine
+package discovery
 
 import (
 	"mime"
-	"regexp"
 	"strings"
 )
 
@@ -72,39 +71,3 @@ func isScannableContentType(ct string) bool {
 	return false
 }
 
-// HasNearbyContext reports whether contextRE matches inside a window of
-// [secretContextWindow] bytes on each side of the candidate match
-// spanning [start, end). It exists to gate ambiguously-shaped patterns
-// (e.g. Mailgun's key-<32hex>) so a hit is kept only when there is a
-// vendor-identifying token in the immediate neighbourhood, not anywhere
-// in the body.
-func HasNearbyContext(body []byte, start, end int, contextRE *regexp.Regexp) bool {
-	winStart := start - secretContextWindow
-	if winStart < 0 {
-		winStart = 0
-	}
-	winEnd := end + secretContextWindow
-	if winEnd > len(body) {
-		winEnd = len(body)
-	}
-	return contextRE.Match(body[winStart:winEnd])
-}
-
-// redactSecret produces the short, non-reversible form of raw that is
-// safe to embed in a report. The first four and last four characters
-// are kept so a reviewer can recognise the same key across two
-// findings; everything in the middle becomes a single ellipsis. Very
-// short matches and PEM block headers (which carry no secret material
-// themselves) are special-cased so the output stays meaningful.
-func redactSecret(raw string) string {
-	if strings.HasPrefix(raw, "-----BEGIN") {
-		// The PEM header line is not itself secret; surface it verbatim
-		// so the reviewer knows which key type leaked without us echoing
-		// any of the encoded body that follows.
-		return raw + " (key body redacted)"
-	}
-	if len(raw) <= 12 {
-		return strings.Repeat("*", len(raw))
-	}
-	return raw[:4] + "..." + raw[len(raw)-4:]
-}

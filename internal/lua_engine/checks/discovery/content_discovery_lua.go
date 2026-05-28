@@ -1,6 +1,9 @@
-package lua_engine
+package discovery
 
-import "github.com/londonmax12/hyperz/internal/fingerprint"
+import (
+	"github.com/londonmax12/hyperz/internal/fingerprint"
+	"github.com/londonmax12/hyperz/internal/lua_engine"
+)
 
 // This file exposes the content-discovery check's helpers to the Lua
 // bridge. Sibling to content_discovery.go (and content_discovery_paths.go):
@@ -142,10 +145,10 @@ func ContentDiscoveryLengthCloseToLua(a, b int) bool {
 
 // ContentDiscoveryCanaryPathLua mints a fresh canary suffix the .lua
 // baseline probes. Two random twin halves + ".bad" matches the Go
-// check's NewCanary()-NewCanary().bad shape so any host-side
+// check's lua_engine.NewCanary()-lua_engine.NewCanary().bad shape so any host-side
 // dictionary lookup behaves the same way.
 func ContentDiscoveryCanaryPathLua() string {
-	return "/" + NewCanary() + "-" + NewCanary() + ".bad"
+	return "/" + lua_engine.NewCanary() + "-" + lua_engine.NewCanary() + ".bad"
 }
 
 // ContentDiscoveryBaselineProbes returns the canary probe count the

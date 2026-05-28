@@ -1,10 +1,12 @@
-package lua_engine
+package discovery
 
 import (
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
 	"strings"
+
+	"github.com/londonmax12/hyperz/internal/lua_engine"
 )
 
 const (
@@ -87,7 +89,7 @@ func hostBackupEntries(rawHost string) []discoveryEntry {
 		for _, e := range exts {
 			out = append(out, discoveryEntry{
 				Path:                 "/" + n + e.suffix,
-				Severity:             SeverityCritical,
+				Severity:             lua_engine.SeverityCritical,
 				Title:                fmt.Sprintf("host-named backup reachable (%s%s)", n, e.suffix),
 				Detail:               "A backup or archive named after the target host is served at the document root; these typically contain the full site source or database contents.",
 				CWE:                  "CWE-538",

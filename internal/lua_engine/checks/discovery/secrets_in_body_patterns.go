@@ -1,6 +1,10 @@
-package lua_engine
+package discovery
 
-import "regexp"
+import (
+	"regexp"
+
+	"github.com/londonmax12/hyperz/internal/lua_engine"
+)
 
 // secretPattern is one named credential matcher. id is the short stable
 // token used in dedupe keys and detail prefixes; label is the human name
@@ -17,18 +21,10 @@ import "regexp"
 type secretPattern struct {
 	id        string
 	label     string
-	severity  Severity
+	severity  lua_engine.Severity
 	re        *regexp.Regexp
 	contextRE *regexp.Regexp
 }
-
-// secretContextWindow is the per-side byte radius searched for a
-// pattern's optional contextRE. 256 bytes is enough to catch an
-// adjacent assignment like `MAILGUN_API_KEY = "..."` even with
-// intervening template syntax, but tight enough that an unrelated
-// mention of "mailgun" elsewhere in a bundle does not drag in a
-// random key-<hex> hit.
-const secretContextWindow = 256
 
 // Each category slice below groups patterns by the kind of system they
 // protect. The flat secretPatterns slice at the bottom is what the check
@@ -54,7 +50,7 @@ var secretsCloud = []secretPattern{
 	{
 		id:       "aws-access-key-id",
 		label:    "AWS access key ID",
-		severity: SeverityCritical,
+		severity: lua_engine.SeverityCritical,
 		// AKIA = long-term IAM user key; ASIA = temporary STS key; both
 		// grant API access and both should be flagged. Suffix is the
 		// canonical 16-char uppercase alphanumeric body.
@@ -63,7 +59,7 @@ var secretsCloud = []secretPattern{
 	{
 		id:       "digitalocean-pat",
 		label:    "DigitalOcean personal access token",
-		severity: SeverityCritical,
+		severity: lua_engine.SeverityCritical,
 		// dop_v1_ prefix + 64 lowercase hex. Grants full DO API access.
 		re: regexp.MustCompile(`\bdop_v1_[a-f0-9]{64}\b`),
 	},
@@ -76,7 +72,7 @@ var secretsVCS = []secretPattern{
 	{
 		id:       "github-token",
 		label:    "GitHub personal access / OAuth token",
-		severity: SeverityCritical,
+		severity: lua_engine.SeverityCritical,
 		// ghp = personal access token, gho = OAuth, ghu = user-to-server,
 		// ghs = server-to-server, ghr = refresh. GitHub's documented
 		// body length is 36 chars but newer tokens can be longer; allow
@@ -86,13 +82,13 @@ var secretsVCS = []secretPattern{
 	{
 		id:       "github-fine-grained-pat",
 		label:    "GitHub fine-grained personal access token",
-		severity: SeverityCritical,
+		severity: lua_engine.SeverityCritical,
 		re:       regexp.MustCompile(`\bgithub_pat_[A-Za-z0-9_]{82}\b`),
 	},
 	{
 		id:       "gitlab-pat",
 		label:    "GitLab personal access token",
-		severity: SeverityCritical,
+		severity: lua_engine.SeverityCritical,
 		// glpat- + 20 url-safe chars. GitLab also issues glptt- (project
 		// trigger) and glsoat- (OAuth) but glpat is the one that grants
 		// user-equivalent API access.
@@ -107,13 +103,13 @@ var secretsPackages = []secretPattern{
 	{
 		id:       "npm-token",
 		label:    "npm access token",
-		severity: SeverityHigh,
+		severity: lua_engine.SeverityHigh,
 		re:       regexp.MustCompile(`\bnpm_[A-Za-z0-9]{36}\b`),
 	},
 	{
 		id:       "pypi-token",
 		label:    "PyPI API token",
-		severity: SeverityHigh,
+		severity: lua_engine.SeverityHigh,
 		// PyPI tokens are macaroons - "pypi-" + base64(macaroon body),
 		// always starting with AgE (the macaroon version prefix). The
 		// body is long; 50 chars is a safe minimum floor.
@@ -128,19 +124,19 @@ var secretsPayments = []secretPattern{
 	{
 		id:       "stripe-live-secret-key",
 		label:    "Stripe live secret key",
-		severity: SeverityCritical,
+		severity: lua_engine.SeverityCritical,
 		re:       regexp.MustCompile(`\bsk_live_[0-9A-Za-z]{20,}\b`),
 	},
 	{
 		id:       "stripe-live-restricted-key",
 		label:    "Stripe live restricted key",
-		severity: SeverityCritical,
+		severity: lua_engine.SeverityCritical,
 		re:       regexp.MustCompile(`\brk_live_[0-9A-Za-z]{20,}\b`),
 	},
 	{
 		id:       "stripe-webhook-secret",
 		label:    "Stripe webhook signing secret",
-		severity: SeverityHigh,
+		severity: lua_engine.SeverityHigh,
 		// whsec_ + base32-ish body. Allows forging valid signatures on
 		// Stripe webhook callbacks, which most integrations treat as
 		// authenticated server-to-server events.
@@ -149,7 +145,7 @@ var secretsPayments = []secretPattern{
 	{
 		id:       "square-access-token",
 		label:    "Square access token",
-		severity: SeverityHigh,
+		severity: lua_engine.SeverityHigh,
 		// Production access tokens (sq0atp-) and application secrets
 		// (sq0csp-). The newer EAAA... OAuth format is not anchored
 		// tightly enough to include without FP risk.
@@ -158,7 +154,7 @@ var secretsPayments = []secretPattern{
 	{
 		id:       "stripe-test-secret-key",
 		label:    "Stripe test secret key",
-		severity: SeverityMedium,
+		severity: lua_engine.SeverityMedium,
 		re:       regexp.MustCompile(`\bsk_test_[0-9A-Za-z]{20,}\b`),
 	},
 }
@@ -171,7 +167,7 @@ var secretsComms = []secretPattern{
 	{
 		id:       "slack-token",
 		label:    "Slack token",
-		severity: SeverityHigh,
+		severity: lua_engine.SeverityHigh,
 		// xoxa = workspace, xoxb = bot, xoxp = user, xoxr = refresh,
 		// xoxs = legacy. All grant Slack API access against the
 		// workspace.
@@ -180,7 +176,7 @@ var secretsComms = []secretPattern{
 	{
 		id:       "slack-app-token",
 		label:    "Slack app-level token",
-		severity: SeverityHigh,
+		severity: lua_engine.SeverityHigh,
 		// xapp- tokens scope to a specific app and are used for Socket
 		// Mode connections; format is xapp-N-A...-N-hex.
 		re: regexp.MustCompile(`\bxapp-\d-[A-Z0-9]+-\d+-[a-f0-9]+\b`),
@@ -188,20 +184,20 @@ var secretsComms = []secretPattern{
 	{
 		id:       "slack-webhook",
 		label:    "Slack incoming webhook URL",
-		severity: SeverityHigh,
+		severity: lua_engine.SeverityHigh,
 		re:       regexp.MustCompile(`\bhttps://hooks\.slack\.com/services/T[0-9A-Z]+/B[0-9A-Z]+/[0-9A-Za-z]+\b`),
 	},
 	{
 		id:       "discord-webhook",
 		label:    "Discord webhook URL",
-		severity: SeverityHigh,
+		severity: lua_engine.SeverityHigh,
 		// discord.com and the legacy discordapp.com host both work.
 		re: regexp.MustCompile(`\bhttps://(?:discord|discordapp)\.com/api/webhooks/\d+/[A-Za-z0-9_-]{60,}\b`),
 	},
 	{
 		id:       "telegram-bot-token",
 		label:    "Telegram bot token",
-		severity: SeverityHigh,
+		severity: lua_engine.SeverityHigh,
 		// <bot id>:<35 url-safe chars>. The colon-separated structure
 		// is distinctive enough to anchor on despite the absence of a
 		// vendor prefix.
@@ -210,13 +206,13 @@ var secretsComms = []secretPattern{
 	{
 		id:       "sendgrid-api-key",
 		label:    "SendGrid API key",
-		severity: SeverityHigh,
+		severity: lua_engine.SeverityHigh,
 		re:       regexp.MustCompile(`\bSG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}\b`),
 	},
 	{
 		id:       "mailgun-api-key",
 		label:    "Mailgun API key",
-		severity: SeverityHigh,
+		severity: lua_engine.SeverityHigh,
 		// The bare key- + 32 hex shape collides with internal cache-key
 		// / content-digest formats common in build outputs. The
 		// contextRE narrows the matcher to hits that sit near a
@@ -238,14 +234,14 @@ var secretsGoogle = []secretPattern{
 	{
 		id:       "google-api-key",
 		label:    "Google API key",
-		severity: SeverityHigh,
+		severity: lua_engine.SeverityHigh,
 		// Documented as AIza + 35 chars of URL-safe alphanumerics.
 		re: regexp.MustCompile(`\bAIza[0-9A-Za-z_-]{35}\b`),
 	},
 	{
 		id:       "gcp-oauth-client-secret",
 		label:    "GCP OAuth client secret",
-		severity: SeverityHigh,
+		severity: lua_engine.SeverityHigh,
 		// GOCSPX- + 28 url-safe chars. Granting impersonation of the
 		// OAuth client; a leak lets an attacker mint user-consented
 		// tokens against any scope the client is registered for.
@@ -254,7 +250,7 @@ var secretsGoogle = []secretPattern{
 	{
 		id:       "google-oauth-access-token",
 		label:    "Google OAuth access token",
-		severity: SeverityMedium,
+		severity: lua_engine.SeverityMedium,
 		// ya29. prefix is the documented anchor for OAuth2 bearer
 		// access tokens. Short-lived (typically 1h) but valid as a
 		// bearer for the issued scopes until expiry, so worth
@@ -271,7 +267,7 @@ var secretsAI = []secretPattern{
 	{
 		id:       "openai-api-key",
 		label:    "OpenAI API key",
-		severity: SeverityCritical,
+		severity: lua_engine.SeverityCritical,
 		// Classic OpenAI keys are sk- + 20 chars + the literal T3BlbkFJ
 		// marker (base64 of "OpenAI") + 20 chars. The marker is what
 		// makes this safely anchorable; bare sk-... is too generic.
@@ -280,14 +276,14 @@ var secretsAI = []secretPattern{
 	{
 		id:       "openai-project-key",
 		label:    "OpenAI project key",
-		severity: SeverityCritical,
+		severity: lua_engine.SeverityCritical,
 		// Project-scoped keys use sk-proj- with a long opaque body.
 		re: regexp.MustCompile(`\bsk-proj-[A-Za-z0-9_-]{40,}\b`),
 	},
 	{
 		id:       "anthropic-api-key",
 		label:    "Anthropic API key",
-		severity: SeverityCritical,
+		severity: lua_engine.SeverityCritical,
 		// sk-ant-api<NN>- prefix is highly distinctive; allow {80,} on
 		// the body so future-length tokens still match without us
 		// chasing every format revision.
@@ -296,7 +292,7 @@ var secretsAI = []secretPattern{
 	{
 		id:       "huggingface-token",
 		label:    "Hugging Face access token",
-		severity: SeverityHigh,
+		severity: lua_engine.SeverityHigh,
 		re:       regexp.MustCompile(`\bhf_[A-Za-z0-9]{34}\b`),
 	},
 }
@@ -310,14 +306,14 @@ var secretsObservability = []secretPattern{
 	{
 		id:       "sentry-auth-token",
 		label:    "Sentry auth token",
-		severity: SeverityHigh,
+		severity: lua_engine.SeverityHigh,
 		// sntrys_ is the org auth token prefix; sntryu_ is user.
 		re: regexp.MustCompile(`\bsntr(?:ys|yu)_[A-Za-z0-9_=+/-]{40,}\b`),
 	},
 	{
 		id:       "newrelic-license-key",
 		label:    "New Relic license key",
-		severity: SeverityHigh,
+		severity: lua_engine.SeverityHigh,
 		// 40 lowercase hex + literal NRAL suffix is what makes this
 		// safely anchorable - bare 40-hex would collide with countless
 		// content digests.
@@ -326,13 +322,13 @@ var secretsObservability = []secretPattern{
 	{
 		id:       "newrelic-api-key",
 		label:    "New Relic API key",
-		severity: SeverityHigh,
+		severity: lua_engine.SeverityHigh,
 		re:       regexp.MustCompile(`\bNRAK-[A-Z0-9]{27}\b`),
 	},
 	{
 		id:       "sentry-dsn",
 		label:    "Sentry DSN",
-		severity: SeverityMedium,
+		severity: lua_engine.SeverityMedium,
 		// DSNs embed a public key in a URL; they're send-only but a
 		// leaked DSN still lets attackers spam events into the
 		// project. Kept Medium because read paths are not exposed.
@@ -348,7 +344,7 @@ var secretsSaaS = []secretPattern{
 	{
 		id:       "shopify-access-token",
 		label:    "Shopify access token",
-		severity: SeverityCritical,
+		severity: lua_engine.SeverityCritical,
 		// shpat_ = admin API access token (admin-equivalent),
 		// shpca_ = custom app token, shpss_ = shared secret. All
 		// three are credential material against a live store.
@@ -357,13 +353,13 @@ var secretsSaaS = []secretPattern{
 	{
 		id:       "linear-api-key",
 		label:    "Linear API key",
-		severity: SeverityHigh,
+		severity: lua_engine.SeverityHigh,
 		re:       regexp.MustCompile(`\blin_api_[A-Za-z0-9]{40}\b`),
 	},
 	{
 		id:       "notion-integration-token",
 		label:    "Notion integration token",
-		severity: SeverityHigh,
+		severity: lua_engine.SeverityHigh,
 		// secret_ + 43 url-safe chars. The prefix is generic on its
 		// own but the fixed-length body makes it safely anchorable.
 		re: regexp.MustCompile(`\bsecret_[A-Za-z0-9]{43}\b`),
@@ -371,7 +367,7 @@ var secretsSaaS = []secretPattern{
 	{
 		id:       "supabase-secret-key",
 		label:    "Supabase secret API key",
-		severity: SeverityCritical,
+		severity: lua_engine.SeverityCritical,
 		// sb_secret_ + url-safe body. Replaces the legacy service_role
 		// JWT; bypasses Row Level Security so a leak is admin-equivalent
 		// DB access. Floor of 20 chars on the body keeps the matcher
@@ -381,7 +377,7 @@ var secretsSaaS = []secretPattern{
 	{
 		id:       "supabase-access-token",
 		label:    "Supabase personal access token",
-		severity: SeverityCritical,
+		severity: lua_engine.SeverityCritical,
 		// sbp_ + 40 lowercase hex. Grants project-admin access against
 		// the Supabase management API for every project the issuing
 		// user owns.
@@ -397,13 +393,13 @@ var secretsCrypto = []secretPattern{
 	{
 		id:       "pem-private-key",
 		label:    "PEM-encoded private key",
-		severity: SeverityCritical,
+		severity: lua_engine.SeverityCritical,
 		re:       regexp.MustCompile(`-----BEGIN (?:RSA |DSA |EC |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY-----`),
 	},
 	{
 		id:       "jwt",
 		label:    "JSON Web Token",
-		severity: SeverityMedium,
+		severity: lua_engine.SeverityMedium,
 		// A JWT is three base64url segments joined by dots. eyJ is the
 		// base64url-encoded "{\"" prefix of every JWT header, which
 		// makes it a near-unique structural anchor and avoids matching

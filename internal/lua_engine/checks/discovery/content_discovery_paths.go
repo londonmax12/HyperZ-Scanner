@@ -1,6 +1,9 @@
-package lua_engine
+package discovery
 
-import "github.com/londonmax12/hyperz/internal/fingerprint"
+import (
+	"github.com/londonmax12/hyperz/internal/fingerprint"
+	"github.com/londonmax12/hyperz/internal/lua_engine"
+)
 
 // discoveryEntry is one curated path the ContentDiscovery sweep probes.
 //
@@ -46,7 +49,7 @@ import "github.com/londonmax12/hyperz/internal/fingerprint"
 // the IIS-only constraint suppresses the probe before it fires.
 type discoveryEntry struct {
 	Path                 string
-	Severity             Severity
+	Severity             lua_engine.Severity
 	Title                string
 	Detail               string
 	CWE                  string
@@ -155,7 +158,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 
 	{
 		Path:        "/.git/HEAD",
-		Severity:    SeverityCritical,
+		Severity:    lua_engine.SeverityCritical,
 		Title:       "exposed Git repository (.git/HEAD)",
 		Detail:      "The .git directory is web-accessible; an attacker can reconstruct the full source tree and history via incremental object fetches.",
 		CWE:         "CWE-538",
@@ -165,7 +168,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:        "/.git/config",
-		Severity:    SeverityCritical,
+		Severity:    lua_engine.SeverityCritical,
 		Title:       "exposed Git config (.git/config)",
 		Detail:      "The Git repository config file is reachable - typically exposes remote URLs and sometimes embeds credentials in them.",
 		CWE:         "CWE-538",
@@ -175,7 +178,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:        "/.svn/entries",
-		Severity:    SeverityHigh,
+		Severity:    lua_engine.SeverityHigh,
 		Title:       "exposed Subversion metadata (.svn/entries)",
 		Detail:      "The .svn directory is web-accessible, leaking repository structure and prior revision content.",
 		CWE:         "CWE-538",
@@ -184,7 +187,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:        "/.hg/store/00manifest.i",
-		Severity:    SeverityHigh,
+		Severity:    lua_engine.SeverityHigh,
 		Title:       "exposed Mercurial metadata (.hg/)",
 		Detail:      "The .hg directory is web-accessible.",
 		CWE:         "CWE-538",
@@ -194,7 +197,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:        "/.bzr/branch-format",
-		Severity:    SeverityHigh,
+		Severity:    lua_engine.SeverityHigh,
 		Title:       "exposed Bazaar metadata (.bzr/)",
 		Detail:      "The .bzr directory is web-accessible.",
 		CWE:         "CWE-538",
@@ -204,7 +207,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:        "/.gitignore",
-		Severity:    SeverityLow,
+		Severity:    lua_engine.SeverityLow,
 		Title:       ".gitignore reachable",
 		Detail:      "Reveals file and directory naming conventions; sometimes lists ignored secrets that exist on disk.",
 		CWE:         "CWE-538",
@@ -217,7 +220,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 
 	{
 		Path:        "/.env",
-		Severity:    SeverityCritical,
+		Severity:    lua_engine.SeverityCritical,
 		Title:       "exposed environment file (.env)",
 		Detail:      "Typically contains database URLs, API keys, and signing secrets loaded by the application at startup.",
 		CWE:         "CWE-538",
@@ -227,7 +230,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:        "/.env.local",
-		Severity:    SeverityCritical,
+		Severity:    lua_engine.SeverityCritical,
 		Title:       "exposed environment file (.env.local)",
 		Detail:      "Local-overlay .env files commonly hold developer or staging credentials that were not meant to ship.",
 		CWE:         "CWE-538",
@@ -237,7 +240,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:        "/.env.production",
-		Severity:    SeverityCritical,
+		Severity:    lua_engine.SeverityCritical,
 		Title:       "exposed environment file (.env.production)",
 		Detail:      "Production .env files hold the live secrets the application needs to operate.",
 		CWE:         "CWE-538",
@@ -247,7 +250,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:        "/web.config",
-		Severity:    SeverityHigh,
+		Severity:    lua_engine.SeverityHigh,
 		Title:       "exposed IIS web.config",
 		Detail:      "web.config carries app pool, routing, and sometimes connection-string configuration.",
 		CWE:         "CWE-538",
@@ -259,7 +262,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:        "/appsettings.json",
-		Severity:    SeverityHigh,
+		Severity:    lua_engine.SeverityHigh,
 		Title:       "exposed ASP.NET appsettings.json",
 		Detail:      "ASP.NET Core's primary configuration file commonly carries connection strings, JWT signing keys, and third-party API credentials in plaintext.",
 		CWE:         "CWE-538",
@@ -270,7 +273,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:                 "/application.properties",
-		Severity:             SeverityHigh,
+		Severity:             lua_engine.SeverityHigh,
 		Title:                "exposed Spring application.properties",
 		Detail:               "Spring's primary configuration file routinely embeds datasource URLs, broker credentials, and OAuth client secrets.",
 		CWE:                  "CWE-538",
@@ -281,7 +284,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:        "/id_rsa",
-		Severity:    SeverityCritical,
+		Severity:    lua_engine.SeverityCritical,
 		Title:       "exposed SSH private key (id_rsa)",
 		Detail:      "An RSA private key is reachable at the document root - whoever owns this key has SSH access wherever the matching public key is authorized.",
 		CWE:         "CWE-538",
@@ -291,7 +294,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:        "/wp-config.php",
-		Severity:    SeverityHigh,
+		Severity:    lua_engine.SeverityHigh,
 		Title:       "WordPress wp-config.php reachable",
 		Detail:      "If PHP serves the raw file instead of executing it, this discloses DB credentials and authentication salts.",
 		CWE:         "CWE-538",
@@ -303,7 +306,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:        "/.htpasswd",
-		Severity:    SeverityHigh,
+		Severity:    lua_engine.SeverityHigh,
 		Title:       ".htpasswd reachable",
 		Detail:      "Apache's password file is served directly - exposes usernames and bcrypt/md5 hashes ready for offline cracking.",
 		CWE:         "CWE-538",
@@ -314,7 +317,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:        "/.npmrc",
-		Severity:    SeverityHigh,
+		Severity:    lua_engine.SeverityHigh,
 		Title:       ".npmrc reachable",
 		Detail:      "An npm runtime config that, when committed alongside the deploy artifact, typically embeds the publisher's npm auth token (_authToken=...).",
 		CWE:         "CWE-538",
@@ -325,7 +328,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:        "/private.key",
-		Severity:    SeverityCritical,
+		Severity:    lua_engine.SeverityCritical,
 		Title:       "exposed private key (private.key)",
 		Detail:      "A private key file is reachable at the document root - whichever certificate it pairs with should be considered compromised.",
 		CWE:         "CWE-538",
@@ -336,7 +339,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:        "/server.key",
-		Severity:    SeverityCritical,
+		Severity:    lua_engine.SeverityCritical,
 		Title:       "exposed TLS server key (server.key)",
 		Detail:      "The server's TLS private key is reachable; an attacker can decrypt past captures (when no PFS) and impersonate the host.",
 		CWE:         "CWE-538",
@@ -347,7 +350,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:        "/id_dsa",
-		Severity:    SeverityCritical,
+		Severity:    lua_engine.SeverityCritical,
 		Title:       "exposed SSH private key (id_dsa)",
 		Detail:      "A DSA private key is reachable at the document root.",
 		CWE:         "CWE-538",
@@ -358,7 +361,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:        "/.htaccess",
-		Severity:    SeverityLow,
+		Severity:    lua_engine.SeverityLow,
 		Title:       ".htaccess reachable",
 		Detail:      "Apache rewrite and access rules are visible, often revealing internal routing and protected paths.",
 		CWE:         "CWE-538",
@@ -369,7 +372,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:                 "/application.yml",
-		Severity:             SeverityHigh,
+		Severity:             lua_engine.SeverityHigh,
 		Title:                "exposed Spring application.yml",
 		Detail:               "Spring's YAML configuration file commonly embeds datasource URLs and credentials.",
 		CWE:                  "CWE-538",
@@ -384,7 +387,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 
 	{
 		Path:        "/actuator/env",
-		Severity:    SeverityHigh,
+		Severity:    lua_engine.SeverityHigh,
 		Title:       "Spring Boot actuator env endpoint reachable",
 		Detail:      "/actuator/env discloses every configuration property loaded into the JVM, including credentials and tokens.",
 		CWE:         "CWE-200",
@@ -395,7 +398,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:                 "/actuator/heapdump",
-		Severity:             SeverityCritical,
+		Severity:             lua_engine.SeverityCritical,
 		Title:                "Spring Boot actuator heapdump endpoint reachable",
 		Detail:               "/actuator/heapdump returns a full JVM heap dump containing in-memory secrets, tokens, and session data.",
 		CWE:                  "CWE-200",
@@ -406,7 +409,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:        "/actuator",
-		Severity:    SeverityMedium,
+		Severity:    lua_engine.SeverityMedium,
 		Title:       "Spring Boot actuator index reachable",
 		Detail:      "The actuator index lists every exposed management endpoint, telling an attacker exactly what to probe next.",
 		CWE:         "CWE-200",
@@ -417,7 +420,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:        "/debug/pprof/",
-		Severity:    SeverityHigh,
+		Severity:    lua_engine.SeverityHigh,
 		Title:       "Go pprof debug endpoint reachable",
 		Detail:      "/debug/pprof exposes runtime profiling data and, via /debug/pprof/heap, the in-memory contents of the Go process.",
 		CWE:         "CWE-200",
@@ -428,7 +431,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:        "/server-status",
-		Severity:    SeverityMedium,
+		Severity:    lua_engine.SeverityMedium,
 		Title:       "Apache mod_status reachable",
 		Detail:      "/server-status discloses live request URLs, client IPs, and worker state.",
 		CWE:         "CWE-200",
@@ -439,7 +442,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:        "/server-info",
-		Severity:    SeverityMedium,
+		Severity:    lua_engine.SeverityMedium,
 		Title:       "Apache mod_info reachable",
 		Detail:      "/server-info discloses module configuration and loaded module paths.",
 		CWE:         "CWE-200",
@@ -451,7 +454,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:        "/phpinfo.php",
-		Severity:    SeverityHigh,
+		Severity:    lua_engine.SeverityHigh,
 		Title:       "phpinfo() output reachable (/phpinfo.php)",
 		Detail:      "phpinfo() reveals the PHP version, loaded modules, environment variables, and absolute filesystem paths.",
 		CWE:         "CWE-200",
@@ -462,7 +465,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:        "/info.php",
-		Severity:    SeverityHigh,
+		Severity:    lua_engine.SeverityHigh,
 		Title:       "phpinfo() output reachable (/info.php)",
 		Detail:      "phpinfo() reveals the PHP version, loaded modules, environment variables, and absolute filesystem paths.",
 		CWE:         "CWE-200",
@@ -474,7 +477,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:        "/test.php",
-		Severity:    SeverityMedium,
+		Severity:    lua_engine.SeverityMedium,
 		Title:       "test.php reachable",
 		Detail:      "Generic test scripts commonly contain phpinfo() output or ad-hoc debug routines that disclose runtime state.",
 		CWE:         "CWE-200",
@@ -485,7 +488,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:        "/graphql",
-		Severity:    SeverityMedium,
+		Severity:    lua_engine.SeverityMedium,
 		Title:       "GraphQL endpoint reachable",
 		Detail:      "A GraphQL endpoint is exposed; when introspection is on, an attacker can map the entire schema and walk every resolver from there.",
 		CWE:         "CWE-200",
@@ -497,7 +500,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:        "/swagger.json",
-		Severity:    SeverityLow,
+		Severity:    lua_engine.SeverityLow,
 		Title:       "OpenAPI / Swagger spec reachable (/swagger.json)",
 		Detail:      "The full API contract is exposed; an attacker pulls the schema and uses it as a roadmap for every undocumented endpoint and parameter.",
 		CWE:         "CWE-200",
@@ -508,7 +511,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:        "/openapi.json",
-		Severity:    SeverityLow,
+		Severity:    lua_engine.SeverityLow,
 		Title:       "OpenAPI spec reachable (/openapi.json)",
 		Detail:      "The OpenAPI 3 spec is exposed; an attacker uses it as a roadmap to every endpoint and parameter the service exposes.",
 		CWE:         "CWE-200",
@@ -519,7 +522,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:        "/v2/api-docs",
-		Severity:    SeverityLow,
+		Severity:    lua_engine.SeverityLow,
 		Title:       "Springfox / Swagger v2 docs reachable (/v2/api-docs)",
 		Detail:      "Springfox's classic API doc endpoint is reachable.",
 		CWE:         "CWE-200",
@@ -534,7 +537,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 
 	{
 		Path:                 "/backup.sql",
-		Severity:             SeverityCritical,
+		Severity:             lua_engine.SeverityCritical,
 		Title:                "database dump reachable (backup.sql)",
 		Detail:               "A raw SQL dump exposes the entire database schema and contents, including credential hashes and PII.",
 		CWE:                  "CWE-538",
@@ -544,7 +547,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:                 "/database.sql",
-		Severity:             SeverityCritical,
+		Severity:             lua_engine.SeverityCritical,
 		Title:                "database dump reachable (database.sql)",
 		Detail:               "A raw SQL dump exposes the entire database schema and contents.",
 		CWE:                  "CWE-538",
@@ -554,7 +557,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:                 "/dump.sql",
-		Severity:             SeverityCritical,
+		Severity:             lua_engine.SeverityCritical,
 		Title:                "database dump reachable (dump.sql)",
 		Detail:               "A raw SQL dump exposes the entire database schema and contents.",
 		CWE:                  "CWE-538",
@@ -565,7 +568,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:                 "/backup.zip",
-		Severity:             SeverityHigh,
+		Severity:             lua_engine.SeverityHigh,
 		Title:                "backup archive reachable (backup.zip)",
 		Detail:               "Compressed site backups typically contain source code and configuration including secrets.",
 		CWE:                  "CWE-538",
@@ -575,7 +578,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:                 "/backup.tar.gz",
-		Severity:             SeverityHigh,
+		Severity:             lua_engine.SeverityHigh,
 		Title:                "backup archive reachable (backup.tar.gz)",
 		Detail:               "Compressed site backups typically contain source code and configuration including secrets.",
 		CWE:                  "CWE-538",
@@ -586,7 +589,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:                 "/site.tar.gz",
-		Severity:             SeverityHigh,
+		Severity:             lua_engine.SeverityHigh,
 		Title:                "site backup reachable (site.tar.gz)",
 		Detail:               "Compressed site backups typically contain source code and configuration including secrets.",
 		CWE:                  "CWE-538",
@@ -600,7 +603,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 
 	{
 		Path:        "/admin/",
-		Severity:    SeverityLow,
+		Severity:    lua_engine.SeverityLow,
 		Title:       "/admin/ reachable",
 		Detail:      "An administrative interface is exposed. Confirm it is intended to be public-facing and that strong authentication and brute-force protections are in place.",
 		CWE:         "CWE-284",
@@ -611,7 +614,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:        "/administrator/",
-		Severity:    SeverityLow,
+		Severity:    lua_engine.SeverityLow,
 		Title:       "Joomla /administrator/ panel reachable",
 		Detail:      "Joomla's administrator panel is exposed.",
 		CWE:         "CWE-284",
@@ -623,7 +626,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:        "/wp-admin/",
-		Severity:    SeverityLow,
+		Severity:    lua_engine.SeverityLow,
 		Title:       "WordPress /wp-admin/ panel reachable",
 		Detail:      "WordPress's admin panel is exposed.",
 		CWE:         "CWE-284",
@@ -635,7 +638,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:        "/phpmyadmin/",
-		Severity:    SeverityMedium,
+		Severity:    lua_engine.SeverityMedium,
 		Title:       "phpMyAdmin reachable",
 		Detail:      "phpMyAdmin is a frequent brute-force target; its presence on the public web is rarely intended.",
 		CWE:         "CWE-284",
@@ -647,7 +650,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:        "/adminer.php",
-		Severity:    SeverityMedium,
+		Severity:    lua_engine.SeverityMedium,
 		Title:       "Adminer database UI reachable",
 		Detail:      "adminer.php is a single-file database admin tool routinely targeted by automated exploitation.",
 		CWE:         "CWE-284",
@@ -659,7 +662,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:        "/manager/html",
-		Severity:    SeverityMedium,
+		Severity:    lua_engine.SeverityMedium,
 		Title:       "Tomcat /manager/html reachable",
 		Detail:      "Tomcat's manager interface lets an authenticated user deploy arbitrary WAR files; default credentials are a recurring finding.",
 		CWE:         "CWE-284",
@@ -674,7 +677,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 
 	{
 		Path:        "/Dockerfile",
-		Severity:    SeverityLow,
+		Severity:    lua_engine.SeverityLow,
 		Title:       "Dockerfile reachable",
 		Detail:      "Reveals base images, build steps, and any credentials passed in as build args.",
 		CWE:         "CWE-538",
@@ -685,7 +688,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:        "/docker-compose.yml",
-		Severity:    SeverityLow,
+		Severity:    lua_engine.SeverityLow,
 		Title:       "docker-compose.yml reachable",
 		Detail:      "Lists services, volumes, and environment variables - including any credentials passed inline.",
 		CWE:         "CWE-538",
@@ -696,7 +699,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:        "/.gitlab-ci.yml",
-		Severity:    SeverityLow,
+		Severity:    lua_engine.SeverityLow,
 		Title:       ".gitlab-ci.yml reachable",
 		Detail:      "Reveals CI pipeline structure and, when credentials are passed as variables in the YAML, leaks them too.",
 		CWE:         "CWE-538",
@@ -706,7 +709,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:        "/Jenkinsfile",
-		Severity:    SeverityLow,
+		Severity:    lua_engine.SeverityLow,
 		Title:       "Jenkinsfile reachable",
 		Detail:      "Reveals the build pipeline and any credentials referenced inline.",
 		CWE:         "CWE-538",
@@ -717,7 +720,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:        "/.travis.yml",
-		Severity:    SeverityLow,
+		Severity:    lua_engine.SeverityLow,
 		Title:       ".travis.yml reachable",
 		Detail:      "Reveals Travis CI pipeline structure and any credentials referenced inline.",
 		CWE:         "CWE-538",
@@ -727,7 +730,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:        "/.circleci/config.yml",
-		Severity:    SeverityLow,
+		Severity:    lua_engine.SeverityLow,
 		Title:       "CircleCI config reachable (/.circleci/config.yml)",
 		Detail:      "Reveals CircleCI pipeline structure and any credentials referenced inline.",
 		CWE:         "CWE-538",
@@ -737,7 +740,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:        "/package.json",
-		Severity:    SeverityInfo,
+		Severity:    lua_engine.SeverityInfo,
 		Title:       "package.json reachable",
 		Detail:      "Reveals dependency names and versions - useful for an attacker mapping known CVEs.",
 		CWE:         "CWE-200",
@@ -749,7 +752,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:        "/package-lock.json",
-		Severity:    SeverityInfo,
+		Severity:    lua_engine.SeverityInfo,
 		Title:       "package-lock.json reachable",
 		Detail:      "Lists every transitive dependency at its exact resolved version - lets an attacker enumerate known CVEs precisely.",
 		CWE:         "CWE-200",
@@ -761,7 +764,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:        "/yarn.lock",
-		Severity:    SeverityInfo,
+		Severity:    lua_engine.SeverityInfo,
 		Title:       "yarn.lock reachable",
 		Detail:      "Lists every transitive dependency at its exact resolved version.",
 		CWE:         "CWE-200",
@@ -773,7 +776,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:        "/composer.json",
-		Severity:    SeverityInfo,
+		Severity:    lua_engine.SeverityInfo,
 		Title:       "composer.json reachable",
 		Detail:      "Reveals PHP dependency names and versions.",
 		CWE:         "CWE-200",
@@ -784,7 +787,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:        "/composer.lock",
-		Severity:    SeverityInfo,
+		Severity:    lua_engine.SeverityInfo,
 		Title:       "composer.lock reachable",
 		Detail:      "Lists PHP dependencies at their exact resolved versions.",
 		CWE:         "CWE-200",
@@ -799,7 +802,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 
 	{
 		Path:        "/.DS_Store",
-		Severity:    SeverityLow,
+		Severity:    lua_engine.SeverityLow,
 		Title:       "macOS .DS_Store reachable",
 		Detail:      "Contains directory listings from a developer's macOS workstation, revealing filenames that are not otherwise linked.",
 		CWE:         "CWE-538",
@@ -809,7 +812,7 @@ var contentDiscoveryEntries = []discoveryEntry{
 	},
 	{
 		Path:        "/crossdomain.xml",
-		Severity:    SeverityInfo,
+		Severity:    lua_engine.SeverityInfo,
 		Title:       "Flash crossdomain.xml reachable",
 		Detail:      "Legacy Flash policy file; rarely needed today and can over-permit cross-origin access if mis-set.",
 		CWE:         "CWE-942",
@@ -840,7 +843,7 @@ var contentDiscoveryFollowUpGroups = []discoveryFollowUpGroup{
 		Entries: []discoveryEntry{
 			{
 				Path:        "/.git/logs/HEAD",
-				Severity:    SeverityCritical,
+				Severity:    lua_engine.SeverityCritical,
 				Title:       "exposed Git ref log (.git/logs/HEAD)",
 				Detail:      "The ref log records every HEAD update, including commits that were rewritten or force-pushed away - effectively the full local history.",
 				CWE:         "CWE-538",
@@ -850,7 +853,7 @@ var contentDiscoveryFollowUpGroups = []discoveryFollowUpGroup{
 			},
 			{
 				Path:        "/.git/index",
-				Severity:    SeverityCritical,
+				Severity:    lua_engine.SeverityCritical,
 				Title:       "exposed Git index (.git/index)",
 				Detail:      "The Git index lists every tracked file and its blob SHA, giving an attacker the full file inventory to fetch one blob at a time.",
 				CWE:         "CWE-538",
@@ -860,7 +863,7 @@ var contentDiscoveryFollowUpGroups = []discoveryFollowUpGroup{
 			},
 			{
 				Path:        "/.git/packed-refs",
-				Severity:    SeverityHigh,
+				Severity:    lua_engine.SeverityHigh,
 				Title:       "exposed Git packed-refs",
 				Detail:      "Lists every ref the repository tracked - branch and tag names plus their commit SHAs.",
 				CWE:         "CWE-538",
@@ -870,7 +873,7 @@ var contentDiscoveryFollowUpGroups = []discoveryFollowUpGroup{
 			},
 			{
 				Path:        "/.git/description",
-				Severity:    SeverityLow,
+				Severity:    lua_engine.SeverityLow,
 				Title:       ".git/description reachable",
 				Detail:      "Confirms the .git directory is web-served.",
 				CWE:         "CWE-538",
@@ -883,30 +886,30 @@ var contentDiscoveryFollowUpGroups = []discoveryFollowUpGroup{
 	{
 		Triggers: []string{"/.env", "/.env.local", "/.env.production"},
 		Entries: []discoveryEntry{
-			{Path: "/.env.dev", Severity: SeverityCritical, Title: "exposed environment file (.env.dev)", Detail: "Developer-overlay .env file is reachable.", CWE: "CWE-538", OWASP: "A05:2021 Security Misconfiguration", Remediation: "Store secrets outside the document root; block /.env* at the web server layer.", Marker: "="},
-			{Path: "/.env.development", Severity: SeverityCritical, Title: "exposed environment file (.env.development)", Detail: "Development-overlay .env file is reachable.", CWE: "CWE-538", OWASP: "A05:2021 Security Misconfiguration", Remediation: "Store secrets outside the document root; block /.env* at the web server layer.", Marker: "="},
-			{Path: "/.env.staging", Severity: SeverityCritical, Title: "exposed environment file (.env.staging)", Detail: "Staging-overlay .env file is reachable.", CWE: "CWE-538", OWASP: "A05:2021 Security Misconfiguration", Remediation: "Store secrets outside the document root; block /.env* at the web server layer.", Marker: "="},
-			{Path: "/.env.test", Severity: SeverityHigh, Title: "exposed environment file (.env.test)", Detail: "Test-overlay .env file is reachable.", CWE: "CWE-538", OWASP: "A05:2021 Security Misconfiguration", Remediation: "Store secrets outside the document root; block /.env* at the web server layer.", Marker: "="},
-			{Path: "/.env.backup", Severity: SeverityCritical, Title: "exposed environment file (.env.backup)", Detail: "Backup .env file is reachable.", CWE: "CWE-538", OWASP: "A05:2021 Security Misconfiguration", Remediation: "Store secrets outside the document root; block /.env* at the web server layer.", Marker: "="},
-			{Path: "/.env.bak", Severity: SeverityCritical, Title: "exposed environment file (.env.bak)", Detail: "Backup .env file is reachable.", CWE: "CWE-538", OWASP: "A05:2021 Security Misconfiguration", Remediation: "Store secrets outside the document root; block /.env* at the web server layer.", Marker: "="},
-			{Path: "/.env.old", Severity: SeverityCritical, Title: "exposed environment file (.env.old)", Detail: "Older .env file is reachable.", CWE: "CWE-538", OWASP: "A05:2021 Security Misconfiguration", Remediation: "Store secrets outside the document root; block /.env* at the web server layer.", Marker: "="},
+			{Path: "/.env.dev", Severity: lua_engine.SeverityCritical, Title: "exposed environment file (.env.dev)", Detail: "Developer-overlay .env file is reachable.", CWE: "CWE-538", OWASP: "A05:2021 Security Misconfiguration", Remediation: "Store secrets outside the document root; block /.env* at the web server layer.", Marker: "="},
+			{Path: "/.env.development", Severity: lua_engine.SeverityCritical, Title: "exposed environment file (.env.development)", Detail: "Development-overlay .env file is reachable.", CWE: "CWE-538", OWASP: "A05:2021 Security Misconfiguration", Remediation: "Store secrets outside the document root; block /.env* at the web server layer.", Marker: "="},
+			{Path: "/.env.staging", Severity: lua_engine.SeverityCritical, Title: "exposed environment file (.env.staging)", Detail: "Staging-overlay .env file is reachable.", CWE: "CWE-538", OWASP: "A05:2021 Security Misconfiguration", Remediation: "Store secrets outside the document root; block /.env* at the web server layer.", Marker: "="},
+			{Path: "/.env.test", Severity: lua_engine.SeverityHigh, Title: "exposed environment file (.env.test)", Detail: "Test-overlay .env file is reachable.", CWE: "CWE-538", OWASP: "A05:2021 Security Misconfiguration", Remediation: "Store secrets outside the document root; block /.env* at the web server layer.", Marker: "="},
+			{Path: "/.env.backup", Severity: lua_engine.SeverityCritical, Title: "exposed environment file (.env.backup)", Detail: "Backup .env file is reachable.", CWE: "CWE-538", OWASP: "A05:2021 Security Misconfiguration", Remediation: "Store secrets outside the document root; block /.env* at the web server layer.", Marker: "="},
+			{Path: "/.env.bak", Severity: lua_engine.SeverityCritical, Title: "exposed environment file (.env.bak)", Detail: "Backup .env file is reachable.", CWE: "CWE-538", OWASP: "A05:2021 Security Misconfiguration", Remediation: "Store secrets outside the document root; block /.env* at the web server layer.", Marker: "="},
+			{Path: "/.env.old", Severity: lua_engine.SeverityCritical, Title: "exposed environment file (.env.old)", Detail: "Older .env file is reachable.", CWE: "CWE-538", OWASP: "A05:2021 Security Misconfiguration", Remediation: "Store secrets outside the document root; block /.env* at the web server layer.", Marker: "="},
 		},
 	},
 	{
 		Triggers: []string{"/actuator", "/actuator/env", "/actuator/heapdump"},
 		Entries: []discoveryEntry{
-			{Path: "/actuator/health", Severity: SeverityLow, Title: "Spring Boot /actuator/health reachable", Detail: "Health endpoint discloses dependency status (DBs, brokers, downstream services).", CWE: "CWE-200", OWASP: "A05:2021 Security Misconfiguration", Remediation: "Set management.endpoints.web.exposure.exclude to drop unintended endpoints and gate actuator behind authentication.", Marker: "\"status\"", Languages: []string{"java"}},
-			{Path: "/actuator/mappings", Severity: SeverityMedium, Title: "Spring Boot /actuator/mappings reachable", Detail: "Lists every request mapping the app exposes - a one-shot endpoint map for an attacker.", CWE: "CWE-200", OWASP: "A05:2021 Security Misconfiguration", Remediation: "Exclude mappings from the exposed actuators.", Marker: "\"mappings\"", Languages: []string{"java"}},
-			{Path: "/actuator/configprops", Severity: SeverityHigh, Title: "Spring Boot /actuator/configprops reachable", Detail: "Discloses every @ConfigurationProperties bean and its resolved values - frequently includes secrets.", CWE: "CWE-200", OWASP: "A05:2021 Security Misconfiguration", Remediation: "Exclude configprops from the exposed actuators.", Marker: "\"contexts\"", Languages: []string{"java"}},
-			{Path: "/actuator/threaddump", Severity: SeverityMedium, Title: "Spring Boot /actuator/threaddump reachable", Detail: "Returns a full JVM thread dump - leaks code paths and any in-flight request data carried on a stack frame.", CWE: "CWE-200", OWASP: "A05:2021 Security Misconfiguration", Remediation: "Exclude threaddump from the exposed actuators.", Marker: "\"threads\"", Languages: []string{"java"}},
+			{Path: "/actuator/health", Severity: lua_engine.SeverityLow, Title: "Spring Boot /actuator/health reachable", Detail: "Health endpoint discloses dependency status (DBs, brokers, downstream services).", CWE: "CWE-200", OWASP: "A05:2021 Security Misconfiguration", Remediation: "Set management.endpoints.web.exposure.exclude to drop unintended endpoints and gate actuator behind authentication.", Marker: "\"status\"", Languages: []string{"java"}},
+			{Path: "/actuator/mappings", Severity: lua_engine.SeverityMedium, Title: "Spring Boot /actuator/mappings reachable", Detail: "Lists every request mapping the app exposes - a one-shot endpoint map for an attacker.", CWE: "CWE-200", OWASP: "A05:2021 Security Misconfiguration", Remediation: "Exclude mappings from the exposed actuators.", Marker: "\"mappings\"", Languages: []string{"java"}},
+			{Path: "/actuator/configprops", Severity: lua_engine.SeverityHigh, Title: "Spring Boot /actuator/configprops reachable", Detail: "Discloses every @ConfigurationProperties bean and its resolved values - frequently includes secrets.", CWE: "CWE-200", OWASP: "A05:2021 Security Misconfiguration", Remediation: "Exclude configprops from the exposed actuators.", Marker: "\"contexts\"", Languages: []string{"java"}},
+			{Path: "/actuator/threaddump", Severity: lua_engine.SeverityMedium, Title: "Spring Boot /actuator/threaddump reachable", Detail: "Returns a full JVM thread dump - leaks code paths and any in-flight request data carried on a stack frame.", CWE: "CWE-200", OWASP: "A05:2021 Security Misconfiguration", Remediation: "Exclude threaddump from the exposed actuators.", Marker: "\"threads\"", Languages: []string{"java"}},
 		},
 	},
 	{
 		Triggers: []string{"/wp-config.php"},
 		Entries: []discoveryEntry{
-			{Path: "/wp-config.php.bak", Severity: SeverityHigh, Title: "WordPress wp-config.php.bak reachable", Detail: "Backup of wp-config.php is served directly, disclosing DB credentials and authentication salts.", CWE: "CWE-538", OWASP: "A05:2021 Security Misconfiguration", Remediation: "Remove backup copies from the document root.", Marker: "DB_PASSWORD", CMSes: []string{"wordpress"}},
-			{Path: "/wp-config.php.old", Severity: SeverityHigh, Title: "WordPress wp-config.php.old reachable", Detail: "Older copy of wp-config.php is served directly.", CWE: "CWE-538", OWASP: "A05:2021 Security Misconfiguration", Remediation: "Remove backup copies from the document root.", Marker: "DB_PASSWORD", CMSes: []string{"wordpress"}},
-			{Path: "/wp-config.php~", Severity: SeverityHigh, Title: "WordPress wp-config.php~ reachable", Detail: "Editor backup of wp-config.php is served directly.", CWE: "CWE-538", OWASP: "A05:2021 Security Misconfiguration", Remediation: "Remove editor backup files from the document root.", Marker: "DB_PASSWORD", CMSes: []string{"wordpress"}},
+			{Path: "/wp-config.php.bak", Severity: lua_engine.SeverityHigh, Title: "WordPress wp-config.php.bak reachable", Detail: "Backup of wp-config.php is served directly, disclosing DB credentials and authentication salts.", CWE: "CWE-538", OWASP: "A05:2021 Security Misconfiguration", Remediation: "Remove backup copies from the document root.", Marker: "DB_PASSWORD", CMSes: []string{"wordpress"}},
+			{Path: "/wp-config.php.old", Severity: lua_engine.SeverityHigh, Title: "WordPress wp-config.php.old reachable", Detail: "Older copy of wp-config.php is served directly.", CWE: "CWE-538", OWASP: "A05:2021 Security Misconfiguration", Remediation: "Remove backup copies from the document root.", Marker: "DB_PASSWORD", CMSes: []string{"wordpress"}},
+			{Path: "/wp-config.php~", Severity: lua_engine.SeverityHigh, Title: "WordPress wp-config.php~ reachable", Detail: "Editor backup of wp-config.php is served directly.", CWE: "CWE-538", OWASP: "A05:2021 Security Misconfiguration", Remediation: "Remove editor backup files from the document root.", Marker: "DB_PASSWORD", CMSes: []string{"wordpress"}},
 		},
 	},
 }

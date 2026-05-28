@@ -49,12 +49,6 @@ import (
 func buildBodyTable(L *lua.LState) *lua.LTable {
 	t := L.NewTable()
 	t.RawSetString("is_html_ct", L.NewFunction(bodyIsHTMLCT))
-	t.RawSetString("is_scannable_ct", L.NewFunction(bodyIsScannableCT))
-	t.RawSetString("find_secrets", L.NewFunction(bodyFindSecrets))
-	t.RawSetString("redact_secret", L.NewFunction(bodyRedactSecret))
-	t.RawSetString("source_map_kind", L.NewFunction(bodySourceMapKind))
-	t.RawSetString("find_source_map_ref", L.NewFunction(bodyFindSourceMapRef))
-	t.RawSetString("looks_like_source_map", L.NewFunction(bodyLooksLikeSourceMap))
 	t.RawSetString("scan_known_js_libs", L.NewFunction(bodyScanKnownJSLibs))
 	t.RawSetString("sqli_error_new_matches", L.NewFunction(bodySQLiErrorNewMatches))
 	t.RawSetString("sqli_error_payloads", L.NewFunction(bodySQLiErrorPayloads))
@@ -167,65 +161,6 @@ func bodyCmdInjectionMargin(L *lua.LState) int {
 
 func bodyIsHTMLCT(L *lua.LState) int {
 	L.Push(lua.LBool(IsHTMLContentType(RequireString(L, 1))))
-	return 1
-}
-
-func bodyIsScannableCT(L *lua.LState) int {
-	L.Push(lua.LBool(IsScannableContentType(RequireString(L, 1))))
-	return 1
-}
-
-// bodyFindSecrets runs the secrets-in-body scanner and returns the
-// already-sorted hit list. The pre-redacted value is stamped on each
-// entry so the Lua port does not have to call redact_secret again.
-func bodyFindSecrets(L *lua.LState) int {
-	body := RequireString(L, 1)
-	hits := ScanSecretsInBody([]byte(body))
-	out := L.NewTable()
-	for i, h := range hits {
-		entry := L.NewTable()
-		entry.RawSetString("id", lua.LString(h.ID))
-		entry.RawSetString("label", lua.LString(h.Label))
-		entry.RawSetString("severity", lua.LString(string(h.Severity)))
-		entry.RawSetString("raw", lua.LString(h.Raw))
-		entry.RawSetString("redacted", lua.LString(RedactSecret(h.Raw)))
-		entry.RawSetString("count", lua.LNumber(h.Count))
-		out.RawSetInt(i+1, entry)
-	}
-	L.Push(out)
-	return 1
-}
-
-func bodyRedactSecret(L *lua.LState) int {
-	L.Push(lua.LString(RedactSecret(RequireString(L, 1))))
-	return 1
-}
-
-func bodySourceMapKind(L *lua.LState) int {
-	kind, ok := SourceMapKind(RequireString(L, 1))
-	L.Push(lua.LString(kind))
-	L.Push(lua.LBool(ok))
-	return 2
-}
-
-// bodyFindSourceMapRef accepts a headers userdata + body + kind and
-// returns the source-map reference the response advertises. The
-// header / body precedence rule lives in Go - this is a thin
-// forwarder, not a re-implementation.
-func bodyFindSourceMapRef(L *lua.LState) int {
-	hud, ok := L.CheckUserData(1).Value.(*headersUserData)
-	var h http.Header
-	if ok {
-		h = hud.h
-	}
-	body := RequireString(L, 2)
-	kind := RequireString(L, 3)
-	L.Push(lua.LString(FindSourceMapReference(h, []byte(body), kind)))
-	return 1
-}
-
-func bodyLooksLikeSourceMap(L *lua.LState) int {
-	L.Push(lua.LBool(LooksLikeSourceMap([]byte(RequireString(L, 1)))))
 	return 1
 }
 
@@ -486,28 +421,6 @@ func bodyCachePoisonProbeURL(L *lua.LState) int {
 	}
 	L.Push(lua.LString(out))
 	return 1
-}
-
-// readStringList accepts a Lua string, an array table of strings, or
-// nil, and returns the equivalent []string. Used by analyze_csp to
-// match http.Header.Values's shape on the Go side without forcing the
-// Lua author to pre-shape header arrays themselves.
-func readStringList(v lua.LValue) []string {
-	if v == nil || v == lua.LNil {
-		return nil
-	}
-	if s, ok := v.(lua.LString); ok {
-		return []string{string(s)}
-	}
-	if tbl, ok := v.(*lua.LTable); ok {
-		n := tbl.Len()
-		out := make([]string, 0, n)
-		for i := 1; i <= n; i++ {
-			out = append(out, LValString(tbl.RawGetInt(i)))
-		}
-		return out
-	}
-	return nil
 }
 
 func init() {

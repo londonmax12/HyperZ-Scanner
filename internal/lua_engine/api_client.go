@@ -2,6 +2,8 @@ package lua_engine
 
 import (
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
 	"io"
 	"net/http"
 	"net/url"
@@ -13,6 +15,17 @@ import (
 
 	"github.com/londonmax12/hyperz/internal/httpclient"
 )
+
+// clientBodyHashPrefix returns the leading 16 hex chars of a SHA1 over
+// body. Used by the parallel-probe helper to produce a compact
+// fingerprint each fanout response can be diffed by. Local copy of the
+// same hash the content-discovery subpackage uses for soft-404
+// fingerprinting, kept here so api_client.go has no cross-family
+// dependency on the discovery subpackage.
+func clientBodyHashPrefix(body []byte) string {
+	h := sha1.Sum(body)
+	return hex.EncodeToString(h[:8])
+}
 
 // requestUserData wraps an *http.Request the bridge built (typically
 // from Sink.MutateRequest) so a Lua check can read its method/URL
@@ -436,7 +449,7 @@ func clientDoParallel(L *lua.LState) int {
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, parallelBodyCap))
 			results[idx] = result{
 				status: resp.StatusCode,
-				hash:   bodyHashPrefix(body),
+				hash:   clientBodyHashPrefix(body),
 			}
 		}(i)
 	}

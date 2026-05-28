@@ -1,4 +1,4 @@
-package lua_engine
+package discovery
 
 import (
 	"bytes"

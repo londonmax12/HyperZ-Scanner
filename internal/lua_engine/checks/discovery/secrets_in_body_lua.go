@@ -1,6 +1,10 @@
-package lua_engine
+package discovery
 
-import "sort"
+import (
+	"sort"
+
+	"github.com/londonmax12/hyperz/internal/lua_engine"
+)
 
 // This file exposes the secrets-in-body check's helpers to the Lua
 // bridge. Sibling to secrets_in_body.go: the pattern catalogue + the
@@ -22,7 +26,7 @@ func IsScannableContentType(ct string) bool { return isScannableContentType(ct) 
 type SecretHit struct {
 	ID       string
 	Label    string
-	Severity Severity
+	Severity lua_engine.Severity
 	Raw      string
 	Count    int
 }
@@ -41,7 +45,7 @@ func ScanSecretsInBody(body []byte) []SecretHit {
 	for _, pat := range secretPatterns {
 		matches := pat.re.FindAllIndex(body, -1)
 		for _, m := range matches {
-			if pat.contextRE != nil && !HasNearbyContext(body, m[0], m[1], pat.contextRE) {
+			if pat.contextRE != nil && !lua_engine.HasNearbyContext(body, m[0], m[1], pat.contextRE) {
 				continue
 			}
 			raw := string(body[m[0]:m[1]])
@@ -61,15 +65,15 @@ func ScanSecretsInBody(body []byte) []SecretHit {
 		hits = append(hits, h)
 	}
 	sort.SliceStable(hits, func(i, j int) bool {
-		ri := SeverityRank(hits[i].pattern.severity)
-		rj := SeverityRank(hits[j].pattern.severity)
+		ri := lua_engine.SeverityRank(hits[i].pattern.severity)
+		rj := lua_engine.SeverityRank(hits[j].pattern.severity)
 		if ri != rj {
 			return ri > rj
 		}
 		if hits[i].pattern.id != hits[j].pattern.id {
 			return hits[i].pattern.id < hits[j].pattern.id
 		}
-		return redactSecret(hits[i].raw) < redactSecret(hits[j].raw)
+		return lua_engine.RedactSecret(hits[i].raw) < lua_engine.RedactSecret(hits[j].raw)
 	})
 	out := make([]SecretHit, 0, len(hits))
 	for _, h := range hits {
@@ -84,8 +88,3 @@ func ScanSecretsInBody(body []byte) []SecretHit {
 	return out
 }
 
-// RedactSecret returns the safe-to-print form of raw. Lua port calls
-// this once per hit so the redaction rule (first/last four chars,
-// PEM header pass-through, full-mask for short values) only lives in
-// the Go side.
-func RedactSecret(raw string) string { return redactSecret(raw) }

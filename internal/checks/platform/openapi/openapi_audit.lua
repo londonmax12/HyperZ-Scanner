@@ -50,12 +50,12 @@ local function build_evidence(ctx, facts)
   }
 end
 
--- finding_embedded_credentials reuses ctx.body.find_secrets so this
+-- finding_embedded_credentials reuses ctx.discovery.find_secrets so this
 -- check runs the same pattern catalogue and nearby-context filter as
 -- secrets_in_body, then composes its own audit-side report (sort by
 -- severity desc, max-severity, dedupe parts).
 local function finding_embedded_credentials(ctx, facts)
-  local hits = ctx.body.find_secrets(facts.body)
+  local hits = ctx.discovery.find_secrets(facts.body)
   if #hits == 0 then return nil end
 
   -- find_secrets returns hits pre-sorted (severity desc, id asc,

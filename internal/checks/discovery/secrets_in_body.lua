@@ -1,7 +1,7 @@
 -- secrets-in-body: scans response bodies for high-confidence
 -- credential patterns (cloud keys, VCS tokens, AI provider keys,
 -- private keys, JWTs). Pattern catalogue and the redaction format
--- sit behind ctx.body.find_secrets / ctx.body.redact_secret.
+-- sit behind ctx.discovery.find_secrets / ctx.discovery.redact_secret.
 
 local check = {
   name        = "secrets-in-body",
@@ -22,11 +22,11 @@ function check.run(ctx)
   local snap, err = ctx:ensure_response()
   if err then return nil, err end
   if snap.body == "" then return nil end
-  if not ctx.body.is_scannable_ct(snap.headers:get("Content-Type")) then
+  if not ctx.discovery.is_scannable_ct(snap.headers:get("Content-Type")) then
     return nil
   end
 
-  local hits = ctx.body.find_secrets(snap.body)
+  local hits = ctx.discovery.find_secrets(snap.body)
   if #hits == 0 then return nil end
 
   local max_sev = "info"
