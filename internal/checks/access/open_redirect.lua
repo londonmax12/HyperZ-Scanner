@@ -60,7 +60,7 @@ function check.run(ctx)
     return nil
   end
 
-  local sweep = ctx:level_at_least("aggressive") or ctx.url.looks_redirectish(u.path)
+  local sweep = ctx:level_at_least("aggressive") or ctx.access.looks_redirectish(u.path)
   local candidates = ctx.sinks.for_page {
     sweep_params = sweep and CANONICAL_PARAMS or nil,
   }
@@ -109,9 +109,9 @@ function probe(ctx, sink)
   -- body-sink scan, avoiding a double read when a page bounces
   -- through both channels.
   local sink_kind, sink_payload = "", ""
-  if ctx.url.is_redirect_status(resp:status()) then
+  if ctx.access.is_redirect_status(resp:status()) then
     local loc = resp:headers():get("Location")
-    if ctx.url.location_targets_host(loc, CANARY_HOST) then
+    if ctx.access.location_targets_host(loc, CANARY_HOST) then
       sink_kind, sink_payload = "the Location header", loc
     end
   end
@@ -120,7 +120,7 @@ function probe(ctx, sink)
   if read_err then return nil, read_err end
 
   if sink_kind == "" then
-    local hit, kind = ctx.body.find_redirect_sink(body, CANARY_HOST)
+    local hit, kind = ctx.access.find_redirect_sink(body, CANARY_HOST)
     if hit ~= "" then
       sink_kind, sink_payload = kind, hit
     end

@@ -1,4 +1,4 @@
-package lua_engine
+package access
 
 // This file exposes the open-redirect detection helpers as exported
 // package-level functions so callers outside `checks` (notably the

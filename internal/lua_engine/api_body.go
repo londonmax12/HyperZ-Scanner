@@ -16,9 +16,6 @@ import (
 //
 // Helpers seeded here:
 //
-//	ctx.body.find_redirect_sink(body, canary_host)
-//	  -> (match_string, kind_string) or ("", "") when nothing found.
-//
 //	ctx.body.is_html_ct(content_type) / ctx.body.is_scannable_ct(ct)
 //	  -> bool. Mirror the Go-side content-type filters every passive
 //	     check gates on, so a Lua port and the Go original agree on
@@ -51,7 +48,6 @@ import (
 // author calls without having to know the internal regex.
 func buildBodyTable(L *lua.LState) *lua.LTable {
 	t := L.NewTable()
-	t.RawSetString("find_redirect_sink", L.NewFunction(bodyFindRedirectSink))
 	t.RawSetString("is_html_ct", L.NewFunction(bodyIsHTMLCT))
 	t.RawSetString("is_scannable_ct", L.NewFunction(bodyIsScannableCT))
 	t.RawSetString("find_secrets", L.NewFunction(bodyFindSecrets))
@@ -167,20 +163,6 @@ func bodyCmdInjectionSleepSeconds(L *lua.LState) int {
 func bodyCmdInjectionMargin(L *lua.LState) int {
 	L.Push(lua.LNumber(CmdInjectionMargin()))
 	return 1
-}
-
-// bodyFindRedirectSink delegates to FindBodyRedirectSink so a
-// Lua-authored check applies the exact same JS-navigation + meta-
-// refresh scanning the Go check uses. Keeping the regex in Go means
-// future tightening (new sink shapes, false-positive fixes) only
-// needs to land once.
-func bodyFindRedirectSink(L *lua.LState) int {
-	body := RequireString(L, 1)
-	host := RequireString(L, 2)
-	target, kind := FindBodyRedirectSink([]byte(body), host)
-	L.Push(lua.LString(target))
-	L.Push(lua.LString(kind))
-	return 2
 }
 
 func bodyIsHTMLCT(L *lua.LState) int {

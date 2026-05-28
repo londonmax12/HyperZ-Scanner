@@ -24,9 +24,6 @@ func buildURLTable(L *lua.LState) *lua.LTable {
 	t.RawSetString("path", L.NewFunction(urlPath))
 	t.RawSetString("scheme", L.NewFunction(urlScheme))
 	t.RawSetString("query", L.NewFunction(urlQuery))
-	t.RawSetString("location_targets_host", L.NewFunction(urlLocationTargetsHost))
-	t.RawSetString("looks_redirectish", L.NewFunction(urlLooksRedirectish))
-	t.RawSetString("is_redirect_status", L.NewFunction(urlIsRedirectStatus))
 	t.RawSetString("resolve", L.NewFunction(urlResolve))
 	t.RawSetString("encode_values", L.NewFunction(urlEncodeValues))
 	t.RawSetString("same_site", L.NewFunction(urlSameSite))
@@ -168,44 +165,6 @@ func urlScheme(L *lua.LState) int {
 		return 1
 	}
 	L.Push(lua.LString(u.Scheme))
-	return 1
-}
-
-// urlLocationTargetsHost reports whether a Location-header-style
-// string s resolves (after browser-quirk normalization) to the
-// given host. Delegates to LocationTargetsHost so the Lua-
-// authored open-redirect check uses the same comparator as the Go
-// original, including the backslash-collapse / multi-slash-collapse
-// passes that catch real-world bypass variants.
-func urlLocationTargetsHost(L *lua.LState) int {
-	s := RequireString(L, 1)
-	host := RequireString(L, 2)
-	L.Push(lua.LBool(LocationTargetsHost(s, host)))
-	return 1
-}
-
-// urlLooksRedirectish reports whether path contains one of the
-// canonical redirect-handling keywords. Used by the open-redirect
-// port to decide whether to fold the canonical parameter sweep into
-// a page's probe surface. See LooksRedirectish for the
-// keyword list - kept in one place so the gating heuristic doesn't
-// drift between the Go and Lua authoring paths.
-func urlLooksRedirectish(L *lua.LState) int {
-	path := RequireString(L, 1)
-	L.Push(lua.LBool(LooksRedirectish(path)))
-	return 1
-}
-
-// urlIsRedirectStatus reports whether the given HTTP status code is
-// a 3xx redirect that carries a Location header. 304 (Not Modified)
-// is excluded; see IsRedirectStatus for the accepted code
-// list. Belongs under ctx.url because the open-redirect logic pairs
-// it with Location-header inspection - moving it to its own
-// `ctx.http` namespace would split the redirect detection surface
-// across two tables for no real gain.
-func urlIsRedirectStatus(L *lua.LState) int {
-	code := L.CheckInt(1)
-	L.Push(lua.LBool(IsRedirectStatus(code)))
 	return 1
 }
 
