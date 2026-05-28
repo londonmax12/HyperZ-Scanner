@@ -32,14 +32,14 @@ func buildRaceTable(L *lua.LState) *lua.LTable {
 type raceCheckKey struct{}
 
 func raceScan(L *lua.LState) int {
-	env := currentEnv(L)
+	env := CurrentEnv(L)
 	if env == nil {
 		L.RaiseError("ctx.race.scan called outside a check run")
 	}
-	rc := env.check.AuxOrCreate(raceCheckKey{}, func() any {
+	rc := env.Check.AuxOrCreate(raceCheckKey{}, func() any {
 		return &RaceCondition{}
 	}).(*RaceCondition)
-	facts, err := rc.ScanFacts(env.ctx, env.scope, env.page)
+	facts, err := rc.ScanFacts(env.Ctx, env.Scope, env.Page)
 	if err != nil {
 		L.Push(lua.LNil)
 		L.Push(lua.LString(err.Error()))

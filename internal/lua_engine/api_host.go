@@ -47,23 +47,23 @@ func buildHostTable(L *lua.LState) *lua.LTable {
 // anyway. Hosts that need a different root use the per-helper
 // primitives (ctx.url.parse + ctx.scope:allows + ctx.host.claim_once).
 func hostClaimFromPage(L *lua.LState) int {
-	env := currentEnv(L)
+	env := CurrentEnv(L)
 	if env == nil {
 		L.RaiseError("ctx.host:claim_from_page called outside a check run")
 	}
-	u, err := url.Parse(env.page.URL)
+	u, err := url.Parse(env.Page.URL)
 	if err != nil || u == nil || u.Scheme == "" || u.Host == "" {
 		L.Push(lua.LString(""))
 		L.Push(lua.LBool(false))
 		return 2
 	}
 	hostRoot := u.Scheme + "://" + u.Host
-	if env.scope != nil && !env.scope.Allows(u) {
+	if env.Scope != nil && !env.Scope.Allows(u) {
 		L.Push(lua.LString(""))
 		L.Push(lua.LBool(false))
 		return 2
 	}
-	claims := env.check.AuxOrCreate(hostClaimsKey{}, func() any {
+	claims := env.Check.AuxOrCreate(hostClaimsKey{}, func() any {
 		return &hostClaims{set: map[string]struct{}{}}
 	}).(*hostClaims)
 	claims.mu.Lock()
@@ -98,12 +98,12 @@ type hostClaims struct {
 // calls return false so the caller can short-circuit duplicate
 // host-level work. Calling outside a check run raises a Lua error.
 func hostClaimOnce(L *lua.LState) int {
-	env := currentEnv(L)
+	env := CurrentEnv(L)
 	if env == nil {
 		L.RaiseError("ctx.host.claim_once called outside a check run")
 	}
 	hostRoot := requireString(L, 1)
-	claims := env.check.AuxOrCreate(hostClaimsKey{}, func() any {
+	claims := env.Check.AuxOrCreate(hostClaimsKey{}, func() any {
 		return &hostClaims{set: map[string]struct{}{}}
 	}).(*hostClaims)
 	claims.mu.Lock()

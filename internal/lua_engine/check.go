@@ -542,7 +542,7 @@ func (c *LuaCheck) Drain(ctx context.Context) []Finding {
 		return nil
 	}
 
-	envCtx := &runEnv{ctx: ctx, check: c}
+	envCtx := &RunEnv{Ctx: ctx, Check: c}
 	ctxUD := buildCtxUserdata(L, envCtx)
 	L.SetContext(ctx)
 	L.Push(drainFn)
@@ -639,12 +639,12 @@ func (c *LuaCheck) Run(ctx context.Context, client *httpclient.Client, sc *scope
 		return nil, fmt.Errorf("%s: module.run is %s, not a function", c.name, runFn.Type())
 	}
 
-	envCtx := &runEnv{
-		ctx:    ctx,
-		client: client,
-		scope:  sc,
-		page:   p,
-		check:  c,
+	envCtx := &RunEnv{
+		Ctx:    ctx,
+		Client: client,
+		Scope:  sc,
+		Page:   p,
+		Check:  c,
 	}
 	ctxUD := buildCtxUserdata(L, envCtx)
 
@@ -793,18 +793,22 @@ type pooledVM struct {
 	module *lua.LTable
 }
 
-// runEnv is the Go-side bag of values that the Lua ctx userdata
+// RunEnv is the Go-side bag of values that the Lua ctx userdata
 // exposes to the running check. Holding it as a struct keeps the
 // binding code one indirection away from the scanner's call shape; if
 // the engine adds another per-Run input (a baseline diff handle, a
 // shared cache) the binding extends the struct rather than threading
 // another parameter through every API surface.
-type runEnv struct {
-	ctx    context.Context
-	client *httpclient.Client
-	scope  *scope.Scope
-	page   page.Page
-	check  *LuaCheck
+//
+// Exported so a future api/ or checks/<family>/ subpackage can read
+// these fields directly without an accessor wrapper per use; CurrentEnv
+// is the only entry point a binding ever needs.
+type RunEnv struct {
+	Ctx    context.Context
+	Client *httpclient.Client
+	Scope  *scope.Scope
+	Page   page.Page
+	Check  *LuaCheck
 }
 
 // parseScope mirrors ParseSeverity for the Scope enum. Kept

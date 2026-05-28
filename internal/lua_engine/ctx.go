@@ -17,7 +17,7 @@ import (
 //     current registry slot rather than envCtx itself, so the same
 //     ctx table never carries a stale env pointer between Runs (the
 //     env lives in the Lua registry; bindings look it up via
-//     currentEnv on every call).
+//     CurrentEnv on every call).
 //
 // Rebuilding the ctx table each Run is cheap: gopher-lua's LTable is
 // a small allocation and the static references are re-attached, not
@@ -26,22 +26,22 @@ import (
 // the next one.
 //
 // setEnv must be called before this so the per-call methods can
-// resolve `env` via currentEnv. Run does this in the right order
+// resolve `env` via CurrentEnv. Run does this in the right order
 // already; buildCtxUserdata is otherwise an inner detail.
-func buildCtxUserdata(L *lua.LState, env *runEnv) *lua.LTable {
+func buildCtxUserdata(L *lua.LState, env *RunEnv) *lua.LTable {
 	setEnv(L, env)
 
 	t := L.NewTable()
-	t.RawSetString("check_name", lua.LString(env.check.name))
-	t.RawSetString("page", buildPageTable(L, env.page))
-	t.RawSetString("scope", pushScope(L, env.scope))
-	t.RawSetString("client", pushClient(L, env.client))
+	t.RawSetString("check_name", lua.LString(env.Check.name))
+	t.RawSetString("page", buildPageTable(L, env.Page))
+	t.RawSetString("scope", pushScope(L, env.Scope))
+	t.RawSetString("client", pushClient(L, env.Client))
 
 	// Active scan level surfaces as a string. Authors compare with
 	// the `levels` global (e.g. `if ctx.level == levels.aggressive`)
 	// rather than the bare string so a typo at the use site fails as
 	// nil-not-equal-string.
-	t.RawSetString("level", lua.LString(LevelFrom(env.ctx).String()))
+	t.RawSetString("level", lua.LString(LevelFrom(env.Ctx).String()))
 
 	for name, tbl := range staticFor(L) {
 		t.RawSetString(name, tbl)
@@ -51,7 +51,7 @@ func buildCtxUserdata(L *lua.LState, env *runEnv) *lua.LTable {
 	// from the YAML config file (or an empty table when no bag was
 	// supplied). Always populated so Lua authors can read
 	// `ctx.config.foo` without first nil-checking ctx.config.
-	t.RawSetString("config", pushConfig(L, env.check.settings))
+	t.RawSetString("config", pushConfig(L, env.Check.settings))
 
 	t.RawSetString("ensure_response", L.NewFunction(ctxEnsureResponse))
 	t.RawSetString("report", L.NewFunction(ctxReport))
@@ -72,7 +72,7 @@ func buildCtxUserdata(L *lua.LState, env *runEnv) *lua.LTable {
 // The snapshot table mirrors what the Go check sees: status, headers
 // (userdata), body (string).
 func ctxEnsureResponse(L *lua.LState) int {
-	env := currentEnv(L)
+	env := CurrentEnv(L)
 	if env == nil {
 		L.RaiseError("ctx:ensure_response called outside a check run")
 	}
@@ -80,7 +80,7 @@ func ctxEnsureResponse(L *lua.LState) int {
 	if t, ok := L.Get(2).(*lua.LTable); ok {
 		maxBody = int64(lvalInt(t.RawGetString("max_body")))
 	}
-	snap, err := ensureResponse(env.ctx, env.client, env.page, maxBody)
+	snap, err := ensureResponse(env.Ctx, env.Client, env.Page, maxBody)
 	if err != nil {
 		L.Push(lua.LNil)
 		L.Push(lua.LString(err.Error()))
@@ -100,12 +100,12 @@ func ctxEnsureResponse(L *lua.LState) int {
 // per-call reporter. Lua authors call this for sub-probe failures
 // they swallowed so a flaky host still leaves breadcrumbs.
 func ctxReport(L *lua.LState) int {
-	env := currentEnv(L)
+	env := CurrentEnv(L)
 	if env == nil {
 		L.RaiseError("ctx:report called outside a check run")
 	}
 	msg := requireString(L, 2)
-	Report(env.ctx, errors.New(msg))
+	Report(env.Ctx, errors.New(msg))
 	return 0
 }
 
@@ -115,7 +115,7 @@ func ctxReport(L *lua.LState) int {
 // "includes everything below" semantics that scan filters use
 // without forcing the author to enumerate every higher level.
 func ctxLevelAtLeast(L *lua.LState) int {
-	env := currentEnv(L)
+	env := CurrentEnv(L)
 	if env == nil {
 		L.RaiseError("ctx:level_at_least called outside a check run")
 	}
@@ -123,6 +123,6 @@ func ctxLevelAtLeast(L *lua.LState) int {
 	if err != nil {
 		L.ArgError(2, err.Error())
 	}
-	L.Push(lua.LBool(LevelFrom(env.ctx) >= want))
+	L.Push(lua.LBool(LevelFrom(env.Ctx) >= want))
 	return 1
 }

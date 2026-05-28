@@ -39,11 +39,11 @@ func buildSinksTable(L *lua.LState) *lua.LTable {
 // the Lua-authored probe order matches the Go check's: stable across
 // runs and across rule changes that only touch payloads.
 func sinksForPage(L *lua.LState) int {
-	env := currentEnv(L)
+	env := CurrentEnv(L)
 	if env == nil {
 		L.RaiseError("ctx.sinks.for_page called outside a check run")
 	}
-	base := SinksFor(env.page)
+	base := SinksFor(env.Page)
 
 	type key struct {
 		method string
@@ -69,7 +69,7 @@ func sinksForPage(L *lua.LState) int {
 			}
 			s := Sink{
 				Method: http.MethodGet,
-				URL:    env.page.URL,
+				URL:    env.Page.URL,
 				Loc:    LocQuery,
 				Name:   name,
 			}
@@ -112,7 +112,7 @@ func sinksForPage(L *lua.LState) int {
 // fan-out) so the bridge stays generic instead of baking in any
 // single check's header set.
 func sinksForHeaders(L *lua.LState) int {
-	env := currentEnv(L)
+	env := CurrentEnv(L)
 	if env == nil {
 		L.RaiseError("ctx.sinks.for_headers called outside a check run")
 	}
@@ -221,11 +221,11 @@ func sinkMutateRequest(L *lua.LState) int {
 		L.ArgError(1, "expected sink userdata")
 	}
 	payload := requireString(L, 2)
-	env := currentEnv(L)
+	env := CurrentEnv(L)
 	if env == nil {
 		L.RaiseError("sink:mutate_request called outside a check run")
 	}
-	req, err := wrapper.s.MutateRequest(env.ctx, payload)
+	req, err := wrapper.s.MutateRequest(env.Ctx, payload)
 	if err != nil {
 		L.Push(lua.LNil)
 		L.Push(lua.LString(err.Error()))

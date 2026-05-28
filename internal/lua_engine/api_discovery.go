@@ -69,14 +69,14 @@ func buildDiscoveryTable(L *lua.LState) *lua.LTable {
 // The fingerprint.Stack used for stack-restriction filtering comes
 // from the active env's context (set by the scanner via WithStack).
 func discoveryEntries(L *lua.LState) int {
-	env := currentEnv(L)
+	env := CurrentEnv(L)
 	if env == nil {
 		L.RaiseError("ctx.discovery.entries called outside a check run")
 	}
 	catalogue := requireString(L, 1)
 	aggressive := lvalBool(L.Get(2))
 	hostname := optString(L, 3, "")
-	stack := StackFrom(env.ctx)
+	stack := StackFrom(env.Ctx)
 	out := L.NewTable()
 	for i, e := range ContentDiscoveryEntriesLua(catalogue, aggressive, hostname, stack) {
 		out.RawSetInt(i+1, pushDiscoveryEntry(L, e))
@@ -90,7 +90,7 @@ func discoveryEntries(L *lua.LState) int {
 // in hits and whose path is not in probed and whose stack constraint
 // matches.
 func discoveryFollowUps(L *lua.LState) int {
-	env := currentEnv(L)
+	env := CurrentEnv(L)
 	if env == nil {
 		L.RaiseError("ctx.discovery.follow_ups called outside a check run")
 	}
@@ -98,7 +98,7 @@ func discoveryFollowUps(L *lua.LState) int {
 	_ = optString(L, 2, "")
 	hits := readPathSet(L.Get(3))
 	probed := readPathSet(L.Get(4))
-	stack := StackFrom(env.ctx)
+	stack := StackFrom(env.Ctx)
 	out := L.NewTable()
 	for i, e := range ContentDiscoveryFollowUpsLua(catalogue, hits, probed, stack) {
 		out.RawSetInt(i+1, pushDiscoveryEntry(L, e))

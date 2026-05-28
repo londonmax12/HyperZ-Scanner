@@ -39,15 +39,15 @@ func buildSmugglingTable(L *lua.LState) *lua.LTable {
 type smugglingCheckKey struct{}
 
 func smugglingScan(L *lua.LState) int {
-	env := currentEnv(L)
+	env := CurrentEnv(L)
 	if env == nil {
 		L.RaiseError("ctx.smuggling.scan called outside a check run")
 	}
 	catalogue := requireString(L, 1)
-	rs := env.check.AuxOrCreate(smugglingCheckKey{}, func() any {
+	rs := env.Check.AuxOrCreate(smugglingCheckKey{}, func() any {
 		return &RequestSmuggling{}
 	}).(*RequestSmuggling)
-	hostFact, err := rs.ScanFacts(env.ctx, env.scope, env.page, catalogue)
+	hostFact, err := rs.ScanFacts(env.Ctx, env.Scope, env.Page, catalogue)
 	if err != nil {
 		L.Push(lua.LNil)
 		L.Push(lua.LString(err.Error()))

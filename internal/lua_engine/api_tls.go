@@ -87,7 +87,7 @@ func tlsFormatUnixRFC3339UTC(L *lua.LState) int {
 // tlsAuditDial indirection the Go check uses, so a test that swaps
 // the dial sees both implementations route through the override.
 func tlsHandshake(L *lua.LState) int {
-	env := currentEnv(L)
+	env := CurrentEnv(L)
 	if env == nil {
 		L.Push(lua.LNil)
 		L.Push(lua.LString("ctx.tls.handshake called outside a check run"))
@@ -103,7 +103,7 @@ func tlsHandshake(L *lua.LState) int {
 			serverName = addr
 		}
 	}
-	res, err := TLSAuditHandshakeLua(env.ctx, addr, serverName)
+	res, err := TLSAuditHandshakeLua(env.Ctx, addr, serverName)
 	if err != nil {
 		L.Push(lua.LNil)
 		L.Push(lua.LString(err.Error()))

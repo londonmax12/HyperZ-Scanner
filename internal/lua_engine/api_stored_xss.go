@@ -287,11 +287,11 @@ type storedXSSStateUserData struct {
 }
 
 func storedXSSStateFn(L *lua.LState) int {
-	env := currentEnv(L)
+	env := CurrentEnv(L)
 	if env == nil {
 		L.RaiseError("ctx.stored_xss.state called outside a check run")
 	}
-	state := env.check.AuxOrCreate(storedXSSStateKey{}, func() any {
+	state := env.Check.AuxOrCreate(storedXSSStateKey{}, func() any {
 		return &StoredXSSState{}
 	}).(*StoredXSSState)
 	ud := L.NewUserData()
@@ -398,7 +398,7 @@ func storedXSSStateLookupCanary(L *lua.LState) int {
 // touching the Lua-level surface.
 func storedXSSStateAbsorbDetectURLs(L *lua.LState) int {
 	_ = storedXSSStateFromArg(L, 1)
-	env := currentEnv(L)
+	env := CurrentEnv(L)
 	if env == nil {
 		L.RaiseError("absorb_detect_urls called outside a check run")
 	}
@@ -406,7 +406,7 @@ func storedXSSStateAbsorbDetectURLs(L *lua.LState) int {
 	loc := optString(L, 3, "")
 	body := optString(L, 4, "")
 	harvestPlantResponseURLs(plantURL, loc, []byte(body), func(u string) {
-		core.DiscoverAt(env.ctx, target.Page(u, ""), core.TierDeferred)
+		core.DiscoverAt(env.Ctx, target.Page(u, ""), core.TierDeferred)
 	})
 	return 0
 }

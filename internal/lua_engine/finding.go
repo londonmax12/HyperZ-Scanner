@@ -18,7 +18,7 @@ import (
 // lenient on text fields (titles, details) which we coerce to
 // strings rather than reject. A typo in severity should fail the
 // check loudly; a missing title only loses information.
-func (c *LuaCheck) marshalFindings(t *lua.LTable, env *runEnv) ([]Finding, error) {
+func (c *LuaCheck) marshalFindings(t *lua.LTable, env *RunEnv) ([]Finding, error) {
 	n := t.Len()
 	if n <= 0 {
 		return nil, nil
@@ -39,7 +39,7 @@ func (c *LuaCheck) marshalFindings(t *lua.LTable, env *runEnv) ([]Finding, error
 	return out, nil
 }
 
-func (c *LuaCheck) marshalOne(t *lua.LTable, env *runEnv) (Finding, error) {
+func (c *LuaCheck) marshalOne(t *lua.LTable, env *RunEnv) (Finding, error) {
 	sev := Severity(lvalString(t.RawGetString("severity")))
 	if sev == "" {
 		return Finding{}, fmt.Errorf("missing required field `severity`")
@@ -50,11 +50,11 @@ func (c *LuaCheck) marshalOne(t *lua.LTable, env *runEnv) (Finding, error) {
 
 	target := lvalString(t.RawGetString("target"))
 	if target == "" {
-		target = env.page.URL
+		target = env.Page.URL
 	}
 	urlStr := lvalString(t.RawGetString("url"))
 	if urlStr == "" {
-		urlStr = env.page.URL
+		urlStr = env.Page.URL
 	}
 
 	cwe := lvalString(t.RawGetString("cwe"))

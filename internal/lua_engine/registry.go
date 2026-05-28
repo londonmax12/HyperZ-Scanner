@@ -5,8 +5,8 @@ import (
 )
 
 // envRegistryKey is the slot in the Lua registry where each Run
-// stashes its *runEnv. Bindings (ensure_response, report, client
-// methods, ...) read it back via currentEnv. Using the registry
+// stashes its *RunEnv. Bindings (ensure_response, report, client
+// methods, ...) read it back via CurrentEnv. Using the registry
 // instead of a Go closure means one VM can serve many sequential
 // Runs with different envs without rebuilding any closures.
 const envRegistryKey = "__hyperz_env"
@@ -28,25 +28,25 @@ const (
 // read it. Called by Run before each PCall. Pairs with clearEnv,
 // which the release path uses to drop the reference so the pooled
 // VM does not retain a stale pointer between calls.
-func setEnv(L *lua.LState, env *runEnv) {
+func setEnv(L *lua.LState, env *RunEnv) {
 	ud := L.NewUserData()
 	ud.Value = env
 	L.G.Registry.RawSetString(envRegistryKey, ud)
 }
 
-// currentEnv returns the *runEnv attached to L by the active Run.
+// CurrentEnv returns the *RunEnv attached to L by the active Run.
 // Returns nil when called outside a Run (e.g. during VM warmup or
 // after a release that cleared the env). Bindings should treat nil
 // as an internal error - a Lua-callable function reaching this path
 // means the engine ran user code without setting the env up first,
 // which is a programmer error in the bridge, not in the check.
-func currentEnv(L *lua.LState) *runEnv {
+func CurrentEnv(L *lua.LState) *RunEnv {
 	v := L.G.Registry.RawGetString(envRegistryKey)
 	ud, ok := v.(*lua.LUserData)
 	if !ok || ud == nil {
 		return nil
 	}
-	env, _ := ud.Value.(*runEnv)
+	env, _ := ud.Value.(*RunEnv)
 	return env
 }
 

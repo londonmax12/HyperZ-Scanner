@@ -31,7 +31,7 @@ type luaTwoPhase struct {
 }
 
 // Plant dispatches to `check.plant(ctx)` in the Lua module. The
-// runEnv mirrors the per-Run shape Run uses so the bridge's
+// RunEnv mirrors the per-Run shape Run uses so the bridge's
 // per-call helpers (ctx.client, ctx.page, ctx.sinks, ctx.stored_xss
 // state) all work the same way they do in single-phase checks. A
 // module without a plant function returns nil findings (no error)
@@ -75,12 +75,12 @@ func (c *luaTwoPhase) dispatchPhaseFn(ctx context.Context, client *httpclient.Cl
 		return nil, fmt.Errorf("%s: module.%s is %s, not a function", c.name, fnName, fnV.Type())
 	}
 
-	envCtx := &runEnv{
-		ctx:    ctx,
-		client: client,
-		scope:  sc,
-		page:   p,
-		check:  c.LuaCheck,
+	envCtx := &RunEnv{
+		Ctx:    ctx,
+		Client: client,
+		Scope:  sc,
+		Page:   p,
+		Check:  c.LuaCheck,
 	}
 	ctxUD := buildCtxUserdata(L, envCtx)
 	L.SetContext(ctx)

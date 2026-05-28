@@ -41,7 +41,7 @@ import (
 // matching the permissive contract that ctx:report and ctx.oob use
 // for optional engine dependencies.
 func ctxDiscover(L *lua.LState) int {
-	env := currentEnv(L)
+	env := CurrentEnv(L)
 	if env == nil {
 		L.RaiseError("ctx.discover called outside a check run")
 	}
@@ -87,7 +87,7 @@ func ctxDiscover(L *lua.LState) int {
 		ParamLocation: strings.ToLower(lvalString(tbl.RawGetString("location"))),
 		Note:          lvalString(tbl.RawGetString("note")),
 	}
-	core.DiscoverAt(env.ctx, disc, tier)
+	core.DiscoverAt(env.Ctx, disc, tier)
 	return 0
 }
 

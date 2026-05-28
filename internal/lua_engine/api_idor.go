@@ -55,11 +55,11 @@ type corpusUserData struct {
 }
 
 func idorCorpus(L *lua.LState) int {
-	env := currentEnv(L)
+	env := CurrentEnv(L)
 	if env == nil {
 		L.RaiseError("ctx.idor.corpus called outside a check run")
 	}
-	c := env.check.AuxOrCreate(idorCorpusKey{}, func() any {
+	c := env.Check.AuxOrCreate(idorCorpusKey{}, func() any {
 		return NewCorpus()
 	}).(*Corpus)
 	ud := L.NewUserData()
@@ -100,11 +100,11 @@ func corpusFromArg(L *lua.LState, pos int) *corpusUserData {
 // the same as in the Go check.
 func corpusIngestPage(L *lua.LState) int {
 	c := corpusFromArg(L, 1)
-	env := currentEnv(L)
+	env := CurrentEnv(L)
 	if env == nil {
 		L.RaiseError("corpus:ingest_page called outside a check run")
 	}
-	c.c.IngestPage(env.page)
+	c.c.IngestPage(env.Page)
 	return 0
 }
 
@@ -205,13 +205,13 @@ func idorJudgeFn(L *lua.LState) int {
 // given pattern, which keeps dedupe keys and false-positive backstop
 // behavior aligned across both impls.
 func idorControlPayload(L *lua.LState) int {
-	env := currentEnv(L)
+	env := CurrentEnv(L)
 	if env == nil {
 		L.RaiseError("ctx.idor.control_payload called outside a check run")
 	}
 	name := requireString(L, 1)
 	seed := requireString(L, 2)
-	c := env.check.AuxOrCreate(idorCorpusKey{}, func() any {
+	c := env.Check.AuxOrCreate(idorCorpusKey{}, func() any {
 		return NewCorpus()
 	}).(*Corpus)
 	pat := findPatternByName(c, name)
@@ -234,7 +234,7 @@ func idorControlPayload(L *lua.LState) int {
 // slug burns requests without adding signal. The filter matches the
 // Go check's identifierSinks pathSinks branch.
 func idorPathSinks(L *lua.LState) int {
-	env := currentEnv(L)
+	env := CurrentEnv(L)
 	if env == nil {
 		L.RaiseError("ctx.idor.path_sinks called outside a check run")
 	}
@@ -244,7 +244,7 @@ func idorPathSinks(L *lua.LState) int {
 		L.Push(L.NewTable())
 		return 1
 	}
-	c := env.check.AuxOrCreate(idorCorpusKey{}, func() any {
+	c := env.Check.AuxOrCreate(idorCorpusKey{}, func() any {
 		return NewCorpus()
 	}).(*Corpus)
 	segs := strings.Split(u.EscapedPath(), "/")

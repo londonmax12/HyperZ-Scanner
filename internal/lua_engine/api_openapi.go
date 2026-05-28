@@ -49,15 +49,15 @@ func buildOpenAPITable(L *lua.LState) *lua.LTable {
 type openapiEvaluatorKey struct{}
 
 func openapiDiscover(L *lua.LState) int {
-	env := currentEnv(L)
+	env := CurrentEnv(L)
 	if env == nil {
 		L.RaiseError("ctx.openapi.discover called outside a check run")
 	}
 	pageURL := requireString(L, 1)
-	eval := env.check.AuxOrCreate(openapiEvaluatorKey{}, func() any {
+	eval := env.Check.AuxOrCreate(openapiEvaluatorKey{}, func() any {
 		return &OpenAPIAudit{}
 	}).(*OpenAPIAudit)
-	facts, err := eval.DiscoverFacts(env.ctx, env.client, env.scope, pageURL)
+	facts, err := eval.DiscoverFacts(env.Ctx, env.Client, env.Scope, pageURL)
 	if err != nil {
 		L.Push(lua.LNil)
 		L.Push(lua.LString(err.Error()))

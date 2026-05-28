@@ -34,16 +34,16 @@ type oauthEvaluatorKey struct{}
 // (the clean path - not an error). On transport failure returns
 // (nil, err_string) so the .lua port can surface it via ctx:report.
 func oauthDiscover(L *lua.LState) int {
-	env := currentEnv(L)
+	env := CurrentEnv(L)
 	if env == nil {
 		L.RaiseError("ctx.oauth.discover called outside a check run")
 	}
 	catalogue := requireString(L, 1)
 	pageURL := requireString(L, 2)
-	eval := env.check.AuxOrCreate(oauthEvaluatorKey{}, func() any {
+	eval := env.Check.AuxOrCreate(oauthEvaluatorKey{}, func() any {
 		return &OAuthDiscovery{}
 	}).(*OAuthDiscovery)
-	facts, err := eval.DiscoverFacts(env.ctx, env.client, env.scope, pageURL, catalogue)
+	facts, err := eval.DiscoverFacts(env.Ctx, env.Client, env.Scope, pageURL, catalogue)
 	if err != nil {
 		L.Push(lua.LNil)
 		L.Push(lua.LString(err.Error()))

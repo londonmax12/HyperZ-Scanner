@@ -41,14 +41,14 @@ func buildJWTTable(L *lua.LState) *lua.LTable {
 type jwtCheckKey struct{}
 
 func jwtScan(L *lua.LState) int {
-	env := currentEnv(L)
+	env := CurrentEnv(L)
 	if env == nil {
 		L.RaiseError("ctx.jwt.scan called outside a check run")
 	}
-	jwt := env.check.AuxOrCreate(jwtCheckKey{}, func() any {
+	jwt := env.Check.AuxOrCreate(jwtCheckKey{}, func() any {
 		return &JWTVulns{}
 	}).(*JWTVulns)
-	facts, err := jwt.ScanFacts(env.ctx, env.client, env.scope, env.page)
+	facts, err := jwt.ScanFacts(env.Ctx, env.Client, env.Scope, env.Page)
 	if err != nil {
 		L.Push(lua.LNil)
 		L.Push(lua.LString(err.Error()))
@@ -66,11 +66,11 @@ func jwtScan(L *lua.LState) int {
 // because the Go *JWTVulns lives under the LuaCheck aux map, not in
 // the scanner's check list.
 func jwtDrain(L *lua.LState) int {
-	env := currentEnv(L)
+	env := CurrentEnv(L)
 	if env == nil {
 		L.RaiseError("ctx.jwt.drain called outside a check run")
 	}
-	jwt, _ := env.check.AuxOrCreate(jwtCheckKey{}, func() any {
+	jwt, _ := env.Check.AuxOrCreate(jwtCheckKey{}, func() any {
 		return &JWTVulns{}
 	}).(*JWTVulns)
 	if jwt == nil {
@@ -79,7 +79,7 @@ func jwtDrain(L *lua.LState) int {
 	}
 	// Drain inspects OOBFrom(ctx); pass through the env ctx the
 	// scanner already wired with the active OOB server.
-	facts := jwt.DrainFacts(env.ctx)
+	facts := jwt.DrainFacts(env.Ctx)
 	L.Push(jwtFactsToLua(L, facts))
 	return 1
 }

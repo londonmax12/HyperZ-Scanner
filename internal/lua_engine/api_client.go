@@ -272,11 +272,11 @@ func clientFromArg(L *lua.LState, pos int) *clientUserData {
 func clientGet(L *lua.LState) int {
 	c := clientFromArg(L, 1)
 	rawurl := requireString(L, 2)
-	env := currentEnv(L)
+	env := CurrentEnv(L)
 	if env == nil {
 		L.RaiseError("client:get called outside a check run")
 	}
-	resp, err := c.c.Get(env.ctx, rawurl)
+	resp, err := c.c.Get(env.Ctx, rawurl)
 	if err != nil {
 		L.Push(lua.LNil)
 		L.Push(lua.LString(err.Error()))
@@ -314,7 +314,7 @@ func clientDoNoFollowTimed(L *lua.LState) int { return clientDispatchTimed(L, tr
 func clientDispatchTimed(L *lua.LState, noFollow bool) int {
 	c := clientFromArg(L, 1)
 	r := requestFromArg(L, 2)
-	env := currentEnv(L)
+	env := CurrentEnv(L)
 	if env == nil {
 		L.RaiseError("client:do_timed called outside a check run")
 	}
@@ -324,9 +324,9 @@ func clientDispatchTimed(L *lua.LState, noFollow bool) int {
 		err  error
 	)
 	if noFollow {
-		resp, err = c.c.DoNoFollow(env.ctx, r.req)
+		resp, err = c.c.DoNoFollow(env.Ctx, r.req)
 	} else {
-		resp, err = c.c.Do(env.ctx, r.req)
+		resp, err = c.c.Do(env.Ctx, r.req)
 	}
 	latency := time.Since(start)
 	if err != nil {
@@ -357,11 +357,11 @@ func clientDispatchTimed(L *lua.LState, noFollow bool) int {
 func clientDoDetached(L *lua.LState) int {
 	c := clientFromArg(L, 1)
 	r := requestFromArg(L, 2)
-	env := currentEnv(L)
+	env := CurrentEnv(L)
 	if env == nil {
 		L.RaiseError("client:do_detached called outside a check run")
 	}
-	detached := context.WithoutCancel(env.ctx)
+	detached := context.WithoutCancel(env.Ctx)
 	if L.GetTop() >= 3 {
 		if n, ok := L.Get(3).(lua.LNumber); ok && float64(n) > 0 {
 			var cancel context.CancelFunc
@@ -394,7 +394,7 @@ const parallelBodyCap = 64 * 1024
 // behaviour without the single-packet barrier alignment ctx.race uses
 // (e.g. lockout fuzzing, rate-limit probing, brute-force timing).
 //
-// Each goroutine clones the request against env.ctx so the per-check
+// Each goroutine clones the request against env.Ctx so the per-check
 // deadline / cancel propagates to every fan-out arm; a per-call
 // transport failure surfaces as a non-empty err string in that slot
 // rather than aborting the whole batch.
@@ -410,7 +410,7 @@ func clientDoParallel(L *lua.LState) int {
 	if n < 1 {
 		n = 1
 	}
-	env := currentEnv(L)
+	env := CurrentEnv(L)
 	if env == nil {
 		L.RaiseError("client:do_parallel called outside a check run")
 	}
@@ -426,8 +426,8 @@ func clientDoParallel(L *lua.LState) int {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			req := r.req.Clone(env.ctx)
-			resp, err := c.c.Do(env.ctx, req)
+			req := r.req.Clone(env.Ctx)
+			resp, err := c.c.Do(env.Ctx, req)
 			if err != nil {
 				results[idx] = result{errStr: err.Error()}
 				return
@@ -462,7 +462,7 @@ func clientDoParallel(L *lua.LState) int {
 func clientDispatch(L *lua.LState, noFollow bool) int {
 	c := clientFromArg(L, 1)
 	r := requestFromArg(L, 2)
-	env := currentEnv(L)
+	env := CurrentEnv(L)
 	if env == nil {
 		L.RaiseError("client:do called outside a check run")
 	}
@@ -471,9 +471,9 @@ func clientDispatch(L *lua.LState, noFollow bool) int {
 		err  error
 	)
 	if noFollow {
-		resp, err = c.c.DoNoFollow(env.ctx, r.req)
+		resp, err = c.c.DoNoFollow(env.Ctx, r.req)
 	} else {
-		resp, err = c.c.Do(env.ctx, r.req)
+		resp, err = c.c.Do(env.Ctx, r.req)
 	}
 	if err != nil {
 		L.Push(lua.LNil)
@@ -502,7 +502,7 @@ func clientDispatch(L *lua.LState, noFollow bool) int {
 func clientFetch(L *lua.LState) int {
 	c := clientFromArg(L, 1)
 	opts := L.CheckTable(2)
-	env := currentEnv(L)
+	env := CurrentEnv(L)
 	if env == nil {
 		L.RaiseError("client:fetch called outside a check run")
 	}
@@ -522,9 +522,9 @@ func clientFetch(L *lua.LState) int {
 	var req *http.Request
 	var err error
 	if bodyStr != "" {
-		req, err = http.NewRequestWithContext(env.ctx, method, rawurl, strings.NewReader(bodyStr))
+		req, err = http.NewRequestWithContext(env.Ctx, method, rawurl, strings.NewReader(bodyStr))
 	} else {
-		req, err = http.NewRequestWithContext(env.ctx, method, rawurl, nil)
+		req, err = http.NewRequestWithContext(env.Ctx, method, rawurl, nil)
 	}
 	if err != nil {
 		return fetchFail(L, env, err.Error())
@@ -559,9 +559,9 @@ func clientFetch(L *lua.LState) int {
 	follow := lua.LVAsBool(opts.RawGetString("follow_redirects"))
 	var resp *http.Response
 	if follow {
-		resp, err = c.c.Do(env.ctx, req)
+		resp, err = c.c.Do(env.Ctx, req)
 	} else {
-		resp, err = c.c.DoNoFollow(env.ctx, req)
+		resp, err = c.c.DoNoFollow(env.Ctx, req)
 	}
 	if err != nil {
 		return fetchFail(L, env, err.Error())
@@ -587,10 +587,10 @@ func clientFetch(L *lua.LState) int {
 // every clientFetch error path uses. The check-name prefix removes
 // the boilerplate `return nil, "<name>: " .. err` lines callers
 // previously wrote on every error site.
-func fetchFail(L *lua.LState, env *runEnv, msg string) int {
+func fetchFail(L *lua.LState, env *RunEnv, msg string) int {
 	L.Push(lua.LNil)
 	L.Push(lua.LString(""))
-	L.Push(lua.LString(env.check.name + ": " + msg))
+	L.Push(lua.LString(env.Check.name + ": " + msg))
 	return 3
 }
 
@@ -628,13 +628,13 @@ func clientNewRequest(L *lua.LState) int {
 	if bodyStr != "" {
 		bodyReader = strings.NewReader(bodyStr)
 	}
-	env := currentEnv(L)
+	env := CurrentEnv(L)
 	var req *http.Request
 	var err error
 	if bodyReader != nil {
-		req, err = http.NewRequestWithContext(env.ctx, method, rawurl, bodyReader)
+		req, err = http.NewRequestWithContext(env.Ctx, method, rawurl, bodyReader)
 	} else {
-		req, err = http.NewRequestWithContext(env.ctx, method, rawurl, nil)
+		req, err = http.NewRequestWithContext(env.Ctx, method, rawurl, nil)
 	}
 	if err != nil {
 		L.Push(lua.LNil)

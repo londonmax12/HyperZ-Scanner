@@ -667,11 +667,11 @@ func bodyNoSQLiBuildOperatorRequest(L *lua.LState) int {
 	}
 	opName := requireString(L, 2)
 	opValue := requireString(L, 3)
-	env := currentEnv(L)
+	env := CurrentEnv(L)
 	if env == nil {
 		L.RaiseError("ctx.body.nosqli_build_operator_request called outside a check run")
 	}
-	req, err := NoSQLiBuildOperatorRequest(env.ctx, *wrapper.s, opName, opValue)
+	req, err := NoSQLiBuildOperatorRequest(env.Ctx, *wrapper.s, opName, opValue)
 	if err != nil {
 		L.Push(lua.LNil)
 		L.Push(lua.LString(err.Error()))

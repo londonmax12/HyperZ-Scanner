@@ -81,12 +81,12 @@ func browserNewCanary(L *lua.LState) int {
 // browser process failed to launch), in which case visit() will return
 // (false, nil) on every call.
 func browserAttached(L *lua.LState) int {
-	env := currentEnv(L)
+	env := CurrentEnv(L)
 	if env == nil {
 		L.Push(lua.LBool(false))
 		return 1
 	}
-	L.Push(lua.LBool(BrowserFrom(env.ctx) != nil))
+	L.Push(lua.LBool(BrowserFrom(env.Ctx) != nil))
 	return 1
 }
 
@@ -99,13 +99,13 @@ func browserAttached(L *lua.LState) int {
 // check is expected to thread them through ctx.report() the same way
 // the Go check threads them through Report.
 func browserVisit(L *lua.LState) int {
-	env := currentEnv(L)
+	env := CurrentEnv(L)
 	if env == nil {
 		L.Push(lua.LBool(false))
 		L.Push(lua.LNil)
 		return 2
 	}
-	pool := BrowserFrom(env.ctx)
+	pool := BrowserFrom(env.Ctx)
 	if pool == nil {
 		L.Push(lua.LBool(false))
 		L.Push(lua.LNil)
@@ -136,7 +136,7 @@ func browserVisit(L *lua.LState) int {
 		settle = time.Duration(float64(n) * float64(time.Millisecond))
 	}
 
-	fired, err := pool.Visit(env.ctx, url, token, settle)
+	fired, err := pool.Visit(env.Ctx, url, token, settle)
 	if err != nil {
 		L.Push(lua.LBool(false))
 		L.Push(lua.LString(fmt.Sprintf("browser visit %s: %s", url, err.Error())))

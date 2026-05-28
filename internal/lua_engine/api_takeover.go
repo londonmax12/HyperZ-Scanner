@@ -59,16 +59,16 @@ type takeoverEvaluatorKey struct{}
 // facts is intentional: the rule lives in Lua, the scanner algorithm
 // lives in Go.
 func takeoverEvaluate(L *lua.LState) int {
-	env := currentEnv(L)
+	env := CurrentEnv(L)
 	if env == nil {
 		L.RaiseError("ctx.takeover.evaluate called outside a check run")
 	}
 	catalogue := requireString(L, 1)
 	pageURL := requireString(L, 2)
-	eval := env.check.AuxOrCreate(takeoverEvaluatorKey{}, func() any {
+	eval := env.Check.AuxOrCreate(takeoverEvaluatorKey{}, func() any {
 		return &SubdomainTakeover{}
 	}).(*SubdomainTakeover)
-	facts, err := eval.FactsFor(env.ctx, env.client, env.scope, pageURL, catalogue)
+	facts, err := eval.FactsFor(env.Ctx, env.Client, env.Scope, pageURL, catalogue)
 	if err != nil {
 		L.Push(lua.LNil)
 		L.Push(lua.LString(err.Error()))

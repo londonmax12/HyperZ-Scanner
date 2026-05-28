@@ -16,7 +16,7 @@ import (
 // scope / sink wrappers expose their behavior - so the Lua call site
 // is consistent: ctx.oob:register{...} rather than ctx.oob.register{...}.
 type oobUserData struct {
-	env *runEnv
+	env *RunEnv
 }
 
 // pushOOBServer wraps env into the OOB userdata. We always push a
@@ -24,7 +24,7 @@ type oobUserData struct {
 // `if ctx.oob then` guard distinguishes "no listener attached" from
 // "I forgot to call OOBFrom" - we expose an attached() method below
 // for the boolean query.
-func pushOOBServer(L *lua.LState, env *runEnv) lua.LValue {
+func pushOOBServer(L *lua.LState, env *RunEnv) lua.LValue {
 	ud := L.NewUserData()
 	ud.Value = &oobUserData{env: env}
 	ud.Metatable = ensureOOBMT(L)
@@ -67,7 +67,7 @@ func oobCallbackHost(L *lua.LState) int {
 		L.Push(lua.LString(""))
 		return 1
 	}
-	srv := OOBFrom(o.env.ctx)
+	srv := OOBFrom(o.env.Ctx)
 	if srv == nil {
 		L.Push(lua.LString(""))
 		return 1
@@ -82,7 +82,7 @@ func oobCallbackHost(L *lua.LState) int {
 // rather than minting unused canaries.
 func oobAttached(L *lua.LState) int {
 	o := oobFromArg(L)
-	L.Push(lua.LBool(o.env != nil && OOBFrom(o.env.ctx) != nil))
+	L.Push(lua.LBool(o.env != nil && OOBFrom(o.env.Ctx) != nil))
 	return 1
 }
 
@@ -98,7 +98,7 @@ func oobRegister(L *lua.LState) int {
 		L.Push(lua.LNil)
 		return 1
 	}
-	srv := OOBFrom(o.env.ctx)
+	srv := OOBFrom(o.env.Ctx)
 	if srv == nil {
 		L.Push(lua.LNil)
 		return 1
@@ -111,7 +111,7 @@ func oobRegister(L *lua.LState) int {
 			}
 		})
 	}
-	canary := srv.Register(o.env.check.name, extra)
+	canary := srv.Register(o.env.Check.name, extra)
 	out := L.NewTable()
 	out.RawSetString("token", lua.LString(canary.Token))
 	out.RawSetString("http_url", lua.LString(canary.HTTPURL))
@@ -131,7 +131,7 @@ func oobRegisterAsset(L *lua.LState) int {
 		L.Push(lua.LNil)
 		return 1
 	}
-	srv := OOBFrom(o.env.ctx)
+	srv := OOBFrom(o.env.Ctx)
 	if srv == nil {
 		L.Push(lua.LNil)
 		return 1
@@ -150,7 +150,7 @@ func oobRegisterAsset(L *lua.LState) int {
 			})
 		}
 	}
-	canary := srv.RegisterAsset(o.env.check.name, body, contentType, extra)
+	canary := srv.RegisterAsset(o.env.Check.name, body, contentType, extra)
 	out := L.NewTable()
 	out.RawSetString("token", lua.LString(canary.Token))
 	out.RawSetString("http_url", lua.LString(canary.HTTPURL))
@@ -168,7 +168,7 @@ func oobHits(L *lua.LState) int {
 		L.Push(out)
 		return 1
 	}
-	srv := OOBFrom(o.env.ctx)
+	srv := OOBFrom(o.env.Ctx)
 	if srv == nil {
 		L.Push(out)
 		return 1
@@ -199,12 +199,12 @@ func oobRegistrations(L *lua.LState) int {
 		L.Push(out)
 		return 1
 	}
-	srv := OOBFrom(o.env.ctx)
+	srv := OOBFrom(o.env.Ctx)
 	if srv == nil {
 		L.Push(out)
 		return 1
 	}
-	for i, r := range srv.Registrations(o.env.check.name) {
+	for i, r := range srv.Registrations(o.env.Check.name) {
 		entry := L.NewTable()
 		entry.RawSetString("token", lua.LString(r.Canary.Token))
 		entry.RawSetString("http_url", lua.LString(r.Canary.HTTPURL))
