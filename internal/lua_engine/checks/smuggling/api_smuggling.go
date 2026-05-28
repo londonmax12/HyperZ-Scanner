@@ -1,7 +1,9 @@
-package lua_engine
+package smuggling
 
 import (
 	lua "github.com/yuin/gopher-lua"
+
+	"github.com/londonmax12/hyperz/internal/lua_engine"
 )
 
 // buildSmugglingTable returns the ctx.smuggling helper namespace.
@@ -39,11 +41,11 @@ func buildSmugglingTable(L *lua.LState) *lua.LTable {
 type smugglingCheckKey struct{}
 
 func smugglingScan(L *lua.LState) int {
-	env := CurrentEnv(L)
+	env := lua_engine.CurrentEnv(L)
 	if env == nil {
 		L.RaiseError("ctx.smuggling.scan called outside a check run")
 	}
-	catalogue := RequireString(L, 1)
+	catalogue := lua_engine.RequireString(L, 1)
 	rs := env.Check.AuxOrCreate(smugglingCheckKey{}, func() any {
 		return &RequestSmuggling{}
 	}).(*RequestSmuggling)
@@ -99,5 +101,5 @@ func smugglingFactToLua(L *lua.LState, hostFact *SmugglingHostFact) *lua.LTable 
 }
 
 func init() {
-	RegisterHelperTable("smuggling", buildSmugglingTable)
+	lua_engine.RegisterHelperTable("smuggling", buildSmugglingTable)
 }

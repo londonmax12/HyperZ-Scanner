@@ -1,7 +1,9 @@
-package lua_engine
+package websocket
 
 import (
 	lua "github.com/yuin/gopher-lua"
+
+	"github.com/londonmax12/hyperz/internal/lua_engine"
 )
 
 // buildWSTable returns the ctx.ws helper namespace. ws-audit is the
@@ -40,7 +42,7 @@ func buildWSTable(L *lua.LState) *lua.LTable {
 }
 
 func wsDiscoverEndpoints(L *lua.LState) int {
-	L.Push(PushStringList(L, WSAuditDiscoverEndpointsLua([]byte(RequireString(L, 1)))))
+	L.Push(lua_engine.PushStringList(L, WSAuditDiscoverEndpointsLua([]byte(lua_engine.RequireString(L, 1)))))
 	return 1
 }
 
@@ -55,7 +57,7 @@ func wsDiscoverEndpoints(L *lua.LState) int {
 // two lets the .lua port emit a single finding per accepted handshake
 // AND report any wire-level failures through ctx.report().
 func wsHandshakeBinding(L *lua.LState) int {
-	env := CurrentEnv(L)
+	env := lua_engine.CurrentEnv(L)
 	if env == nil {
 		L.Push(lua.LNil)
 		L.Push(lua.LString("ctx.ws.handshake called outside a check run"))
@@ -68,11 +70,11 @@ func wsHandshakeBinding(L *lua.LState) int {
 			L.ArgError(1, "expected opts table")
 		}
 	}
-	url := lvalString(opts.RawGetString("url"))
+	url := lua_engine.LValString(opts.RawGetString("url"))
 	if url == "" {
 		L.ArgError(1, "opts.url is required")
 	}
-	origin := lvalString(opts.RawGetString("origin"))
+	origin := lua_engine.LValString(opts.RawGetString("origin"))
 	res, err := WSAuditHandshakeLua(env.Ctx, url, origin)
 	if err != nil {
 		L.Push(lua.LNil)
@@ -98,5 +100,5 @@ func wsMaxEndpointsPerPageFn(L *lua.LState) int {
 }
 
 func init() {
-	RegisterHelperTable("ws", buildWSTable)
+	lua_engine.RegisterHelperTable("ws", buildWSTable)
 }

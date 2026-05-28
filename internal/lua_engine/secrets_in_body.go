@@ -72,13 +72,13 @@ func isScannableContentType(ct string) bool {
 	return false
 }
 
-// hasNearbyContext reports whether contextRE matches inside a window of
+// HasNearbyContext reports whether contextRE matches inside a window of
 // [secretContextWindow] bytes on each side of the candidate match
 // spanning [start, end). It exists to gate ambiguously-shaped patterns
 // (e.g. Mailgun's key-<32hex>) so a hit is kept only when there is a
 // vendor-identifying token in the immediate neighbourhood, not anywhere
 // in the body.
-func hasNearbyContext(body []byte, start, end int, contextRE *regexp.Regexp) bool {
+func HasNearbyContext(body []byte, start, end int, contextRE *regexp.Regexp) bool {
 	winStart := start - secretContextWindow
 	if winStart < 0 {
 		winStart = 0

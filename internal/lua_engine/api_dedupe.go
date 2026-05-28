@@ -34,15 +34,15 @@ func buildDedupeTable(L *lua.LState) *lua.LTable {
 
 func dedupeKey(L *lua.LState) int {
 	opts := L.CheckTable(1)
-	name := lvalString(opts.RawGetString("check"))
+	name := LValString(opts.RawGetString("check"))
 	if name == "" {
 		L.ArgError(1, "dedupe.key: missing required field `check`")
 	}
-	target := lvalString(opts.RawGetString("target"))
+	target := LValString(opts.RawGetString("target"))
 	if target == "" {
 		L.ArgError(1, "dedupe.key: missing required field `target`")
 	}
-	scopeStr := lvalString(opts.RawGetString("scope"))
+	scopeStr := LValString(opts.RawGetString("scope"))
 	if scopeStr == "" {
 		scopeStr = "page"
 	}

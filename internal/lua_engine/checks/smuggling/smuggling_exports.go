@@ -1,4 +1,4 @@
-package lua_engine
+package smuggling
 
 import (
 	"context"
@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/londonmax12/hyperz/internal/core"
+	"github.com/londonmax12/hyperz/internal/lua_engine"
 	"github.com/londonmax12/hyperz/internal/page"
 	"github.com/londonmax12/hyperz/internal/scope"
 )
@@ -17,7 +19,7 @@ import (
 // (CL.TE, TE.CL, H2.CL); Probed=false for variants the host doesn't
 // support (e.g. H2.CL on a server that did not negotiate h2). The
 // timing oracle decision (Confirmed) is computed Go-side because the
-// oracle math (TimingCompare + absolute floor) lives there; the rule
+// oracle math (lua_engine.TimingCompare + absolute floor) lives there; the rule
 // catalog (severity, title, detail, remediation, dedupe-key shape)
 // stays in the .lua file.
 type SmugglingVariantFact struct {
@@ -48,7 +50,7 @@ type SmugglingHostFact struct {
 
 // ScanFacts is the Lua bridge entry point. Behaviourally identical
 // to Run with one shape change: returns the raw per-variant probe
-// data instead of a composed *Finding, and lets the Lua side decide
+// data instead of a composed *lua_engine.Finding, and lets the Lua side decide
 // which confirmed variant to surface (and how to phrase it) when the
 // host has more than one.
 //
@@ -80,7 +82,7 @@ func (c *RequestSmuggling) ScanFacts(ctx context.Context, sc *scope.Scope, p pag
 
 	c.mu.Lock()
 	if c.cache == nil {
-		c.cache = map[string]*Finding{}
+		c.cache = map[string]*lua_engine.Finding{}
 	}
 	if c.smuggleVariants == nil {
 		c.smuggleVariants = map[string][]SmugglingVariantFact{}
@@ -109,17 +111,17 @@ func (c *RequestSmuggling) ScanFacts(ctx context.Context, sc *scope.Scope, p pag
 		c.cache[hostKey] = nil
 		c.smuggleVariants[hostKey] = variants
 		c.mu.Unlock()
-		Report(ctx, err)
+		core.Report(ctx, err)
 		return &SmugglingHostFact{HostKey: hostKey, Variants: variants}, nil
 	}
 
 	c.mu.Lock()
-	// Synthesise a cache-sentinel Finding for the cache map so a later
+	// Synthesise a cache-sentinel lua_engine.Finding for the cache map so a later
 	// Page on the same host short-circuits via the FromCache path.
 	// Composition (severity, title, etc) is Lua-side; the sentinel just
 	// flips the cache state so subsequent ScanFacts calls skip
 	// re-probing.
-	c.cache[hostKey] = &Finding{Check: "request-smuggling", Target: hostKey}
+	c.cache[hostKey] = &lua_engine.Finding{Check: "request-smuggling", Target: hostKey}
 	c.smuggleVariants[hostKey] = variants
 	c.mu.Unlock()
 
@@ -150,7 +152,7 @@ func (c *RequestSmuggling) cachedVariants(hostKey string) []SmugglingVariantFact
 // wire paths exercised by the Go check so timing oracle agreement is
 // structurally guaranteed.
 func (c *RequestSmuggling) evaluateHostFacts(ctx context.Context, u *url.URL, catalogue string) ([]SmugglingVariantFact, error) {
-	host, port := splitHostPortDefault(u)
+	host, port := lua_engine.SplitHostPortDefault(u)
 	addr := net.JoinHostPort(host, port)
 	tlsCfg := &tls.Config{
 		ServerName:         host,

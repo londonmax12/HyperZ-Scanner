@@ -1,4 +1,4 @@
-package lua_engine
+package websocket
 
 import (
 	"context"

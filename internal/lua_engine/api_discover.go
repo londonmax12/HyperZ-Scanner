@@ -50,7 +50,7 @@ func ctxDiscover(L *lua.LState) int {
 		L.ArgError(1, "ctx.discover expects a table argument")
 	}
 
-	kindStr := lvalString(tbl.RawGetString("kind"))
+	kindStr := LValString(tbl.RawGetString("kind"))
 	if kindStr == "" {
 		L.ArgError(1, "discover table missing required field `kind` (host|page|endpoint|param)")
 	}
@@ -59,18 +59,18 @@ func ctxDiscover(L *lua.LState) int {
 		L.ArgError(1, err.Error())
 	}
 
-	url := lvalString(tbl.RawGetString("url"))
+	url := LValString(tbl.RawGetString("url"))
 	if url == "" {
 		L.ArgError(1, "discover table missing required field `url`")
 	}
 
-	method := lvalString(tbl.RawGetString("method"))
+	method := LValString(tbl.RawGetString("method"))
 	if method != "" {
 		method = strings.ToUpper(method)
 	}
 
 	tier := core.TierFingerprint
-	if tierStr := lvalString(tbl.RawGetString("tier")); tierStr != "" {
+	if tierStr := LValString(tbl.RawGetString("tier")); tierStr != "" {
 		parsed, perr := parseTier(tierStr)
 		if perr != nil {
 			L.ArgError(1, perr.Error())
@@ -82,10 +82,10 @@ func ctxDiscover(L *lua.LState) int {
 		Kind:          kind,
 		URL:           url,
 		Method:        method,
-		ContentType:   lvalString(tbl.RawGetString("content_type")),
-		Param:         lvalString(tbl.RawGetString("param")),
-		ParamLocation: strings.ToLower(lvalString(tbl.RawGetString("location"))),
-		Note:          lvalString(tbl.RawGetString("note")),
+		ContentType:   LValString(tbl.RawGetString("content_type")),
+		Param:         LValString(tbl.RawGetString("param")),
+		ParamLocation: strings.ToLower(LValString(tbl.RawGetString("location"))),
+		Note:          LValString(tbl.RawGetString("note")),
 	}
 	core.DiscoverAt(env.Ctx, disc, tier)
 	return 0

@@ -1,7 +1,9 @@
-package lua_engine
+package concurrency
 
 import (
 	lua "github.com/yuin/gopher-lua"
+
+	"github.com/londonmax12/hyperz/internal/lua_engine"
 )
 
 // buildRaceTable returns the ctx.race helper namespace. The single
@@ -32,7 +34,7 @@ func buildRaceTable(L *lua.LState) *lua.LTable {
 type raceCheckKey struct{}
 
 func raceScan(L *lua.LState) int {
-	env := CurrentEnv(L)
+	env := lua_engine.CurrentEnv(L)
 	if env == nil {
 		L.RaiseError("ctx.race.scan called outside a check run")
 	}
@@ -83,5 +85,5 @@ func raceFactsToLua(L *lua.LState, facts []RaceTargetFact) *lua.LTable {
 }
 
 func init() {
-	RegisterHelperTable("race", buildRaceTable)
+	lua_engine.RegisterHelperTable("race", buildRaceTable)
 }

@@ -4,11 +4,11 @@ import (
 	"bytes"
 )
 
-// matchSQLPatterns returns every SQLErrorPatterns entry that appears in
+// MatchSQLPatterns returns every SQLErrorPatterns entry that appears in
 // body. Body is lower-cased once per call (the pattern list is already
 // lower-cased) so the substring scan is case-insensitive without per-
 // pattern allocations.
-func matchSQLPatterns(body []byte) []string {
+func MatchSQLPatterns(body []byte) []string {
 	if len(body) == 0 {
 		return nil
 	}
@@ -22,10 +22,10 @@ func matchSQLPatterns(body []byte) []string {
 	return hits
 }
 
-// subtractPatterns returns the elements of hits that are not in baseline.
+// SubtractPatterns returns the elements of hits that are not in baseline.
 // Used to drop patterns that were already present before our probe ran -
 // the difference is the part attributable to the injection attempt.
-func subtractPatterns(hits, baseline []string) []string {
+func SubtractPatterns(hits, baseline []string) []string {
 	if len(baseline) == 0 {
 		return hits
 	}

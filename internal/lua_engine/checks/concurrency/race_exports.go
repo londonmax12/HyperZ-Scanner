@@ -1,4 +1,4 @@
-package lua_engine
+package concurrency
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/londonmax12/hyperz/internal/lua_engine"
 	"github.com/londonmax12/hyperz/internal/page"
 	"github.com/londonmax12/hyperz/internal/scope"
 )
@@ -105,7 +106,7 @@ func (c *RaceCondition) ScanFacts(ctx context.Context, sc *scope.Scope, p page.P
 
 		fact, err := c.probeFact(ctx, p.URL, t)
 		if err != nil {
-			Report(ctx, fmt.Errorf("race-condition probe %s %s: %w", t.Method, t.URL, err))
+			lua_engine.Report(ctx, fmt.Errorf("race-condition probe %s %s: %w", t.Method, t.URL, err))
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -133,7 +134,7 @@ func (c *RaceCondition) probeFact(ctx context.Context, _ string, t raceTarget) (
 	if err != nil {
 		return nil, fmt.Errorf("parse target url: %w", err)
 	}
-	host, port := splitHostPortDefault(parsed)
+	host, port := lua_engine.SplitHostPortDefault(parsed)
 	addr := net.JoinHostPort(host, port)
 	tlsCfg := &tls.Config{
 		ServerName:         host,

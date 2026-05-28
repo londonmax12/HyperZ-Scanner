@@ -294,7 +294,7 @@ func payloadsCachePoisonCanaryPath(L *lua.LState) int {
 // so the placeholder vocabulary stays a single source of truth.
 func payloadsRender(L *lua.LState) int {
 	template := RequireString(L, 1)
-	token := optString(L, 2, "")
+	token := OptString(L, 2, "")
 	sleepSecs := 0
 	if L.GetTop() >= 3 {
 		if n, ok := L.Get(3).(lua.LNumber); ok {

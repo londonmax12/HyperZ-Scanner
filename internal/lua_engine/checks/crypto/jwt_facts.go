@@ -1,4 +1,4 @@
-package lua_engine
+package crypto
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/londonmax12/hyperz/internal/httpclient"
+	"github.com/londonmax12/hyperz/internal/lua_engine"
 	"github.com/londonmax12/hyperz/internal/page"
 	"github.com/londonmax12/hyperz/internal/scope"
 )
@@ -16,7 +17,7 @@ import (
 // the per-kind severity / title / remediation text and builds the
 // finding from the structured Params bag.
 //
-// Keeping facts strictly data (no embedded *Finding) means the rule's
+// Keeping facts strictly data (no embedded *lua_engine.Finding) means the rule's
 // catalog metadata - severity, text, dedupe shape - lives in the .lua
 // file and can be edited without recompiling the scanner. Mirrors
 // the takeover bridge's design: scan algorithm in Go, rule prose in
@@ -45,7 +46,7 @@ func (c *JWTVulns) ScanFacts(ctx context.Context, client *httpclient.Client, sc 
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return nil, nil
 	}
-	if !allows(sc, u) {
+	if !lua_engine.Allows(sc, u) {
 		return nil, nil
 	}
 
@@ -70,7 +71,7 @@ func (c *JWTVulns) ScanFacts(ctx context.Context, client *httpclient.Client, sc 
 
 		parsed, err := parseJWT(src.raw)
 		if err != nil {
-			Report(ctx, parseJWTReportErr(src.raw, err))
+			lua_engine.Report(ctx, parseJWTReportErr(src.raw, err))
 			continue
 		}
 		findings := c.probeToken(ctx, client, p.URL, src, parsed)
@@ -89,7 +90,7 @@ func (c *JWTVulns) ScanFacts(ctx context.Context, client *httpclient.Client, sc 
 // least one hit produces one fact; canaries that timed out without a
 // callback drop silently.
 func (c *JWTVulns) DrainFacts(ctx context.Context) []JWTFact {
-	srv := OOBFrom(ctx)
+	srv := lua_engine.OOBFrom(ctx)
 	if srv == nil {
 		return nil
 	}
@@ -109,7 +110,7 @@ func (c *JWTVulns) DrainFacts(ctx context.Context) []JWTFact {
 	return out
 }
 
-// factFromFinding converts an internally-composed Finding back into
+// factFromFinding converts an internally-composed lua_engine.Finding back into
 // the (kind, params) shape the bridge surfaces. The kind is a stable
 // machine identifier (matches the dedupe suffix the Go check used);
 // params carries every runtime value the Lua composer needs to
@@ -118,17 +119,17 @@ func (c *JWTVulns) DrainFacts(ctx context.Context) []JWTFact {
 //
 // Two design notes:
 //
-//   - We round-trip through Finding rather than refactoring every
+//   - We round-trip through lua_engine.Finding rather than refactoring every
 //     probe* function to emit JWTFact directly. The probe code is
 //     thoroughly tested and changing its return type risks regressing
 //     the math/oracle decisions; mapping at the boundary is a smaller
 //     blast radius for the same Lua-port goal.
-//   - We carry the original composed Finding inside params under the
+//   - We carry the original composed lua_engine.Finding inside params under the
 //     `_finding` key. The Lua port can either lift fields off that
 //     finding for its own composition or pass it through verbatim
 //     (when the Lua text would duplicate the Go text). Either choice
 //     keeps the rule's catalog metadata in Lua hands.
-func factFromFinding(target string, f Finding) JWTFact {
+func factFromFinding(target string, f lua_engine.Finding) JWTFact {
 	kind := jwtKindFromDedupe(f.DedupeKey, f.Title)
 	params := map[string]any{
 		"title":       f.Title,
@@ -159,7 +160,7 @@ func factFromFinding(target string, f Finding) JWTFact {
 // suffix.
 func jwtKindFromDedupe(key, title string) string {
 	// The Go check's dedupe keys carry the kind tag as one of the
-	// MakeKey parts; the hash is opaque so we can't recover the tag
+	// lua_engine.MakeKey parts; the hash is opaque so we can't recover the tag
 	// from the key itself. The title is the cleanest fallback:
 	// every probe* function emits a distinctive Title prefix.
 	t := strings.ToLower(title)

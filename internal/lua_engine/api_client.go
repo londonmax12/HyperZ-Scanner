@@ -507,18 +507,18 @@ func clientFetch(L *lua.LState) int {
 		L.RaiseError("client:fetch called outside a check run")
 	}
 
-	method := strings.ToUpper(lvalString(opts.RawGetString("method")))
+	method := strings.ToUpper(LValString(opts.RawGetString("method")))
 	if method == "" {
 		method = http.MethodGet
 	}
-	rawurl := lvalString(opts.RawGetString("url"))
+	rawurl := LValString(opts.RawGetString("url"))
 	if rawurl == "" {
 		return fetchFail(L, env, "missing url")
 	}
 	if _, err := url.Parse(rawurl); err != nil {
 		return fetchFail(L, env, err.Error())
 	}
-	bodyStr := lvalString(opts.RawGetString("body"))
+	bodyStr := LValString(opts.RawGetString("body"))
 	var req *http.Request
 	var err error
 	if bodyStr != "" {
@@ -531,7 +531,7 @@ func clientFetch(L *lua.LState) int {
 	}
 	if hv, ok := opts.RawGetString("headers").(*lua.LTable); ok {
 		hv.ForEach(func(k, v lua.LValue) {
-			name := lvalString(k)
+			name := LValString(k)
 			if name == "" {
 				return
 			}
@@ -540,10 +540,10 @@ func clientFetch(L *lua.LState) int {
 				req.Header.Set(name, string(val))
 			case *lua.LTable:
 				val.ForEach(func(_, vv lua.LValue) {
-					req.Header.Add(name, lvalString(vv))
+					req.Header.Add(name, LValString(vv))
 				})
 			default:
-				req.Header.Set(name, lvalString(v))
+				req.Header.Set(name, LValString(v))
 			}
 		})
 	}
@@ -551,7 +551,7 @@ func clientFetch(L *lua.LState) int {
 	// clientNewRequest documents: net/http's transport reads the Host
 	// header from req.Host, not req.Header.
 	if hv := opts.RawGetString("host"); hv != lua.LNil {
-		if hostStr := lvalString(hv); hostStr != "" {
+		if hostStr := LValString(hv); hostStr != "" {
 			req.Host = hostStr
 		}
 	}
@@ -608,11 +608,11 @@ func fetchFail(L *lua.LState, env *RunEnv, msg string) int {
 func clientNewRequest(L *lua.LState) int {
 	_ = clientFromArg(L, 1)
 	opts := L.CheckTable(2)
-	method := strings.ToUpper(lvalString(opts.RawGetString("method")))
+	method := strings.ToUpper(LValString(opts.RawGetString("method")))
 	if method == "" {
 		method = http.MethodGet
 	}
-	rawurl := lvalString(opts.RawGetString("url"))
+	rawurl := LValString(opts.RawGetString("url"))
 	if rawurl == "" {
 		L.Push(lua.LNil)
 		L.Push(lua.LString("client:new_request: missing url"))
@@ -623,7 +623,7 @@ func clientNewRequest(L *lua.LState) int {
 		L.Push(lua.LString(err.Error()))
 		return 2
 	}
-	bodyStr := lvalString(opts.RawGetString("body"))
+	bodyStr := LValString(opts.RawGetString("body"))
 	var bodyReader *strings.Reader
 	if bodyStr != "" {
 		bodyReader = strings.NewReader(bodyStr)
@@ -643,7 +643,7 @@ func clientNewRequest(L *lua.LState) int {
 	}
 	if hv, ok := opts.RawGetString("headers").(*lua.LTable); ok {
 		hv.ForEach(func(k, v lua.LValue) {
-			name := lvalString(k)
+			name := LValString(k)
 			if name == "" {
 				return
 			}
@@ -652,10 +652,10 @@ func clientNewRequest(L *lua.LState) int {
 				req.Header.Set(name, string(val))
 			case *lua.LTable:
 				val.ForEach(func(_, vv lua.LValue) {
-					req.Header.Add(name, lvalString(vv))
+					req.Header.Add(name, LValString(vv))
 				})
 			default:
-				req.Header.Set(name, lvalString(v))
+				req.Header.Set(name, LValString(v))
 			}
 		})
 	}
@@ -664,7 +664,7 @@ func clientNewRequest(L *lua.LState) int {
 	// probes: a bare Header.Set("Host", ...) is stripped by net/http
 	// because the transport reads from req.Host, not req.Header.
 	if hv := opts.RawGetString("host"); hv != lua.LNil {
-		if hostStr := lvalString(hv); hostStr != "" {
+		if hostStr := LValString(hv); hostStr != "" {
 			req.Host = hostStr
 		}
 	}

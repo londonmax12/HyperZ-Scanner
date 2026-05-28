@@ -1,7 +1,9 @@
-package lua_engine
+package oauth
 
 import (
 	lua "github.com/yuin/gopher-lua"
+
+	"github.com/londonmax12/hyperz/internal/lua_engine"
 )
 
 // buildOAuthTable returns the ctx.oauth helper namespace. The single
@@ -34,12 +36,12 @@ type oauthEvaluatorKey struct{}
 // (the clean path - not an error). On transport failure returns
 // (nil, err_string) so the .lua port can surface it via ctx:report.
 func oauthDiscover(L *lua.LState) int {
-	env := CurrentEnv(L)
+	env := lua_engine.CurrentEnv(L)
 	if env == nil {
 		L.RaiseError("ctx.oauth.discover called outside a check run")
 	}
-	catalogue := RequireString(L, 1)
-	pageURL := RequireString(L, 2)
+	catalogue := lua_engine.RequireString(L, 1)
+	pageURL := lua_engine.RequireString(L, 2)
 	eval := env.Check.AuxOrCreate(oauthEvaluatorKey{}, func() any {
 		return &OAuthDiscovery{}
 	}).(*OAuthDiscovery)
@@ -62,10 +64,10 @@ func oauthDiscover(L *lua.LState) int {
 	out.RawSetString("jwks_uri", lua.LString(facts.JwksURI))
 	out.RawSetString("introspection_endpoint", lua.LString(facts.IntrospectionEndpoint))
 	out.RawSetString("revocation_endpoint", lua.LString(facts.RevocationEndpoint))
-	out.RawSetString("response_types_supported", PushStringList(L, facts.ResponseTypesSupported))
-	out.RawSetString("id_token_signing_alg_values_supported", PushStringList(L, facts.IDTokenSigningAlgValuesSupported))
-	out.RawSetString("token_endpoint_auth_methods_supported", PushStringList(L, facts.TokenEndpointAuthMethodsSupported))
-	out.RawSetString("code_challenge_methods_supported", PushStringList(L, facts.CodeChallengeMethodsSupported))
+	out.RawSetString("response_types_supported", lua_engine.PushStringList(L, facts.ResponseTypesSupported))
+	out.RawSetString("id_token_signing_alg_values_supported", lua_engine.PushStringList(L, facts.IDTokenSigningAlgValuesSupported))
+	out.RawSetString("token_endpoint_auth_methods_supported", lua_engine.PushStringList(L, facts.TokenEndpointAuthMethodsSupported))
+	out.RawSetString("code_challenge_methods_supported", lua_engine.PushStringList(L, facts.CodeChallengeMethodsSupported))
 	out.RawSetString("probe_url", lua.LString(facts.ProbeURL))
 	out.RawSetString("status", lua.LNumber(facts.Status))
 	out.RawSetString("body", lua.LString(string(facts.Body)))
@@ -75,5 +77,5 @@ func oauthDiscover(L *lua.LState) int {
 }
 
 func init() {
-	RegisterHelperTable("oauth", buildOAuthTable)
+	lua_engine.RegisterHelperTable("oauth", buildOAuthTable)
 }

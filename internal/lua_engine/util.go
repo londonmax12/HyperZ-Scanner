@@ -11,7 +11,7 @@ import (
 // boundary keep working; production scans always thread a real
 // *scope.Scope through, so the nil branch is a developer-ergonomics
 // concession rather than a security gap.
-func allows(sc *scope.Scope, u *url.URL) bool {
+func Allows(sc *scope.Scope, u *url.URL) bool {
 	if sc == nil {
 		return true
 	}

@@ -1,4 +1,4 @@
-package lua_engine
+package crypto
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/londonmax12/hyperz/internal/httpclient"
+	"github.com/londonmax12/hyperz/internal/lua_engine"
 )
 
 // critProbeExtensionName is the synthetic critical extension we plant
@@ -41,7 +42,7 @@ const critProbeExtensionName = "x-hyperz-unrecognized"
 // token the validator would otherwise consider valid, so it backs
 // off rather than emitting a spurious finding from a malformed-
 // token rejection.
-func (c *JWTVulns) probeCritAbuse(ctx context.Context, client *httpclient.Client, target string, src jwtSource, parsed *parsedJWT, oracle jwtOracle, weakSecret string, weakSecretFound, algNoneAccepted bool) *Finding {
+func (c *JWTVulns) probeCritAbuse(ctx context.Context, client *httpclient.Client, target string, src jwtSource, parsed *parsedJWT, oracle jwtOracle, weakSecret string, weakSecretFound, algNoneAccepted bool) *lua_engine.Finding {
 	if weakSecretFound {
 		if f := c.critAbuseSigned(ctx, client, target, src, parsed, oracle, weakSecret); f != nil {
 			return f
@@ -60,7 +61,7 @@ func (c *JWTVulns) probeCritAbuse(ctx context.Context, client *httpclient.Client
 // offline brute recovered, with crit asserted. Acceptance proves
 // the validator does not enforce crit even when the rest of the
 // token validates cleanly.
-func (c *JWTVulns) critAbuseSigned(ctx context.Context, client *httpclient.Client, target string, src jwtSource, parsed *parsedJWT, oracle jwtOracle, secret string) *Finding {
+func (c *JWTVulns) critAbuseSigned(ctx context.Context, client *httpclient.Client, target string, src jwtSource, parsed *parsedJWT, oracle jwtOracle, secret string) *lua_engine.Finding {
 	hdr := cloneHeader(parsed.header)
 	hdr["alg"] = "HS256"
 	hdr["crit"] = []string{critProbeExtensionName}
@@ -85,7 +86,7 @@ func (c *JWTVulns) critAbuseSigned(ctx context.Context, client *httpclient.Clien
 // a finding when the validator additionally accepts the same token
 // with a synthetic crit list, because a spec-compliant validator
 // must reject on crit even when its alg gate is broken.
-func (c *JWTVulns) critAbuseAlgNone(ctx context.Context, client *httpclient.Client, target string, src jwtSource, parsed *parsedJWT, oracle jwtOracle) *Finding {
+func (c *JWTVulns) critAbuseAlgNone(ctx context.Context, client *httpclient.Client, target string, src jwtSource, parsed *parsedJWT, oracle jwtOracle) *lua_engine.Finding {
 	hdr := cloneHeader(parsed.header)
 	hdr["alg"] = "none"
 	hdr["crit"] = []string{critProbeExtensionName}
@@ -111,7 +112,7 @@ func (c *JWTVulns) critAbuseAlgNone(ctx context.Context, client *httpclient.Clie
 // will silently accept future security-critical extensions); the
 // path-specific detail surfaces which signing channel proved the
 // behaviour so the remediator can verify the fix end-to-end.
-func buildCritAbuseFinding(target string, parsed *parsedJWT, token string, probe jwtSnapshot, oracle jwtOracle, variant, headline string) *Finding {
+func buildCritAbuseFinding(target string, parsed *parsedJWT, token string, probe jwtSnapshot, oracle jwtOracle, variant, headline string) *lua_engine.Finding {
 	originalAlg := asString(parsed.header["alg"])
 	detail := fmt.Sprintf(
 		"%s. Per RFC 7515 §4.1.11 the validator MUST reject any JWT whose crit list contains a header parameter name "+
@@ -121,14 +122,14 @@ func buildCritAbuseFinding(target string, parsed *parsedJWT, token string, probe
 			"asserts via crit will be ignored just as silently.",
 		headline, critProbeExtensionName, variant, originalAlg,
 		probe.status,
-		Similarity(probe.body, oracle.auth.body),
-		Similarity(probe.body, oracle.noAuth.body),
+		lua_engine.Similarity(probe.body, oracle.auth.body),
+		lua_engine.Similarity(probe.body, oracle.noAuth.body),
 	)
-	return &Finding{
+	return &lua_engine.Finding{
 		Check:    "jwt-vulns",
 		Target:   target,
 		URL:      target,
-		Severity: SeverityHigh,
+		Severity: lua_engine.SeverityHigh,
 		Title:    "JWT validator ignores crit header (spec non-compliance)",
 		Detail:   detail,
 		CWE:      "CWE-347",
@@ -138,7 +139,7 @@ func buildCritAbuseFinding(target string, parsed *parsedJWT, token string, probe
 			"handler or required-claims parameter; pass exactly the extension names your tokens use, and let the " +
 			"library reject anything else. As defence in depth, log every rejected crit name during the rollout so a " +
 			"production token using a legitimate extension you forgot to register fails loudly rather than silently.",
-		Evidence: &Evidence{
+		Evidence: &lua_engine.Evidence{
 			Method:     http.MethodGet,
 			RequestURL: target,
 			Status:     probe.status,
@@ -146,10 +147,10 @@ func buildCritAbuseFinding(target string, parsed *parsedJWT, token string, probe
 				"Sign path: %s\nOriginal alg: %s\nCrit list: [%q]\nForged token: %s\nAuth baseline: status=%d\nNo-auth baseline: status=%d\nProbe response: status=%d\nSimilarity to auth: %.3f\nSimilarity to no-auth: %.3f",
 				variant, originalAlg, critProbeExtensionName, redactToken(token),
 				oracle.auth.status, oracle.noAuth.status, probe.status,
-				Similarity(probe.body, oracle.auth.body),
-				Similarity(probe.body, oracle.noAuth.body),
+				lua_engine.Similarity(probe.body, oracle.auth.body),
+				lua_engine.Similarity(probe.body, oracle.noAuth.body),
 			),
 		},
-		DedupeKey: MakeKey("jwt-vulns", ScopeHost, target, "crit-abuse", variant),
+		DedupeKey: lua_engine.MakeKey("jwt-vulns", lua_engine.ScopeHost, target, "crit-abuse", variant),
 	}
 }

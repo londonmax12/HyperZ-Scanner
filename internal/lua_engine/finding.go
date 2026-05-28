@@ -40,7 +40,7 @@ func (c *LuaCheck) marshalFindings(t *lua.LTable, env *RunEnv) ([]Finding, error
 }
 
 func (c *LuaCheck) marshalOne(t *lua.LTable, env *RunEnv) (Finding, error) {
-	sev := Severity(lvalString(t.RawGetString("severity")))
+	sev := Severity(LValString(t.RawGetString("severity")))
 	if sev == "" {
 		return Finding{}, fmt.Errorf("missing required field `severity`")
 	}
@@ -48,29 +48,29 @@ func (c *LuaCheck) marshalOne(t *lua.LTable, env *RunEnv) (Finding, error) {
 		return Finding{}, fmt.Errorf("invalid severity %q", sev)
 	}
 
-	target := lvalString(t.RawGetString("target"))
+	target := LValString(t.RawGetString("target"))
 	if target == "" {
 		target = env.Page.URL
 	}
-	urlStr := lvalString(t.RawGetString("url"))
+	urlStr := LValString(t.RawGetString("url"))
 	if urlStr == "" {
 		urlStr = env.Page.URL
 	}
 
-	cwe := lvalString(t.RawGetString("cwe"))
+	cwe := LValString(t.RawGetString("cwe"))
 	if cwe == "" {
 		cwe = c.cwe
 	}
-	owasp := lvalString(t.RawGetString("owasp"))
+	owasp := LValString(t.RawGetString("owasp"))
 	if owasp == "" {
 		owasp = c.owasp
 	}
-	remediation := lvalString(t.RawGetString("remediation"))
+	remediation := LValString(t.RawGetString("remediation"))
 	if remediation == "" {
 		remediation = c.remediation
 	}
 
-	dedupeKey := lvalString(t.RawGetString("dedupe_key"))
+	dedupeKey := LValString(t.RawGetString("dedupe_key"))
 	if dedupeKey == "" {
 		// dedupe_parts is the ergonomic path: a check supplies just
 		// the variable parts and inherits the scope from its module
@@ -87,7 +87,7 @@ func (c *LuaCheck) marshalOne(t *lua.LTable, env *RunEnv) (Finding, error) {
 		if len(parts) == 1 && parts[0] == c.name {
 			parts = nil
 		}
-		scopeStr := lvalString(t.RawGetString("dedupe_scope"))
+		scopeStr := LValString(t.RawGetString("dedupe_scope"))
 		sc := c.defaultScope
 		if scopeStr != "" {
 			parsed, err := parseScope(scopeStr)
@@ -106,8 +106,8 @@ func (c *LuaCheck) marshalOne(t *lua.LTable, env *RunEnv) (Finding, error) {
 		Target:      target,
 		URL:         urlStr,
 		Severity:    sev,
-		Title:       lvalString(t.RawGetString("title")),
-		Detail:      lvalString(t.RawGetString("detail")),
+		Title:       LValString(t.RawGetString("title")),
+		Detail:      LValString(t.RawGetString("detail")),
 		Details:     details,
 		CWE:         cwe,
 		OWASP:       owasp,

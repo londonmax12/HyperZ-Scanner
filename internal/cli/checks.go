@@ -14,7 +14,14 @@ import (
 	// these, a check that calls ctx.takeover.evaluate(...) (et al)
 	// would see a nil namespace.
 	_ "github.com/londonmax12/hyperz/internal/lua_engine/checks/access"
+	_ "github.com/londonmax12/hyperz/internal/lua_engine/checks/concurrency"
+	_ "github.com/londonmax12/hyperz/internal/lua_engine/checks/crypto"
 	_ "github.com/londonmax12/hyperz/internal/lua_engine/checks/discovery"
+	_ "github.com/londonmax12/hyperz/internal/lua_engine/checks/platform/oauth"
+	_ "github.com/londonmax12/hyperz/internal/lua_engine/checks/platform/openapi"
+	_ "github.com/londonmax12/hyperz/internal/lua_engine/checks/platform/websocket"
+	_ "github.com/londonmax12/hyperz/internal/lua_engine/checks/smuggling"
+	_ "github.com/londonmax12/hyperz/internal/lua_engine/checks/xss"
 )
 
 // registry returns every check shipped with hyperz. Detection logic

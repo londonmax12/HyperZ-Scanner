@@ -122,7 +122,7 @@ func sinksForHeaders(L *lua.LState) int {
 	n := names.Len()
 	out := make([]Sink, 0, n)
 	for i := 1; i <= n; i++ {
-		name := lvalString(names.RawGetInt(i))
+		name := LValString(names.RawGetInt(i))
 		if name == "" {
 			continue
 		}

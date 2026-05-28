@@ -1,7 +1,6 @@
-package lua_engine
+package smuggling
 
 import (
-	"bufio"
 	"context"
 	"crypto/tls"
 	"encoding/binary"
@@ -16,6 +15,8 @@ import (
 	"time"
 
 	"golang.org/x/net/http2/hpack"
+
+	"github.com/londonmax12/hyperz/internal/lua_engine"
 )
 
 // RequestSmuggling probes the target's HTTP front-end / back-end parser pair
@@ -57,11 +58,11 @@ import (
 // front-end/back-end pairing property, not a per-page bug.
 type RequestSmuggling struct {
 	mu    sync.Mutex
-	cache map[string]*Finding // key = scheme://host[:port]; nil entry = probed clean
+	cache map[string]*lua_engine.Finding // key = scheme://host[:port]; nil entry = probed clean
 	// smuggleVariants mirrors cache for the Lua bridge: the per-host
 	// raw variant fact slice is stashed when ScanFacts probes, then
 	// reused on subsequent calls for the same host. The Go check's
-	// composed *Finding lives in cache; the variant slice lives here so
+	// composed *lua_engine.Finding lives in cache; the variant slice lives here so
 	// the Lua port can rebuild its own composed finding without re-
 	// probing. Keyed identically to cache so the two stay in step.
 	smuggleVariants map[string][]SmugglingVariantFact
@@ -91,7 +92,7 @@ const (
 var smugglingProbeTimeout = 12 * time.Second
 
 // smugglingHangThreshold is the absolute floor above which a probe
-// latency counts as a back-end hang. TimingCompare also enforces a
+// latency counts as a back-end hang. lua_engine.TimingCompare also enforces a
 // baseline-relative threshold; this absolute floor stops a slow but
 // non-vulnerable target from cascading both probe attempts into
 // false positives just because the baseline itself was slow. Package
@@ -133,7 +134,7 @@ func (c *RequestSmuggling) timingHit(baseline, probe time.Duration) bool {
 	if probe < smugglingHangThreshold {
 		return false
 	}
-	res := TimingCompare(baseline, probe, smugglingHangThreshold, 0.3)
+	res := lua_engine.TimingCompare(baseline, probe, smugglingHangThreshold, 0.3)
 	return res.Vulnerable
 }
 
@@ -175,10 +176,10 @@ func (c *RequestSmuggling) sendBaseline(ctx context.Context, u *url.URL, addr st
 
 	req := buildBaselineRequest(u.Host)
 	start := time.Now()
-	if err := writeAllDeadline(conn, []byte(req), smugglingProbeTimeout); err != nil {
+	if err := lua_engine.WriteAllDeadline(conn, []byte(req), smugglingProbeTimeout); err != nil {
 		return 0, err
 	}
-	if _, err := readResponseHead(conn, smugglingProbeTimeout); err != nil {
+	if _, err := lua_engine.ReadResponseHead(conn, smugglingProbeTimeout); err != nil {
 		return 0, err
 	}
 	return time.Since(start), nil
@@ -193,10 +194,10 @@ func (c *RequestSmuggling) runHTTP1Variant(ctx context.Context, u *url.URL, addr
 
 	req := v.buildHTTP1(u.Host)
 	start := time.Now()
-	if err := writeAllDeadline(conn, []byte(req), smugglingProbeTimeout); err != nil {
+	if err := lua_engine.WriteAllDeadline(conn, []byte(req), smugglingProbeTimeout); err != nil {
 		return 0, err
 	}
-	if _, err := readResponseHead(conn, smugglingProbeTimeout); err != nil {
+	if _, err := lua_engine.ReadResponseHead(conn, smugglingProbeTimeout); err != nil {
 		// A read timeout IS the hang signal we are looking for: the
 		// back-end is waiting for bytes that aren't coming, so the
 		// front-end never produces a response within smugglingProbeTimeout.
@@ -466,64 +467,6 @@ func buildBaselineRequest(host string) string {
 		"Accept: */*\r\n" +
 		"Connection: close\r\n" +
 		"\r\n"
-}
-
-// writeAllDeadline writes b to conn under a wall-clock deadline. A
-// stalled write on a probe that the back-end isn't reading would
-// otherwise pin the worker indefinitely; the same deadline that bounds
-// the read covers the write side too.
-func writeAllDeadline(conn net.Conn, b []byte, timeout time.Duration) error {
-	if err := conn.SetWriteDeadline(time.Now().Add(timeout)); err != nil {
-		return err
-	}
-	_, err := conn.Write(b)
-	return err
-}
-
-// readResponseHead reads the HTTP/1.1 status line and headers from
-// conn under a deadline, returning whatever bytes were captured. We
-// intentionally don't parse beyond the headers: the timing signal is
-// the wall-clock cost of getting any response at all, and reading
-// the body would dilute it with the body-stream latency.
-//
-// On a real hang, this returns a net timeout error, which the caller
-// interprets as confirmation of the desync and reports as a probe
-// latency capped at the timeout.
-func readResponseHead(conn net.Conn, timeout time.Duration) ([]byte, error) {
-	if err := conn.SetReadDeadline(time.Now().Add(timeout)); err != nil {
-		return nil, err
-	}
-	r := bufio.NewReader(io.LimitReader(conn, smugglingReadCap))
-	// Status line.
-	line, err := r.ReadString('\n')
-	if err != nil {
-		return nil, err
-	}
-	out := []byte(line)
-	// Headers, terminated by an empty line.
-	for {
-		hl, err := r.ReadString('\n')
-		if err != nil {
-			return out, err
-		}
-		out = append(out, hl...)
-		trim := strings.TrimRight(hl, "\r\n")
-		if trim == "" {
-			return out, nil
-		}
-	}
-}
-
-func splitHostPortDefault(u *url.URL) (host, port string) {
-	host = u.Hostname()
-	port = u.Port()
-	if port != "" {
-		return host, port
-	}
-	if u.Scheme == "https" {
-		return host, "443"
-	}
-	return host, "80"
 }
 
 // runHTTP2Variant opens a fresh h2 session, sends the smuggling

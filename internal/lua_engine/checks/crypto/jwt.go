@@ -1,4 +1,4 @@
-package lua_engine
+package crypto
 
 import (
 	"context"
@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/londonmax12/hyperz/internal/httpclient"
+	"github.com/londonmax12/hyperz/internal/lua_engine"
 	"github.com/londonmax12/hyperz/internal/oob"
 	"github.com/londonmax12/hyperz/internal/page"
 )
@@ -87,7 +88,7 @@ type JWTVulns struct {
 
 // jwtBodyCap bounds response bodies the check buffers for oracle
 // comparison. 64 KiB is enough for a templated dashboard to score
-// stably under Similarity while keeping a single probe from soaking
+// stably under lua_engine.Similarity while keeping a single probe from soaking
 // up megabytes if the application proxies large pages back.
 const jwtBodyCap = 64 << 10
 
@@ -220,8 +221,8 @@ type jwtSnapshot struct {
 // abuse), then the passive jku/x5u and kid-as-URL advisories. The
 // network probes share a single oracle so we don't issue two
 // baselines per token.
-func (c *JWTVulns) probeToken(ctx context.Context, client *httpclient.Client, target string, src jwtSource, parsed *parsedJWT) []Finding {
-	var findings []Finding
+func (c *JWTVulns) probeToken(ctx context.Context, client *httpclient.Client, target string, src jwtSource, parsed *parsedJWT) []lua_engine.Finding {
+	var findings []lua_engine.Finding
 
 	weakSecret, weakSecretFound := "", false
 	alg := strings.ToUpper(asString(parsed.header["alg"]))
@@ -239,9 +240,9 @@ func (c *JWTVulns) probeToken(ctx context.Context, client *httpclient.Client, ta
 		findings = append(findings, *f)
 	}
 
-	if srv := OOBFrom(ctx); srv != nil {
+	if srv := lua_engine.OOBFrom(ctx); srv != nil {
 		if err := c.probeOOBKeyURL(ctx, client, srv, target, src, parsed); err != nil {
-			Report(ctx, fmt.Errorf("jwt oob jku/x5u %s: %w", target, err))
+			lua_engine.Report(ctx, fmt.Errorf("jwt oob jku/x5u %s: %w", target, err))
 		}
 	}
 
@@ -251,7 +252,7 @@ func (c *JWTVulns) probeToken(ctx context.Context, client *httpclient.Client, ta
 
 	oracle, err := c.buildOracle(ctx, client, target, src)
 	if err != nil {
-		Report(ctx, fmt.Errorf("jwt oracle %s: %w", target, err))
+		lua_engine.Report(ctx, fmt.Errorf("jwt oracle %s: %w", target, err))
 		return findings
 	}
 	if !oracle.usable {
@@ -315,7 +316,7 @@ func (c *JWTVulns) buildOracle(ctx context.Context, client *httpclient.Client, t
 	if err != nil {
 		return jwtOracle{}, err
 	}
-	usable := auth.status != noAuth.status || Similarity(auth.body, noAuth.body) < SimilarityThreshold
+	usable := auth.status != noAuth.status || lua_engine.Similarity(auth.body, noAuth.body) < lua_engine.SimilarityThreshold
 	return jwtOracle{auth: auth, noAuth: noAuth, usable: usable}, nil
 }
 
@@ -323,7 +324,7 @@ func (c *JWTVulns) buildOracle(ctx context.Context, client *httpclient.Client, t
 // common case variants ("none", "None", "NONE") to defeat naive case-
 // sensitive deny-lists. The signature segment is emptied per RFC 7519
 // alg=none semantics.
-func (c *JWTVulns) probeAlgNone(ctx context.Context, client *httpclient.Client, target string, src jwtSource, parsed *parsedJWT, oracle jwtOracle) *Finding {
+func (c *JWTVulns) probeAlgNone(ctx context.Context, client *httpclient.Client, target string, src jwtSource, parsed *parsedJWT, oracle jwtOracle) *lua_engine.Finding {
 	for _, variant := range []string{"none", "None", "NONE", "nOnE"} {
 		if ctx.Err() != nil {
 			return nil
@@ -350,14 +351,14 @@ func (c *JWTVulns) probeAlgNone(ctx context.Context, client *httpclient.Client, 
 				"trivially impersonate any user the application identifies via this token.",
 			variant, asString(parsed.header["alg"]),
 			probe.status,
-			Similarity(probe.body, oracle.auth.body),
-			Similarity(probe.body, oracle.noAuth.body),
+			lua_engine.Similarity(probe.body, oracle.auth.body),
+			lua_engine.Similarity(probe.body, oracle.noAuth.body),
 		)
-		return &Finding{
+		return &lua_engine.Finding{
 			Check:    "jwt-vulns",
 			Target:   target,
 			URL:      target,
-			Severity: SeverityCritical,
+			Severity: lua_engine.SeverityCritical,
 			Title:    "JWT validator accepts alg=none (signature bypass)",
 			Detail:   detail,
 			CWE:      "CWE-347",
@@ -367,7 +368,7 @@ func (c *JWTVulns) probeAlgNone(ctx context.Context, client *httpclient.Client, 
 				"algorithms parameter on the verify call - pass exactly the algorithm your tokens are signed with, " +
 				"never the alg value off the incoming header. If your library only takes a key, switch to one that " +
 				"accepts an algorithm allow-list; otherwise add a wrapper that rejects unsigned tokens before verify.",
-			Evidence: &Evidence{
+			Evidence: &lua_engine.Evidence{
 				Method:     http.MethodGet,
 				RequestURL: target,
 				Status:     probe.status,
@@ -375,11 +376,11 @@ func (c *JWTVulns) probeAlgNone(ctx context.Context, client *httpclient.Client, 
 					"Original alg: %s\nForged alg: %s\nForged token: %s\nAuth baseline: status=%d\nNo-auth baseline: status=%d\nProbe response: status=%d\nSimilarity to auth: %.3f\nSimilarity to no-auth: %.3f",
 					asString(parsed.header["alg"]), variant, redactToken(token),
 					oracle.auth.status, oracle.noAuth.status, probe.status,
-					Similarity(probe.body, oracle.auth.body),
-					Similarity(probe.body, oracle.noAuth.body),
+					lua_engine.Similarity(probe.body, oracle.auth.body),
+					lua_engine.Similarity(probe.body, oracle.noAuth.body),
 				),
 			},
-			DedupeKey: MakeKey("jwt-vulns", ScopeHost, target, "alg-none"),
+			DedupeKey: lua_engine.MakeKey("jwt-vulns", lua_engine.ScopeHost, target, "alg-none"),
 		}
 	}
 	return nil
@@ -389,7 +390,7 @@ func (c *JWTVulns) probeAlgNone(ctx context.Context, client *httpclient.Client, 
 // empty file and whose signature is HMAC-SHA256 over the empty key
 // bytes. Implementations that splice kid into a filesystem path read
 // the file (empty), feed empty bytes to HMAC, and accept the token.
-func (c *JWTVulns) probeKidTraversal(ctx context.Context, client *httpclient.Client, target string, src jwtSource, parsed *parsedJWT, oracle jwtOracle, kid string) *Finding {
+func (c *JWTVulns) probeKidTraversal(ctx context.Context, client *httpclient.Client, target string, src jwtSource, parsed *parsedJWT, oracle jwtOracle, kid string) *lua_engine.Finding {
 	hdr := cloneHeader(parsed.header)
 	hdr["alg"] = "HS256"
 	hdr["kid"] = kid
@@ -413,14 +414,14 @@ func (c *JWTVulns) probeKidTraversal(ctx context.Context, client *httpclient.Cli
 			"attacker can chain this with path traversal in kid to read other files (sourcing the key from any predictable "+
 			"empty/known content) and forge tokens at will.",
 		kid, probe.status,
-		Similarity(probe.body, oracle.auth.body),
-		Similarity(probe.body, oracle.noAuth.body),
+		lua_engine.Similarity(probe.body, oracle.auth.body),
+		lua_engine.Similarity(probe.body, oracle.noAuth.body),
 	)
-	return &Finding{
+	return &lua_engine.Finding{
 		Check:    "jwt-vulns",
 		Target:   target,
 		URL:      target,
-		Severity: SeverityCritical,
+		Severity: lua_engine.SeverityCritical,
 		Title:    "JWT kid header resolves to filesystem path (key injection)",
 		Detail:   detail,
 		CWE:      "CWE-22, CWE-347",
@@ -429,7 +430,7 @@ func (c *JWTVulns) probeKidTraversal(ctx context.Context, client *httpclient.Cli
 			"known key IDs (or in a database query parameterised against a typed kid column) and reject any kid that " +
 			"doesn't resolve. Canonicalise the value before lookup - reject anything containing path separators, " +
 			"\"..\", or NUL bytes - so a future change in lookup strategy can't reintroduce the bug.",
-		Evidence: &Evidence{
+		Evidence: &lua_engine.Evidence{
 			Method:     http.MethodGet,
 			RequestURL: target,
 			Status:     probe.status,
@@ -437,11 +438,11 @@ func (c *JWTVulns) probeKidTraversal(ctx context.Context, client *httpclient.Cli
 				"Forged kid: %s\nForged token: %s\nAuth baseline: status=%d\nNo-auth baseline: status=%d\nProbe response: status=%d\nSimilarity to auth: %.3f\nSimilarity to no-auth: %.3f",
 				kid, redactToken(token),
 				oracle.auth.status, oracle.noAuth.status, probe.status,
-				Similarity(probe.body, oracle.auth.body),
-				Similarity(probe.body, oracle.noAuth.body),
+				lua_engine.Similarity(probe.body, oracle.auth.body),
+				lua_engine.Similarity(probe.body, oracle.noAuth.body),
 			),
 		},
-		DedupeKey: MakeKey("jwt-vulns", ScopeHost, target, "kid-path-traversal"),
+		DedupeKey: lua_engine.MakeKey("jwt-vulns", lua_engine.ScopeHost, target, "kid-path-traversal"),
 	}
 }
 
@@ -451,7 +452,7 @@ func (c *JWTVulns) probeKidTraversal(ctx context.Context, client *httpclient.Cli
 // bug we want to surface) or the manipulated token producing an
 // authenticated response (the injection coerced the lookup into
 // returning the empty key bytes we re-signed with).
-func (c *JWTVulns) probeKidSQLi(ctx context.Context, client *httpclient.Client, target string, src jwtSource, parsed *parsedJWT, oracle jwtOracle, kid string) *Finding {
+func (c *JWTVulns) probeKidSQLi(ctx context.Context, client *httpclient.Client, target string, src jwtSource, parsed *parsedJWT, oracle jwtOracle, kid string) *lua_engine.Finding {
 	hdr := cloneHeader(parsed.header)
 	hdr["alg"] = "HS256"
 	hdr["kid"] = kid
@@ -464,9 +465,9 @@ func (c *JWTVulns) probeKidSQLi(ctx context.Context, client *httpclient.Client, 
 	if err != nil {
 		return nil
 	}
-	patterns := matchSQLPatterns(probe.body)
-	patternsInBaseline := matchSQLPatterns(oracle.auth.body)
-	newPatterns := subtractPatterns(patterns, patternsInBaseline)
+	patterns := lua_engine.MatchSQLPatterns(probe.body)
+	patternsInBaseline := lua_engine.MatchSQLPatterns(oracle.auth.body)
+	newPatterns := lua_engine.SubtractPatterns(patterns, patternsInBaseline)
 	accepted := looksAccepted(probe, oracle)
 	if len(newPatterns) == 0 && !accepted {
 		return nil
@@ -479,7 +480,7 @@ func (c *JWTVulns) probeKidSQLi(ctx context.Context, client *httpclient.Client, 
 				"driver error pattern(s) %v in the response AND landed at the authenticated baseline (status %d, "+
 				"similarity %.3f to auth) - the injection both reached the SQL layer and coerced the lookup into "+
 				"returning the empty key the probe re-signed with.",
-			kid, newPatterns, probe.status, Similarity(probe.body, oracle.auth.body))
+			kid, newPatterns, probe.status, lua_engine.Similarity(probe.body, oracle.auth.body))
 	case len(newPatterns) > 0:
 		detail = fmt.Sprintf(
 			"The validator spliced the JWT kid header into a SQL key lookup. Probe kid value %q produced new database "+
@@ -493,15 +494,15 @@ func (c *JWTVulns) probeKidSQLi(ctx context.Context, client *httpclient.Client, 
 				"lookup into returning the empty key the probe re-signed with. The forged token landed at the "+
 				"authenticated baseline (status %d, similarity %.3f to auth / %.3f to no-auth).",
 			kid, probe.status,
-			Similarity(probe.body, oracle.auth.body),
-			Similarity(probe.body, oracle.noAuth.body),
+			lua_engine.Similarity(probe.body, oracle.auth.body),
+			lua_engine.Similarity(probe.body, oracle.noAuth.body),
 		)
 	}
-	severity := SeverityHigh
+	severity := lua_engine.SeverityHigh
 	if accepted {
-		severity = SeverityCritical
+		severity = lua_engine.SeverityCritical
 	}
-	return &Finding{
+	return &lua_engine.Finding{
 		Check:    "jwt-vulns",
 		Target:   target,
 		URL:      target,
@@ -514,18 +515,18 @@ func (c *JWTVulns) probeKidSQLi(ctx context.Context, client *httpclient.Client, 
 			"and prefer a hardcoded map of known kid values to a free-form database lookup. Apply the same canonicalisation " +
 			"rules as for path-based kid resolvers: reject quote characters, comment sequences, and any byte outside an " +
 			"allow-list of identifier characters before the value reaches the query layer.",
-		Evidence: &Evidence{
+		Evidence: &lua_engine.Evidence{
 			Method:     http.MethodGet,
 			RequestURL: target,
 			Status:     probe.status,
 			Snippet: fmt.Sprintf(
 				"Forged kid: %s\nForged token: %s\nNew SQL error patterns: %v\nProbe response: status=%d\nSimilarity to auth: %.3f\nSimilarity to no-auth: %.3f",
 				kid, redactToken(token), newPatterns, probe.status,
-				Similarity(probe.body, oracle.auth.body),
-				Similarity(probe.body, oracle.noAuth.body),
+				lua_engine.Similarity(probe.body, oracle.auth.body),
+				lua_engine.Similarity(probe.body, oracle.noAuth.body),
 			),
 		},
-		DedupeKey: MakeKey("jwt-vulns", ScopeHost, target, "kid-sqli"),
+		DedupeKey: lua_engine.MakeKey("jwt-vulns", lua_engine.ScopeHost, target, "kid-sqli"),
 	}
 }
 
@@ -567,21 +568,21 @@ func (c *JWTVulns) send(ctx context.Context, client *httpclient.Client, target s
 // always returns 200 plus a JSON error would collapse into a false
 // positive.
 func looksAccepted(probe jwtSnapshot, oracle jwtOracle) bool {
-	authSim := Similarity(probe.body, oracle.auth.body)
-	noAuthSim := Similarity(probe.body, oracle.noAuth.body)
+	authSim := lua_engine.Similarity(probe.body, oracle.auth.body)
+	noAuthSim := lua_engine.Similarity(probe.body, oracle.noAuth.body)
 	if probe.status != oracle.auth.status {
 		return false
 	}
-	if probe.status == oracle.noAuth.status && noAuthSim >= SimilarityThreshold {
+	if probe.status == oracle.noAuth.status && noAuthSim >= lua_engine.SimilarityThreshold {
 		return false
 	}
-	return authSim >= SimilarityThreshold
+	return authSim >= lua_engine.SimilarityThreshold
 }
 
 // buildWeakSecretFinding fires when offline HMAC verification recovered
 // the token's signing secret from the curated wordlist. No network
 // probe is needed: the math proved the secret end-to-end.
-func buildWeakSecretFinding(target string, parsed *parsedJWT, alg, secret string) Finding {
+func buildWeakSecretFinding(target string, parsed *parsedJWT, alg, secret string) lua_engine.Finding {
 	display := secret
 	if display == "" {
 		display = "<empty string>"
@@ -592,11 +593,11 @@ func buildWeakSecretFinding(target string, parsed *parsedJWT, alg, secret string
 			"observes any token (network capture, browser storage, log file) can forge arbitrary claims under the "+
 			"same secret and impersonate any user the application identifies via this token.",
 		alg, display)
-	return Finding{
+	return lua_engine.Finding{
 		Check:    "jwt-vulns",
 		Target:   target,
 		URL:      target,
-		Severity: SeverityCritical,
+		Severity: lua_engine.SeverityCritical,
 		Title:    "JWT signed with well-known weak HMAC secret",
 		Detail:   detail,
 		CWE:      "CWE-798, CWE-347",
@@ -606,14 +607,14 @@ func buildWeakSecretFinding(target string, parsed *parsedJWT, alg, secret string
 			"crypto.randomBytes on Node) and store it as a server-side secret, never a config string in source. For " +
 			"long-term hardening, prefer an asymmetric algorithm (RS256, ES256, EdDSA) so the verifier never sees the " +
 			"signing key at all.",
-		Evidence: &Evidence{
+		Evidence: &lua_engine.Evidence{
 			RequestURL: target,
 			Snippet: fmt.Sprintf(
 				"Algorithm: %s\nRecovered secret: %q\nToken (redacted): %s",
 				alg, display, redactToken(parsed.signing+"."+parsed.signatureB64),
 			),
 		},
-		DedupeKey: MakeKey("jwt-vulns", ScopeHost, target, "weak-hmac-secret", tokenFingerprint(parsed.signing+"."+parsed.signatureB64)),
+		DedupeKey: lua_engine.MakeKey("jwt-vulns", lua_engine.ScopeHost, target, "weak-hmac-secret", tokenFingerprint(parsed.signing+"."+parsed.signatureB64)),
 	}
 }
 
@@ -670,7 +671,7 @@ func (c *JWTVulns) probeOOBKeyURL(ctx context.Context, client *httpclient.Client
 // OOB callback proves the validator both processed the header and
 // reached the scanner's egress, which is the precondition for forging
 // tokens by hosting a JWKS the validator will trust.
-func buildJWTKeyURLOOBFinding(reg oob.Registration, hits []oob.Hit) Finding {
+func buildJWTKeyURLOOBFinding(reg oob.Registration, hits []oob.Hit) lua_engine.Finding {
 	target := reg.Extra["target"]
 	field := reg.Extra["field"]
 	originalAlg := reg.Extra["original_alg"]
@@ -682,11 +683,11 @@ func buildJWTKeyURLOOBFinding(reg oob.Registration, hits []oob.Hit) Finding {
 			"token was signed with %s. An attacker can host a JWKS at any URL the validator will accept in "+
 			"%s, sign tokens against the matching private key, and have the validator trust forged claims.",
 		field, hit.Method, hit.SourceAddr, ua, len(hits), originalAlg, field)
-	return Finding{
+	return lua_engine.Finding{
 		Check:    "jwt-vulns",
 		Target:   target,
 		URL:      target,
-		Severity: SeverityCritical,
+		Severity: lua_engine.SeverityCritical,
 		Title:    fmt.Sprintf("JWT validator fetches attacker-controlled %s URL (OOB-confirmed)", field),
 		Detail:   detail,
 		CWE:      "CWE-347, CWE-918",
@@ -695,7 +696,7 @@ func buildJWTKeyURLOOBFinding(reg oob.Registration, hits []oob.Hit) Finding {
 			"pin the allowed URLs to a fixed same-origin allow-list, never trust the value off the incoming token, and " +
 			"validate that the fetched JWKS is served from an authenticated channel. Prefer embedding the JWK set in " +
 			"configuration so the validator never makes an outbound HTTP call during verification.",
-		Evidence: &Evidence{
+		Evidence: &lua_engine.Evidence{
 			RequestURL: target,
 			Snippet: fmt.Sprintf(
 				"Header field: %s\nCanary URL: %s\nFirst hit: %s %s from %s at %s\nUser-Agent: %s\nTotal hits: %d",
@@ -703,7 +704,7 @@ func buildJWTKeyURLOOBFinding(reg oob.Registration, hits []oob.Hit) Finding {
 				hit.Method, hit.Path, hit.SourceAddr,
 				hit.Timestamp.Format(time.RFC3339), ua, len(hits)),
 		},
-		DedupeKey: MakeKey("jwt-vulns", ScopeHost, target, "oob-key-url", field, reg.Extra["token_fp"]),
+		DedupeKey: lua_engine.MakeKey("jwt-vulns", lua_engine.ScopeHost, target, "oob-key-url", field, reg.Extra["token_fp"]),
 	}
 }
 
@@ -713,7 +714,7 @@ func buildJWTKeyURLOOBFinding(reg oob.Registration, hits []oob.Hit) Finding {
 // the header presence itself is the actionable signal because every
 // trustworthy validator either rejects jku/x5u outright or restricts
 // it to a hardcoded same-origin allow-list.
-func buildJKUFinding(target string, parsed *parsedJWT) *Finding {
+func buildJKUFinding(target string, parsed *parsedJWT) *lua_engine.Finding {
 	jku := asString(parsed.header["jku"])
 	x5u := asString(parsed.header["x5u"])
 	if jku == "" && x5u == "" {
@@ -729,11 +730,11 @@ func buildJKUFinding(target string, parsed *parsedJWT) *Finding {
 			"signed by any key an attacker can host. Active exploitation requires a controlled URL the validator "+
 			"reaches; this finding is the structural advisory.",
 		field, value)
-	return &Finding{
+	return &lua_engine.Finding{
 		Check:    "jwt-vulns",
 		Target:   target,
 		URL:      target,
-		Severity: SeverityMedium,
+		Severity: lua_engine.SeverityMedium,
 		Title:    fmt.Sprintf("JWT carries %s header (attacker-controlled key URL risk)", field),
 		Detail:   detail,
 		CWE:      "CWE-347, CWE-918",
@@ -742,11 +743,11 @@ func buildJKUFinding(target string, parsed *parsedJWT) *Finding {
 			"allowed URLs to a fixed same-origin allow-list, never trust the value off the incoming token, and validate " +
 			"that the fetched JWKS is served from an authenticated channel. Prefer embedding the JWK set in configuration " +
 			"so the validator never makes an outbound HTTP call during verification.",
-		Evidence: &Evidence{
+		Evidence: &lua_engine.Evidence{
 			RequestURL: target,
 			Snippet:    fmt.Sprintf("Header field: %s\nValue: %s\nHeader JSON: %s", field, value, string(parsed.headerRaw)),
 		},
-		DedupeKey: MakeKey("jwt-vulns", ScopeHost, target, "jku-x5u", field),
+		DedupeKey: lua_engine.MakeKey("jwt-vulns", lua_engine.ScopeHost, target, "jku-x5u", field),
 	}
 }
 
@@ -756,7 +757,7 @@ func buildJKUFinding(target string, parsed *parsedJWT) *Finding {
 // CVEs for) treating an http:// kid as a fetch target equivalent to
 // jku. The advisory exists so a reviewer notices the misuse before a
 // future library upgrade activates the URL fetch path.
-func buildKidAsURLFinding(target string, parsed *parsedJWT) *Finding {
+func buildKidAsURLFinding(target string, parsed *parsedJWT) *lua_engine.Finding {
 	kid := asString(parsed.header["kid"])
 	if !kidLooksLikeURL(kid) {
 		return nil
@@ -768,11 +769,11 @@ func buildKidAsURLFinding(target string, parsed *parsedJWT) *Finding {
 			"from this value. Active exploitation requires a controlled URL the validator reaches; this finding is "+
 			"the structural advisory.",
 		kid)
-	return &Finding{
+	return &lua_engine.Finding{
 		Check:    "jwt-vulns",
 		Target:   target,
 		URL:      target,
-		Severity: SeverityLow,
+		Severity: lua_engine.SeverityLow,
 		Title:    "JWT kid header is a URL (attacker-controlled key fetch risk)",
 		Detail:   detail,
 		CWE:      "CWE-347, CWE-918",
@@ -781,11 +782,11 @@ func buildKidAsURLFinding(target string, parsed *parsedJWT) *Finding {
 			"feed the value into a URL fetcher. Canonicalise before lookup - reject anything containing \"://\", a " +
 			"leading \"//\", or any byte outside an allow-list of identifier characters - so a future library upgrade " +
 			"cannot reintroduce a URL fetch from kid.",
-		Evidence: &Evidence{
+		Evidence: &lua_engine.Evidence{
 			RequestURL: target,
 			Snippet:    fmt.Sprintf("Header field: kid\nValue: %s\nHeader JSON: %s", kid, string(parsed.headerRaw)),
 		},
-		DedupeKey: MakeKey("jwt-vulns", ScopeHost, target, "kid-as-url"),
+		DedupeKey: lua_engine.MakeKey("jwt-vulns", lua_engine.ScopeHost, target, "kid-as-url"),
 	}
 }
 
@@ -1024,7 +1025,7 @@ func redactToken(t string) string {
 
 // tokenFingerprint stabilises per-token dedupe across pages and runs.
 // SHA-1 prefix is fine here: there is no adversary, only deterministic
-// grouping (same contract as MakeDedupeKey).
+// grouping (same contract as lua_engine.MakeDedupeKey).
 func tokenFingerprint(t string) string {
-	return MakeDedupeKey("jwt-token", t)
+	return lua_engine.MakeDedupeKey("jwt-token", t)
 }

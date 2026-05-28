@@ -1,7 +1,9 @@
-package lua_engine
+package openapi
 
 import (
 	lua "github.com/yuin/gopher-lua"
+
+	"github.com/londonmax12/hyperz/internal/lua_engine"
 )
 
 // buildOpenAPITable returns the ctx.openapi helper namespace. Three
@@ -49,11 +51,11 @@ func buildOpenAPITable(L *lua.LState) *lua.LTable {
 type openapiEvaluatorKey struct{}
 
 func openapiDiscover(L *lua.LState) int {
-	env := CurrentEnv(L)
+	env := lua_engine.CurrentEnv(L)
 	if env == nil {
 		L.RaiseError("ctx.openapi.discover called outside a check run")
 	}
-	pageURL := RequireString(L, 1)
+	pageURL := lua_engine.RequireString(L, 1)
 	eval := env.Check.AuxOrCreate(openapiEvaluatorKey{}, func() any {
 		return &OpenAPIAudit{}
 	}).(*OpenAPIAudit)
@@ -82,7 +84,7 @@ func openapiDiscover(L *lua.LState) int {
 // { scheme, raw, redacted } so the Lua port can dedupe / sort / render
 // without touching the redaction helper itself.
 func openapiScanExampleAuthMatches(L *lua.LState) int {
-	body := RequireString(L, 1)
+	body := lua_engine.RequireString(L, 1)
 	hits := OpenAPIScanExampleAuthMatches([]byte(body))
 	out := L.NewTable()
 	for i, h := range hits {
@@ -114,7 +116,7 @@ func openapiScanExampleAuthMatches(L *lua.LState) int {
 // port from calling ctx.json.decode on a multi-MiB spec just to read
 // four fields.
 func openapiScanSecurityFacts(L *lua.LState) int {
-	body := RequireString(L, 1)
+	body := lua_engine.RequireString(L, 1)
 	facts := OpenAPIScanSecurityFacts([]byte(body))
 	if facts == nil {
 		L.Push(lua.LNil)
@@ -138,5 +140,5 @@ func openapiScanSecurityFacts(L *lua.LState) int {
 }
 
 func init() {
-	RegisterHelperTable("openapi", buildOpenAPITable)
+	lua_engine.RegisterHelperTable("openapi", buildOpenAPITable)
 }

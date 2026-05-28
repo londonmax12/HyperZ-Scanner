@@ -4,7 +4,7 @@ import (
 	lua "github.com/yuin/gopher-lua"
 )
 
-// lvalString coerces v to a Go string. Lua-side authors freely mix
+// LValString coerces v to a Go string. Lua-side authors freely mix
 // `nil`, strings, and tostring-able values; passing a non-string
 // through this helper yields "" rather than a runtime error, because
 // metadata fields are mostly optional and we'd rather quietly fall
@@ -14,7 +14,7 @@ import (
 // that must be a string (a header name, a redirect URL), prefer
 // RequireString so the bridge surfaces a useful argument-position
 // error.
-func lvalString(v lua.LValue) string {
+func LValString(v lua.LValue) string {
 	if v == nil || v == lua.LNil {
 		return ""
 	}
@@ -25,7 +25,7 @@ func lvalString(v lua.LValue) string {
 }
 
 // lvalInt coerces v to a Go int. Non-numbers (nil, strings,
-// userdata) collapse to 0. Like lvalString, this is for optional
+// userdata) collapse to 0. Like LValString, this is for optional
 // fields where 0/missing is benign; required numeric arguments
 // should use L.CheckInt(n) instead.
 func lvalInt(v lua.LValue) int {
@@ -57,10 +57,10 @@ func RequireString(L *lua.LState, pos int) string {
 	return ""
 }
 
-// optString returns the string at pos or fallback if pos is absent or
+// OptString returns the string at pos or fallback if pos is absent or
 // nil. Distinct from RequireString in that a missing argument is
 // allowed - useful for optional flags like dedupe scope overrides.
-func optString(L *lua.LState, pos int, fallback string) string {
+func OptString(L *lua.LState, pos int, fallback string) string {
 	v := L.Get(pos)
 	if v == lua.LNil {
 		return fallback
@@ -73,7 +73,7 @@ func optString(L *lua.LState, pos int, fallback string) string {
 
 // stringList reads an array-style Lua table at t[name] and returns its
 // values as a Go []string. Non-string entries are coerced via
-// lvalString (so a numeric dedupe part still serializes deterministically);
+// LValString (so a numeric dedupe part still serializes deterministically);
 // missing field or non-table value returns nil.
 func stringList(t *lua.LTable, name string) []string {
 	v := t.RawGetString(name)
@@ -87,7 +87,7 @@ func stringList(t *lua.LTable, name string) []string {
 	}
 	out := make([]string, 0, n)
 	for i := 1; i <= n; i++ {
-		out = append(out, lvalString(tbl.RawGetInt(i)))
+		out = append(out, LValString(tbl.RawGetInt(i)))
 	}
 	return out
 }

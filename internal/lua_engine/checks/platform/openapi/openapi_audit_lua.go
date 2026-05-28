@@ -1,9 +1,11 @@
-package lua_engine
+package openapi
 
 import (
 	"bytes"
 	"encoding/json"
 	"strings"
+
+	"github.com/londonmax12/hyperz/internal/lua_engine"
 )
 
 // This file exposes the openapi-audit check's helpers to the Lua
@@ -36,7 +38,7 @@ func OpenAPIScanExampleAuthMatches(body []byte) []OpenAPIExampleAuthMatchLua {
 	}
 	out := make([]OpenAPIExampleAuthMatchLua, 0, len(matches))
 	for _, m := range matches {
-		if !hasNearbyContext(body, m[0], m[1], openAPIExampleContextRe) {
+		if !lua_engine.HasNearbyContext(body, m[0], m[1], openAPIExampleContextRe) {
 			continue
 		}
 		scheme := titleAuthScheme(string(body[m[2]:m[3]]))
@@ -44,7 +46,7 @@ func OpenAPIScanExampleAuthMatches(body []byte) []OpenAPIExampleAuthMatchLua {
 		out = append(out, OpenAPIExampleAuthMatchLua{
 			Scheme:   scheme,
 			Raw:      raw,
-			Redacted: redactSecret(raw),
+			Redacted: lua_engine.RedactSecret(raw),
 		})
 	}
 	return out

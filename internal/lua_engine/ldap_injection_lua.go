@@ -10,7 +10,7 @@ package lua_engine
 // catalogue and the matcher live in Go; the Lua port owns the per-sink
 // orchestration only.
 func LDAPErrorNewMatches(body, baseline []byte) []string {
-	return subtractPatterns(matchLDAPErrors(body), matchLDAPErrors(baseline))
+	return SubtractPatterns(matchLDAPErrors(body), matchLDAPErrors(baseline))
 }
 
 // LDAPiBooleanProbePair carries one LDAPi truthy/falsy probe pair.

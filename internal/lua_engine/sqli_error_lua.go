@@ -12,5 +12,5 @@ package lua_engine
 // Each result is the matched pattern name so the Lua side can stamp
 // it into the per-finding detail.
 func SQLiErrorNewMatches(body, baseline []byte) []string {
-	return subtractPatterns(matchSQLPatterns(body), matchSQLPatterns(baseline))
+	return SubtractPatterns(MatchSQLPatterns(body), MatchSQLPatterns(baseline))
 }

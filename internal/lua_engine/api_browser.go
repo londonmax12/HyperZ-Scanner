@@ -123,11 +123,11 @@ func browserVisit(L *lua.LState) int {
 		}
 	}
 
-	url := lvalString(opts.RawGetString("url"))
+	url := LValString(opts.RawGetString("url"))
 	if url == "" {
 		L.ArgError(1, "opts.url is required")
 	}
-	token := lvalString(opts.RawGetString("token"))
+	token := LValString(opts.RawGetString("token"))
 	if token == "" {
 		L.ArgError(1, "opts.token is required")
 	}

@@ -38,13 +38,13 @@ func buildEvidenceTable(L *lua.LState) *lua.LTable {
 // ctx.page.headers / response:headers().
 func evidenceBuild(L *lua.LState) int {
 	opts := L.CheckTable(1)
-	method := lvalString(opts.RawGetString("method"))
+	method := LValString(opts.RawGetString("method"))
 	if method == "" {
 		method = http.MethodGet
 	}
-	url := lvalString(opts.RawGetString("url"))
+	url := LValString(opts.RawGetString("url"))
 	status := lvalInt(opts.RawGetString("status"))
-	body := lvalString(opts.RawGetString("body"))
+	body := LValString(opts.RawGetString("body"))
 	hdr := readHeaderArg(L, opts.RawGetString("headers"))
 
 	ev := BuildEvidence(method, url, status, hdr, body)
@@ -92,13 +92,13 @@ func evidenceFromExchange(L *lua.LState) int {
 	// the evidence rather than whatever the response userdata
 	// might hold.
 	if v := opts.RawGetString("body"); v != lua.LNil {
-		respBody = []byte(lvalString(v))
+		respBody = []byte(LValString(v))
 	}
 	if v := opts.RawGetString("truncated"); v != lua.LNil {
 		respTrun = lvalBool(v)
 	}
 	if v := opts.RawGetString("request_body"); v != lua.LNil {
-		reqBody = []byte(lvalString(v))
+		reqBody = []byte(LValString(v))
 	}
 	if v := opts.RawGetString("request_truncated"); v != lua.LNil {
 		reqTrun = lvalBool(v)
@@ -120,7 +120,7 @@ func evidenceFromExchange(L *lua.LState) int {
 	// supply it directly instead of having a snippet auto-built from
 	// the exchange.
 	if v := opts.RawGetString("snippet"); v != lua.LNil {
-		ev.Snippet = lvalString(v)
+		ev.Snippet = LValString(v)
 	}
 	L.Push(pushEvidence(L, ev))
 	return 1
@@ -145,7 +145,7 @@ func readHeaderArg(L *lua.LState, v lua.LValue) http.Header {
 	}
 	h := http.Header{}
 	tbl.ForEach(func(k, val lua.LValue) {
-		name := lvalString(k)
+		name := LValString(k)
 		if name == "" {
 			return
 		}
@@ -154,10 +154,10 @@ func readHeaderArg(L *lua.LState, v lua.LValue) http.Header {
 			h.Add(name, string(t))
 		case *lua.LTable:
 			t.ForEach(func(_, vv lua.LValue) {
-				h.Add(name, lvalString(vv))
+				h.Add(name, LValString(vv))
 			})
 		default:
-			h.Add(name, lvalString(val))
+			h.Add(name, LValString(val))
 		}
 	})
 	return h
@@ -197,10 +197,10 @@ func evidenceFromArg(v lua.LValue) *Evidence {
 		return nil
 	}
 	return &Evidence{
-		Method:     lvalString(tbl.RawGetString("method")),
-		RequestURL: lvalString(tbl.RawGetString("request_url")),
+		Method:     LValString(tbl.RawGetString("method")),
+		RequestURL: LValString(tbl.RawGetString("request_url")),
 		Status:     lvalInt(tbl.RawGetString("status")),
-		Snippet:    lvalString(tbl.RawGetString("snippet")),
+		Snippet:    LValString(tbl.RawGetString("snippet")),
 	}
 }
 

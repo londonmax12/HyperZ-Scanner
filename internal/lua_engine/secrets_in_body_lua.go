@@ -41,7 +41,7 @@ func ScanSecretsInBody(body []byte) []SecretHit {
 	for _, pat := range secretPatterns {
 		matches := pat.re.FindAllIndex(body, -1)
 		for _, m := range matches {
-			if pat.contextRE != nil && !hasNearbyContext(body, m[0], m[1], pat.contextRE) {
+			if pat.contextRE != nil && !HasNearbyContext(body, m[0], m[1], pat.contextRE) {
 				continue
 			}
 			raw := string(body[m[0]:m[1]])

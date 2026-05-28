@@ -122,8 +122,8 @@ func buildBodyTable(L *lua.LState) *lua.LTable {
 // stripping is treated as JSON. Used by the proto-pollution port to
 // gate the json-spaces gadget.
 func bodyIsJSONResponse(L *lua.LState) int {
-	ct := optString(L, 1, "")
-	body := optString(L, 2, "")
+	ct := OptString(L, 1, "")
+	body := OptString(L, 2, "")
 	L.Push(lua.LBool(ProtoPollutionIsJSONResponse(ct, []byte(body))))
 	return 1
 }
@@ -387,7 +387,7 @@ func readDirectivesArg(v lua.LValue) map[string][]string {
 	}
 	out := map[string][]string{}
 	tbl.ForEach(func(k, val lua.LValue) {
-		name := lvalString(k)
+		name := LValString(k)
 		if name == "" {
 			return
 		}
@@ -395,7 +395,7 @@ func readDirectivesArg(v lua.LValue) map[string][]string {
 			n := arr.Len()
 			srcs := make([]string, 0, n)
 			for i := 1; i <= n; i++ {
-				srcs = append(srcs, lvalString(arr.RawGetInt(i)))
+				srcs = append(srcs, LValString(arr.RawGetInt(i)))
 			}
 			out[name] = srcs
 			return
@@ -502,7 +502,7 @@ func bodySQLiErrorNewMatches(L *lua.LState) int {
 	body := RequireString(L, 1)
 	baseline := ""
 	if L.GetTop() >= 2 {
-		baseline = lvalString(L.Get(2))
+		baseline = LValString(L.Get(2))
 	}
 	L.Push(PushStringList(L, SQLiErrorNewMatches([]byte(body), []byte(baseline))))
 	return 1
@@ -530,7 +530,7 @@ func bodyTraversalNewMarkers(L *lua.LState) int {
 	body := RequireString(L, 1)
 	baseline := ""
 	if L.GetTop() >= 2 {
-		baseline = lvalString(L.Get(2))
+		baseline = LValString(L.Get(2))
 	}
 	L.Push(PushStringList(L, TraversalNewMarkers([]byte(body), []byte(baseline))))
 	return 1
@@ -550,7 +550,7 @@ func bodyLDAPErrorNewMatches(L *lua.LState) int {
 	body := RequireString(L, 1)
 	baseline := ""
 	if L.GetTop() >= 2 {
-		baseline = lvalString(L.Get(2))
+		baseline = LValString(L.Get(2))
 	}
 	L.Push(PushStringList(L, LDAPErrorNewMatches([]byte(body), []byte(baseline))))
 	return 1
@@ -560,7 +560,7 @@ func bodyMongoErrorNewMatches(L *lua.LState) int {
 	body := RequireString(L, 1)
 	baseline := ""
 	if L.GetTop() >= 2 {
-		baseline = lvalString(L.Get(2))
+		baseline = LValString(L.Get(2))
 	}
 	L.Push(PushStringList(L, MongoErrorNewMatches([]byte(body), []byte(baseline))))
 	return 1
@@ -570,7 +570,7 @@ func bodySSTIErrorNewMatches(L *lua.LState) int {
 	body := RequireString(L, 1)
 	baseline := ""
 	if L.GetTop() >= 2 {
-		baseline = lvalString(L.Get(2))
+		baseline = LValString(L.Get(2))
 	}
 	L.Push(PushStringList(L, SSTIErrorNewMatches([]byte(body), []byte(baseline))))
 	return 1
@@ -620,7 +620,7 @@ func bodyFindReflections(L *lua.LState) int {
 // shape so the Lua port iterates payloads in the same order.
 func bodyXSSPayloadsForContexts(L *lua.LState) int {
 	contexts := readStringList(L.Get(1))
-	level := optString(L, 2, "default")
+	level := OptString(L, 2, "default")
 	src := XSSPayloadsForContextsLua(contexts, level)
 	return pushPayloadList(L, src)
 }
@@ -710,7 +710,7 @@ func bodyCachePoisonFindReflection(L *lua.LState) int {
 		}
 	}
 	body := RequireString(L, 3)
-	baseline := optString(L, 4, "")
+	baseline := OptString(L, 4, "")
 	where, ok := CachePoisonFindReflection(needle, headers, []byte(body), []byte(baseline))
 	L.Push(lua.LString(where))
 	L.Push(lua.LBool(ok))
@@ -724,7 +724,7 @@ func bodyCachePoisonResponseDiverged(L *lua.LState) int {
 	status := L.CheckInt(1)
 	body := RequireString(L, 2)
 	baseStatus := L.CheckInt(3)
-	baseBody := optString(L, 4, "")
+	baseBody := OptString(L, 4, "")
 	L.Push(lua.LBool(CachePoisonResponseDiverged(status, []byte(body), baseStatus, []byte(baseBody))))
 	return 1
 }
@@ -794,7 +794,7 @@ func readStringList(v lua.LValue) []string {
 		n := tbl.Len()
 		out := make([]string, 0, n)
 		for i := 1; i <= n; i++ {
-			out = append(out, lvalString(tbl.RawGetInt(i)))
+			out = append(out, LValString(tbl.RawGetInt(i)))
 		}
 		return out
 	}

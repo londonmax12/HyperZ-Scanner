@@ -95,7 +95,7 @@ func (c *luaTwoPhase) dispatchPhaseFn(ctx context.Context, client *httpclient.Cl
 	errV := L.Get(-1)
 	findV := L.Get(-2)
 	if errV != lua.LNil {
-		return nil, fmt.Errorf("%s: %s: %s", c.name, fnName, lvalString(errV))
+		return nil, fmt.Errorf("%s: %s: %s", c.name, fnName, LValString(errV))
 	}
 	if findV == lua.LNil {
 		return nil, nil

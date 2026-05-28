@@ -206,11 +206,11 @@ type checkMeta struct {
 
 func readCheckMeta(t *lua.LTable) (checkMeta, error) {
 	var m checkMeta
-	m.name = lvalString(t.RawGetString("name"))
+	m.name = LValString(t.RawGetString("name"))
 	if m.name == "" {
 		return m, errors.New("module table missing required field `name`")
 	}
-	levelStr := lvalString(t.RawGetString("level"))
+	levelStr := LValString(t.RawGetString("level"))
 	if levelStr == "" {
 		return m, fmt.Errorf("%s: module table missing required field `level`", m.name)
 	}
@@ -220,7 +220,7 @@ func readCheckMeta(t *lua.LTable) (checkMeta, error) {
 	}
 	m.level = lvl
 
-	scopeStr := lvalString(t.RawGetString("scope"))
+	scopeStr := LValString(t.RawGetString("scope"))
 	if scopeStr == "" {
 		scopeStr = "page"
 	}
@@ -230,9 +230,9 @@ func readCheckMeta(t *lua.LTable) (checkMeta, error) {
 	}
 	m.scope = sc
 
-	m.cwe = lvalString(t.RawGetString("cwe"))
-	m.owasp = lvalString(t.RawGetString("owasp"))
-	m.remediation = lvalString(t.RawGetString("remediation"))
+	m.cwe = LValString(t.RawGetString("cwe"))
+	m.owasp = LValString(t.RawGetString("owasp"))
+	m.remediation = LValString(t.RawGetString("remediation"))
 
 	if b, ok := t.RawGetString("budget_seconds").(lua.LNumber); ok && b > 0 {
 		m.budget = time.Duration(float64(b) * float64(time.Second))
@@ -241,7 +241,7 @@ func readCheckMeta(t *lua.LTable) (checkMeta, error) {
 	// is opt-in because the scanner re-fetches the visited URL set
 	// during phase 2 the moment any TwoPhaseCheck is registered;
 	// silently promoting every module would burn the request budget.
-	phase := lvalString(t.RawGetString("phase"))
+	phase := LValString(t.RawGetString("phase"))
 	switch phase {
 	case "", "single":
 		m.twoPhase = false
@@ -299,7 +299,7 @@ func readCheckMeta(t *lua.LTable) (checkMeta, error) {
 	// in the value is an error rather than silently falling back, so
 	// `tier = "passsive"` does not silently disable a passive check's
 	// ordering guarantee.
-	if tierStr := lvalString(t.RawGetString("tier")); tierStr != "" {
+	if tierStr := LValString(t.RawGetString("tier")); tierStr != "" {
 		tier, err := parseTier(tierStr)
 		if err != nil {
 			return m, fmt.Errorf("%s: %w", m.name, err)
@@ -413,7 +413,7 @@ func parseAppliesTo(t *lua.LTable) (fingerprint.AppliesSpec, error) {
 		case *lua.LTable:
 			n := vv.Len()
 			for i := 1; i <= n; i++ {
-				if s := lvalString(vv.RawGetInt(i)); s != "" {
+				if s := LValString(vv.RawGetInt(i)); s != "" {
 					values = append(values, s)
 				}
 			}
@@ -470,7 +470,7 @@ func parsePatchedIn(t *lua.LTable) (fingerprint.PatchedIn, error) {
 			firstErr = fmt.Errorf("patched_in has unknown field %q (want server, language, framework, cms, cdn, or waf)", key)
 			return
 		}
-		val := lvalString(v)
+		val := LValString(v)
 		if val == "" {
 			firstErr = fmt.Errorf("patched_in.%s must be a non-empty version string", key)
 			return
@@ -666,7 +666,7 @@ func (c *LuaCheck) Run(ctx context.Context, client *httpclient.Client, sc *scope
 	errV := L.Get(-1)
 	findV := L.Get(-2)
 	if errV != lua.LNil {
-		return nil, fmt.Errorf("%s: %s", c.name, lvalString(errV))
+		return nil, fmt.Errorf("%s: %s", c.name, LValString(errV))
 	}
 	if findV == lua.LNil {
 		return nil, nil

@@ -1,4 +1,4 @@
-package lua_engine
+package crypto
 
 import (
 	"context"
@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/londonmax12/hyperz/internal/httpclient"
+	"github.com/londonmax12/hyperz/internal/lua_engine"
 )
 
 // jwksBodyCap bounds the JWKS document body we buffer for parsing. A
@@ -122,7 +123,7 @@ type publicKeyVariant struct {
 // Returns the first finding fired; a single Critical for the whole
 // token is enough - the report doesn't need to enumerate every
 // encoding variant that worked.
-func (c *JWTVulns) probeAlgConfusion(ctx context.Context, client *httpclient.Client, target string, src jwtSource, parsed *parsedJWT, oracle jwtOracle) *Finding {
+func (c *JWTVulns) probeAlgConfusion(ctx context.Context, client *httpclient.Client, target string, src jwtSource, parsed *parsedJWT, oracle jwtOracle) *lua_engine.Finding {
 	alg := strings.ToUpper(asString(parsed.header["alg"]))
 	if !asymmetricJWTAlgs[alg] {
 		return nil
@@ -489,7 +490,7 @@ func looksLikeJSON(body []byte) bool {
 // alg-confusion hit. The detail names the discovery URL and the key
 // encoding that worked so a remediator can reproduce the attack
 // from the finding alone.
-func buildAlgConfusionFinding(target string, parsed *parsedJWT, key publicKeyMaterial, variant publicKeyVariant, hsAlg, token string, probe jwtSnapshot, oracle jwtOracle) *Finding {
+func buildAlgConfusionFinding(target string, parsed *parsedJWT, key publicKeyMaterial, variant publicKeyVariant, hsAlg, token string, probe jwtSnapshot, oracle jwtOracle) *lua_engine.Finding {
 	originalAlg := asString(parsed.header["alg"])
 	detail := fmt.Sprintf(
 		"The validator accepted a JWT whose JOSE alg field is %q and whose signature is HMAC over the public key the "+
@@ -500,14 +501,14 @@ func buildAlgConfusionFinding(target string, parsed *parsedJWT, key publicKeyMat
 			"claims under the same public key the validator already publishes.",
 		hsAlg, key.origin, key.kid, variant.name, originalAlg,
 		probe.status,
-		Similarity(probe.body, oracle.auth.body),
-		Similarity(probe.body, oracle.noAuth.body),
+		lua_engine.Similarity(probe.body, oracle.auth.body),
+		lua_engine.Similarity(probe.body, oracle.noAuth.body),
 	)
-	return &Finding{
+	return &lua_engine.Finding{
 		Check:    "jwt-vulns",
 		Target:   target,
 		URL:      target,
-		Severity: SeverityCritical,
+		Severity: lua_engine.SeverityCritical,
 		Title:    "JWT validator vulnerable to algorithm confusion (asymmetric -> HMAC)",
 		Detail:   detail,
 		CWE:      "CWE-347",
@@ -517,7 +518,7 @@ func buildAlgConfusionFinding(target string, parsed *parsedJWT, key publicKeyMat
 			"libraries expose an algorithms parameter on verify - pass exactly the algorithm your tokens are signed " +
 			"with, never the alg value off the incoming header. As defence in depth, store signing keys typed (e.g. " +
 			"crypto.PublicKey vs []byte) so a mis-call cannot pass an asymmetric key into an HMAC verifier.",
-		Evidence: &Evidence{
+		Evidence: &lua_engine.Evidence{
 			Method:     http.MethodGet,
 			RequestURL: target,
 			Status:     probe.status,
@@ -525,10 +526,10 @@ func buildAlgConfusionFinding(target string, parsed *parsedJWT, key publicKeyMat
 				"Original alg: %s\nForged alg: %s\nKey discovery URL: %s\nKey ID: %s\nKey type: %s\nKey encoding tried: %s\nForged token: %s\nAuth baseline: status=%d\nNo-auth baseline: status=%d\nProbe response: status=%d\nSimilarity to auth: %.3f\nSimilarity to no-auth: %.3f",
 				originalAlg, hsAlg, key.origin, key.kid, key.kty, variant.name, redactToken(token),
 				oracle.auth.status, oracle.noAuth.status, probe.status,
-				Similarity(probe.body, oracle.auth.body),
-				Similarity(probe.body, oracle.noAuth.body),
+				lua_engine.Similarity(probe.body, oracle.auth.body),
+				lua_engine.Similarity(probe.body, oracle.noAuth.body),
 			),
 		},
-		DedupeKey: MakeKey("jwt-vulns", ScopeHost, target, "alg-confusion", "key:"+key.origin),
+		DedupeKey: lua_engine.MakeKey("jwt-vulns", lua_engine.ScopeHost, target, "alg-confusion", "key:"+key.origin),
 	}
 }

@@ -94,7 +94,7 @@ func tlsHandshake(L *lua.LState) int {
 		return 2
 	}
 	addr := RequireString(L, 1)
-	serverName := optString(L, 2, "")
+	serverName := OptString(L, 2, "")
 	if serverName == "" {
 		host, _, err := net.SplitHostPort(addr)
 		if err == nil {

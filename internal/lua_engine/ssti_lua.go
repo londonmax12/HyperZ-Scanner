@@ -11,7 +11,7 @@ import "strings"
 // SSTIErrorNewMatches exposes the SSTI check's pattern catalogue
 // against the Lua port's baseline + payload-stage subtraction.
 func SSTIErrorNewMatches(body, baseline []byte) []string {
-	return subtractPatterns(matchSSTIErrors(body), matchSSTIErrors(baseline))
+	return SubtractPatterns(matchSSTIErrors(body), matchSSTIErrors(baseline))
 }
 
 func SSTIErrorPayloadsLua() []string {

@@ -1,7 +1,9 @@
-package lua_engine
+package crypto
 
 import (
 	lua "github.com/yuin/gopher-lua"
+
+	"github.com/londonmax12/hyperz/internal/lua_engine"
 )
 
 // buildJWTTable returns the ctx.jwt helper namespace. Two entry
@@ -41,7 +43,7 @@ func buildJWTTable(L *lua.LState) *lua.LTable {
 type jwtCheckKey struct{}
 
 func jwtScan(L *lua.LState) int {
-	env := CurrentEnv(L)
+	env := lua_engine.CurrentEnv(L)
 	if env == nil {
 		L.RaiseError("ctx.jwt.scan called outside a check run")
 	}
@@ -66,7 +68,7 @@ func jwtScan(L *lua.LState) int {
 // because the Go *JWTVulns lives under the LuaCheck aux map, not in
 // the scanner's check list.
 func jwtDrain(L *lua.LState) int {
-	env := CurrentEnv(L)
+	env := lua_engine.CurrentEnv(L)
 	if env == nil {
 		L.RaiseError("ctx.jwt.drain called outside a check run")
 	}
@@ -77,7 +79,7 @@ func jwtDrain(L *lua.LState) int {
 		L.Push(L.NewTable())
 		return 1
 	}
-	// Drain inspects OOBFrom(ctx); pass through the env ctx the
+	// Drain inspects lua_engine.OOBFrom(ctx); pass through the env ctx the
 	// scanner already wired with the active OOB server.
 	facts := jwt.DrainFacts(env.Ctx)
 	L.Push(jwtFactsToLua(L, facts))
@@ -102,7 +104,7 @@ func jwtFactsToLua(L *lua.LState, facts []JWTFact) *lua.LTable {
 			case bool:
 				params.RawSetString(k, lua.LBool(tv))
 			case []string:
-				params.RawSetString(k, PushStringList(L, tv))
+				params.RawSetString(k, lua_engine.PushStringList(L, tv))
 			default:
 				// Coerce anything else to its Go fmt; the Lua side
 				// reads it as a string and a typo at the consumer
@@ -132,5 +134,5 @@ func toString(v any) string {
 }
 
 func init() {
-	RegisterHelperTable("jwt", buildJWTTable)
+	lua_engine.RegisterHelperTable("jwt", buildJWTTable)
 }

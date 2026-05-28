@@ -11,7 +11,7 @@ package lua_engine
 // that did not already appear in baseline. Mirrors the SQLiErrorNewMatches
 // shape used by the existing sqli-error Lua port.
 func TraversalNewMarkers(body, baseline []byte) []string {
-	return subtractPatterns(matchTraversalMarkers(body), matchTraversalMarkers(baseline))
+	return SubtractPatterns(matchTraversalMarkers(body), matchTraversalMarkers(baseline))
 }
 
 // TraversalMarkerHits returns the un-subtracted marker hits in body.

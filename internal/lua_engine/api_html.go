@@ -45,7 +45,7 @@ func htmlIterTags(L *lua.LState) int {
 		n := tbl.Len()
 		interesting = make(map[string]bool, n)
 		for i := 1; i <= n; i++ {
-			interesting[lvalString(tbl.RawGetInt(i))] = true
+			interesting[LValString(tbl.RawGetInt(i))] = true
 		}
 	}
 	tags := IterHTMLTags([]byte(body), interesting)

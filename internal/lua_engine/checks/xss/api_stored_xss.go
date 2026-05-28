@@ -1,4 +1,4 @@
-package lua_engine
+package xss
 
 import (
 	"bytes"
@@ -12,6 +12,7 @@ import (
 	"golang.org/x/net/html"
 
 	"github.com/londonmax12/hyperz/internal/core"
+	"github.com/londonmax12/hyperz/internal/lua_engine"
 	"github.com/londonmax12/hyperz/internal/target"
 )
 
@@ -80,7 +81,7 @@ type StoredXSSState struct {
 	detectFired  map[sinkKey]struct{}
 }
 
-// canaryRe matches the wire form NewCanary mints: the fixed prefix
+// canaryRe matches the wire form lua_engine.NewCanary mints: the fixed prefix
 // plus 12 lowercase hex chars. Detect uses this to extract every
 // plant-shaped token from a re-fetched body in one pass.
 var canaryRe = regexp.MustCompile(`hpzc[0-9a-f]{12}`)
@@ -287,7 +288,7 @@ type storedXSSStateUserData struct {
 }
 
 func storedXSSStateFn(L *lua.LState) int {
-	env := CurrentEnv(L)
+	env := lua_engine.CurrentEnv(L)
 	if env == nil {
 		L.RaiseError("ctx.stored_xss.state called outside a check run")
 	}
@@ -302,7 +303,7 @@ func storedXSSStateFn(L *lua.LState) int {
 }
 
 func storedXSSNewCanary(L *lua.LState) int {
-	L.Push(lua.LString(NewCanary()))
+	L.Push(lua.LString(lua_engine.NewCanary()))
 	return 1
 }
 
@@ -336,36 +337,36 @@ func storedXSSStateFromArg(L *lua.LState, pos int) *StoredXSSState {
 
 func storedXSSStatePlantOnce(L *lua.LState) int {
 	s := storedXSSStateFromArg(L, 1)
-	method := RequireString(L, 2)
-	urlStr := RequireString(L, 3)
-	loc := RequireString(L, 4)
-	name := RequireString(L, 5)
+	method := lua_engine.RequireString(L, 2)
+	urlStr := lua_engine.RequireString(L, 3)
+	loc := lua_engine.RequireString(L, 4)
+	name := lua_engine.RequireString(L, 5)
 	L.Push(lua.LBool(s.PlantOnce(method, urlStr, loc, name)))
 	return 1
 }
 
 func storedXSSStateRecordCanary(L *lua.LState) int {
 	s := storedXSSStateFromArg(L, 1)
-	canary := RequireString(L, 2)
+	canary := lua_engine.RequireString(L, 2)
 	opts := L.CheckTable(3)
 	s.RecordCanary(
 		canary,
-		lvalString(opts.RawGetString("method")),
-		lvalString(opts.RawGetString("url")),
-		lvalString(opts.RawGetString("loc")),
-		lvalString(opts.RawGetString("name")),
-		lvalString(opts.RawGetString("value")),
-		lvalString(opts.RawGetString("payload")),
-		lvalString(opts.RawGetString("payload_name")),
-		lvalString(opts.RawGetString("payload_ctx")),
-		lvalString(opts.RawGetString("plant_url")),
+		lua_engine.LValString(opts.RawGetString("method")),
+		lua_engine.LValString(opts.RawGetString("url")),
+		lua_engine.LValString(opts.RawGetString("loc")),
+		lua_engine.LValString(opts.RawGetString("name")),
+		lua_engine.LValString(opts.RawGetString("value")),
+		lua_engine.LValString(opts.RawGetString("payload")),
+		lua_engine.LValString(opts.RawGetString("payload_name")),
+		lua_engine.LValString(opts.RawGetString("payload_ctx")),
+		lua_engine.LValString(opts.RawGetString("plant_url")),
 	)
 	return 0
 }
 
 func storedXSSStateLookupCanary(L *lua.LState) int {
 	s := storedXSSStateFromArg(L, 1)
-	token := RequireString(L, 2)
+	token := lua_engine.RequireString(L, 2)
 	p := s.LookupCanary(token)
 	if p == nil {
 		L.Push(lua.LNil)
@@ -398,13 +399,13 @@ func storedXSSStateLookupCanary(L *lua.LState) int {
 // touching the Lua-level surface.
 func storedXSSStateAbsorbDetectURLs(L *lua.LState) int {
 	_ = storedXSSStateFromArg(L, 1)
-	env := CurrentEnv(L)
+	env := lua_engine.CurrentEnv(L)
 	if env == nil {
 		L.RaiseError("absorb_detect_urls called outside a check run")
 	}
-	plantURL := RequireString(L, 2)
-	loc := optString(L, 3, "")
-	body := optString(L, 4, "")
+	plantURL := lua_engine.RequireString(L, 2)
+	loc := lua_engine.OptString(L, 3, "")
+	body := lua_engine.OptString(L, 4, "")
 	harvestPlantResponseURLs(plantURL, loc, []byte(body), func(u string) {
 		core.DiscoverAt(env.Ctx, target.Page(u, ""), core.TierDeferred)
 	})
@@ -413,21 +414,21 @@ func storedXSSStateAbsorbDetectURLs(L *lua.LState) int {
 
 func storedXSSStateDetectFireOnce(L *lua.LState) int {
 	s := storedXSSStateFromArg(L, 1)
-	method := RequireString(L, 2)
-	urlStr := RequireString(L, 3)
-	loc := RequireString(L, 4)
-	name := RequireString(L, 5)
+	method := lua_engine.RequireString(L, 2)
+	urlStr := lua_engine.RequireString(L, 3)
+	loc := lua_engine.RequireString(L, 4)
+	name := lua_engine.RequireString(L, 5)
 	L.Push(lua.LBool(s.DetectFireOnce(method, urlStr, loc, name)))
 	return 1
 }
 
 func storedXSSStateFindCanaries(L *lua.LState) int {
 	_ = storedXSSStateFromArg(L, 1)
-	body := RequireString(L, 2)
-	L.Push(PushStringList(L, canaryRe.FindAllString(body, -1)))
+	body := lua_engine.RequireString(L, 2)
+	L.Push(lua_engine.PushStringList(L, canaryRe.FindAllString(body, -1)))
 	return 1
 }
 
 func init() {
-	RegisterHelperTable("stored_xss", buildStoredXSSTable)
+	lua_engine.RegisterHelperTable("stored_xss", buildStoredXSSTable)
 }

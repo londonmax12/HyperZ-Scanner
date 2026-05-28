@@ -75,7 +75,7 @@ func discoveryEntries(L *lua.LState) int {
 	}
 	catalogue := RequireString(L, 1)
 	aggressive := lvalBool(L.Get(2))
-	hostname := optString(L, 3, "")
+	hostname := OptString(L, 3, "")
 	stack := StackFrom(env.Ctx)
 	out := L.NewTable()
 	for i, e := range ContentDiscoveryEntriesLua(catalogue, aggressive, hostname, stack) {
@@ -95,7 +95,7 @@ func discoveryFollowUps(L *lua.LState) int {
 		L.RaiseError("ctx.discovery.follow_ups called outside a check run")
 	}
 	catalogue := RequireString(L, 1)
-	_ = optString(L, 2, "")
+	_ = OptString(L, 2, "")
 	hits := readPathSet(L.Get(3))
 	probed := readPathSet(L.Get(4))
 	stack := StackFrom(env.Ctx)
@@ -158,7 +158,7 @@ func discoveryContentTypeFamily(L *lua.LState) int {
 }
 
 func discoveryContentTypeFamilyAllowed(L *lua.LState) int {
-	ct := optString(L, 1, "")
+	ct := OptString(L, 1, "")
 	allowed := readStringList(L.Get(2))
 	L.Push(lua.LBool(ContentDiscoveryContentTypeFamilyAllowedLua(ct, allowed)))
 	return 1

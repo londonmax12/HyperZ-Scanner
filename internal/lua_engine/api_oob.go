@@ -107,7 +107,7 @@ func oobRegister(L *lua.LState) int {
 	if t, ok := L.Get(2).(*lua.LTable); ok {
 		t.ForEach(func(k, v lua.LValue) {
 			if name, ok := k.(lua.LString); ok {
-				extra[string(name)] = lvalString(v)
+				extra[string(name)] = LValString(v)
 			}
 		})
 	}
@@ -140,12 +140,12 @@ func oobRegisterAsset(L *lua.LState) int {
 	contentType := ""
 	extra := map[string]string{}
 	if t, ok := L.Get(2).(*lua.LTable); ok {
-		body = lvalString(t.RawGetString("body"))
-		contentType = lvalString(t.RawGetString("content_type"))
+		body = LValString(t.RawGetString("body"))
+		contentType = LValString(t.RawGetString("content_type"))
 		if et, ok := t.RawGetString("extra").(*lua.LTable); ok {
 			et.ForEach(func(k, v lua.LValue) {
 				if name, ok := k.(lua.LString); ok {
-					extra[string(name)] = lvalString(v)
+					extra[string(name)] = LValString(v)
 				}
 			})
 		}

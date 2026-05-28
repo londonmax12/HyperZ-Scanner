@@ -50,7 +50,7 @@ func ReadSnapshotArg(v lua.LValue) Snapshot {
 	}
 	return Snapshot{
 		Status: lvalInt(t.RawGetString("status")),
-		Body:   []byte(lvalString(t.RawGetString("body"))),
+		Body:   []byte(LValString(t.RawGetString("body"))),
 	}
 }
 
@@ -96,7 +96,7 @@ func oracleSimilarity(L *lua.LState) int {
 }
 
 // lvalNumber coerces v to a Go float64. Non-numbers (nil, strings,
-// userdata) collapse to 0. Mirrors lvalString / lvalInt but for the
+// userdata) collapse to 0. Mirrors LValString / lvalInt but for the
 // floating-point path the oracle helpers need to read latency / margin
 // values from Lua without forcing the author to differentiate int vs
 // float at the call site.

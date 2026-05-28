@@ -46,7 +46,7 @@ func ensureScopeMT(L *lua.LState) *lua.LTable {
 // scopeHasHosts implements scope:has_hosts() returning a bool. Lua
 // checks gate "open-scope" fallback heuristics (e.g. same-eTLD+1
 // probing) on this: when the operator has pinned an allowlist, we
-// trust scope.allows() outright; when they haven't, we apply a
+// trust scope.Allows() outright; when they haven't, we apply a
 // stricter same-organization filter on candidate targets.
 func scopeHasHosts(L *lua.LState) int {
 	ud, ok := L.CheckUserData(1).Value.(*scopeUserData)
@@ -57,7 +57,7 @@ func scopeHasHosts(L *lua.LState) int {
 	return 1
 }
 
-// scopeAllows implements scope:allows(rawurl) returning a bool. The
+// scopeAllows implements scope:Allows(rawurl) returning a bool. The
 // URL is parsed inside the binding so the Lua author does not have
 // to import the url helpers; an unparseable URL returns false (deny)
 // which is the safer default for active probes.

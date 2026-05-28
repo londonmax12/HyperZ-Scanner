@@ -1,4 +1,4 @@
-package lua_engine
+package concurrency
 
 import (
 	"context"
@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/londonmax12/hyperz/internal/lua_engine"
 	"github.com/londonmax12/hyperz/internal/page"
 	"github.com/londonmax12/hyperz/internal/scope"
 )
@@ -435,7 +436,7 @@ func (c *RaceCondition) probeSinglePacketH1(ctx context.Context, u *url.URL, add
 			// body byte). If this stalls beyond raceReadTimeout the
 			// orchestrator's read deadline will eventually wake the
 			// goroutine up; the barrier is non-fatal for late ones.
-			if err := writeAllDeadline(conn, prefix, raceReadTimeout); err != nil {
+			if err := lua_engine.WriteAllDeadline(conn, prefix, raceReadTimeout); err != nil {
 				results[idx] = raceProbeResult{Err: fmt.Errorf("write prefix: %w", err)}
 				preBarrierFailed.Add(1)
 				return
@@ -448,11 +449,11 @@ func (c *RaceCondition) probeSinglePacketH1(ctx context.Context, u *url.URL, add
 			// does is flush its final byte - the runtime scheduler
 			// services these writes within microseconds of each
 			// other.
-			if err := writeAllDeadline(conn, finalByte, raceReadTimeout); err != nil {
+			if err := lua_engine.WriteAllDeadline(conn, finalByte, raceReadTimeout); err != nil {
 				results[idx] = raceProbeResult{Err: fmt.Errorf("write final: %w", err)}
 				return
 			}
-			head, err := readResponseHead(conn, raceReadTimeout)
+			head, err := lua_engine.ReadResponseHead(conn, raceReadTimeout)
 			if err != nil && len(head) == 0 {
 				results[idx] = raceProbeResult{Err: fmt.Errorf("read: %w", err)}
 				return
@@ -514,10 +515,10 @@ func (c *RaceCondition) sendOne(ctx context.Context, u *url.URL, addr string, tl
 	}
 	defer conn.Close()
 	wire := buildRaceRequestBytes(u, t)
-	if err := writeAllDeadline(conn, []byte(wire), raceReadTimeout); err != nil {
+	if err := lua_engine.WriteAllDeadline(conn, []byte(wire), raceReadTimeout); err != nil {
 		return 0, "", fmt.Errorf("write: %w", err)
 	}
-	head, err := readResponseHead(conn, raceReadTimeout)
+	head, err := lua_engine.ReadResponseHead(conn, raceReadTimeout)
 	if err != nil && len(head) == 0 {
 		return 0, "", fmt.Errorf("read: %w", err)
 	}

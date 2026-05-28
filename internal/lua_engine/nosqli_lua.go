@@ -14,7 +14,7 @@ import (
 // MongoErrorNewMatches exposes the NoSQLi check's private pattern set
 // against the Lua port's baseline + payload-stage subtraction.
 func MongoErrorNewMatches(body, baseline []byte) []string {
-	return subtractPatterns(matchMongoErrors(body), matchMongoErrors(baseline))
+	return SubtractPatterns(matchMongoErrors(body), matchMongoErrors(baseline))
 }
 
 // NoSQLiBooleanOperator carries one MongoDB operator the Lua port

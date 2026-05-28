@@ -91,7 +91,7 @@ func urlEncodeValues(L *lua.LState) int {
 	}
 	values := url.Values{}
 	tbl.ForEach(func(k, val lua.LValue) {
-		name := lvalString(k)
+		name := LValString(k)
 		if name == "" {
 			return
 		}
@@ -99,14 +99,14 @@ func urlEncodeValues(L *lua.LState) int {
 		case lua.LString:
 			values.Add(name, string(t))
 		case lua.LNumber:
-			values.Add(name, lvalString(t))
+			values.Add(name, LValString(t))
 		case *lua.LTable:
 			n := t.Len()
 			for i := 1; i <= n; i++ {
-				values.Add(name, lvalString(t.RawGetInt(i)))
+				values.Add(name, LValString(t.RawGetInt(i)))
 			}
 		default:
-			values.Add(name, lvalString(val))
+			values.Add(name, LValString(val))
 		}
 	})
 	L.Push(lua.LString(values.Encode()))
