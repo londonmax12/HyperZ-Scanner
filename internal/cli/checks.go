@@ -17,6 +17,7 @@ import (
 	_ "github.com/londonmax12/hyperz/internal/lua_engine/checks/concurrency"
 	_ "github.com/londonmax12/hyperz/internal/lua_engine/checks/crypto"
 	_ "github.com/londonmax12/hyperz/internal/lua_engine/checks/discovery"
+	_ "github.com/londonmax12/hyperz/internal/lua_engine/checks/headers"
 	_ "github.com/londonmax12/hyperz/internal/lua_engine/checks/platform/oauth"
 	_ "github.com/londonmax12/hyperz/internal/lua_engine/checks/platform/openapi"
 	_ "github.com/londonmax12/hyperz/internal/lua_engine/checks/platform/sse"

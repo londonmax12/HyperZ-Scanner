@@ -4,7 +4,7 @@
 -- base-uri, 'unsafe-inline' / 'unsafe-eval' in script-src, wildcard
 -- sources, scheme-only allowlists, Report-Only-without-enforcement,
 -- and so on. Directive parsing and matchers live behind
--- ctx.body.analyze_csp so the spec-fatal duplicate-detection and the
+-- ctx.headers.analyze_csp so the spec-fatal duplicate-detection and the
 -- keyword / hash / nonce matchers stay in exactly one place.
 
 local check = {
@@ -32,7 +32,7 @@ function check.run(ctx)
     return nil
   end
 
-  local result = ctx.body.analyze_csp(enforcing, report_only)
+  local result = ctx.headers.analyze_csp(enforcing, report_only)
   if #result.weaknesses == 0 then return nil end
 
   local max_sev = "info"

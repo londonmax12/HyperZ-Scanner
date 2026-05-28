@@ -35,7 +35,7 @@ function check.run(ctx)
   -- Per RFC 6797 §8.1 the UA processes only the first HSTS header
   -- when multiple are present. parse_hsts honors that; duplication
   -- is surfaced separately so an author notices the masking.
-  local parsed = ctx.body.parse_hsts(values[1])
+  local parsed = ctx.headers.parse_hsts(values[1])
 
   local weaknesses = {}
   local function add(sev, id, detail)

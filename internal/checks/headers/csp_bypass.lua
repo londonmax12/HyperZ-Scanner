@@ -36,7 +36,7 @@ function check.run(ctx)
   if not u or u.scheme == "" or u.host == "" then return nil end
   if not ctx.scope:allows(ctx.page.url) then return nil end
 
-  local snap, err = ctx:ensure_response { max_body = ctx.body.csp_bypass_body_cap() }
+  local snap, err = ctx:ensure_response { max_body = ctx.headers.csp_bypass_body_cap() }
   if err then return nil, err end
 
   local enforcing = snap.headers:values("Content-Security-Policy")
@@ -45,7 +45,7 @@ function check.run(ctx)
     -- for the bypass probes to bite on.
     return nil
   end
-  local dirs = ctx.body.csp_parse_directives(enforcing[1])
+  local dirs = ctx.headers.csp_parse_directives(enforcing[1])
 
   local findings = {}
   local first_err
@@ -94,11 +94,11 @@ end
 -- policy has no nonces (nothing to compare) or the second response
 -- omits the CSP header (cannot claim reuse without a second sample).
 function probe_nonce_reuse(ctx, dirs)
-  local original = ctx.body.csp_nonce_values(dirs)
+  local original = ctx.headers.csp_nonce_values(dirs)
   if #original == 0 then return nil end
 
   local target = ctx.page.url
-  local probe_url, err = ctx.url.append_query_param(target, "hyperz_nonce_probe", "1")
+  local probe_url, err = ctx.headers.append_query_param(target, "hyperz_nonce_probe", "1")
   if err then return nil, err end
 
   local req, nerr = ctx.client:new_request {
@@ -114,13 +114,13 @@ function probe_nonce_reuse(ctx, dirs)
   local resp, derr = ctx.client["do"](ctx.client, req)
   if derr then return nil, derr end
 
-  local _, _, rerr = resp:read_body_capped(ctx.body.csp_bypass_body_cap())
+  local _, _, rerr = resp:read_body_capped(ctx.headers.csp_bypass_body_cap())
   if rerr then return nil, rerr end
 
   local second_policies = resp:headers():values("Content-Security-Policy")
   if #second_policies == 0 then return nil end
-  local second_dirs = ctx.body.csp_parse_directives(second_policies[1])
-  local second_nonces = ctx.body.csp_nonce_values(second_dirs)
+  local second_dirs = ctx.headers.csp_parse_directives(second_policies[1])
+  local second_nonces = ctx.headers.csp_nonce_values(second_dirs)
   if #second_nonces == 0 then return nil end
 
   local second_set = {}
@@ -171,13 +171,13 @@ function probe_jsonp_whitelist(ctx, dirs)
   end
   if not script_srcs then return nil end
 
-  local canary = ctx.body.csp_bypass_callback_canary()
-  local body_cap = ctx.body.csp_bypass_body_cap()
+  local canary = ctx.headers.csp_bypass_callback_canary()
+  local body_cap = ctx.headers.csp_bypass_body_cap()
   local target = ctx.page.url
 
   local findings, first_err = {}, nil
-  for _, probe in ipairs(ctx.body.csp_bypass_jsonp_probes()) do
-    local matched, ok = ctx.body.csp_script_src_allows_host(script_srcs, probe.host)
+  for _, probe in ipairs(ctx.headers.csp_bypass_jsonp_probes()) do
+    local matched, ok = ctx.headers.csp_script_src_allows_host(script_srcs, probe.host)
     if ok then
       local probe_url = probe.url_tmpl .. canary
       local req, nerr = ctx.client:new_request { method = methods.get, url = probe_url }
@@ -191,7 +191,7 @@ function probe_jsonp_whitelist(ctx, dirs)
           local body, truncated, rerr = resp:read_body_capped(body_cap)
           if rerr then
             if not first_err then first_err = rerr end
-          elseif ctx.body.csp_confirms_jsonp(resp:headers():get("Content-Type"), body, canary) then
+          elseif ctx.headers.csp_confirms_jsonp(resp:headers():get("Content-Type"), body, canary) then
             findings[#findings + 1] = {
               target      = target,
               url         = target,
@@ -208,7 +208,7 @@ function probe_jsonp_whitelist(ctx, dirs)
                 url     = probe_url,
                 status  = resp:status(),
                 headers = resp:headers(),
-                body    = ctx.body.csp_bypass_jsonp_snippet(body, truncated),
+                body    = ctx.headers.csp_bypass_jsonp_snippet(body, truncated),
               },
               dedupe_parts = { "jsonp:" .. probe.host },
             }
@@ -227,9 +227,9 @@ end
 -- the passive csp-weak nudge, and relative srcs with base-uri 'none'
 -- are inert.
 function probe_base_uri_hijack(ctx, snap, dirs)
-  if not ctx.body.csp_base_uri_hijackable(dirs) then return nil end
+  if not ctx.headers.csp_base_uri_hijackable(dirs) then return nil end
   if not snap.body or snap.body == "" then return nil end
-  local relatives = ctx.body.csp_relative_script_srcs(snap.body)
+  local relatives = ctx.headers.csp_relative_script_srcs(snap.body)
   if #relatives == 0 then return nil end
 
   local preview = {}

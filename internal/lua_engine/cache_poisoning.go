@@ -80,7 +80,23 @@ func cachePoisonProbeURL(target string) (string, error) {
 	if _, err := rand.Read(buf[:]); err != nil {
 		return "", err
 	}
-	return appendQueryParam(target, cachePoisonCachebusterParam, hex.EncodeToString(buf[:]))
+	return cachePoisonAppendQueryParam(target, cachePoisonCachebusterParam, hex.EncodeToString(buf[:]))
+}
+
+// cachePoisonAppendQueryParam returns rawurl with key=val added to its
+// query string. Local copy of the same one-liner the csp-bypass family
+// uses for its nonce-reuse cache-buster, kept here so the cache-
+// poisoning probe URL builder has no cross-family dependency once the
+// headers subpackage moves out of lua_engine root.
+func cachePoisonAppendQueryParam(rawurl, key, val string) (string, error) {
+	u, err := url.Parse(rawurl)
+	if err != nil {
+		return "", err
+	}
+	q := u.Query()
+	q.Set(key, val)
+	u.RawQuery = q.Encode()
+	return u.String(), nil
 }
 
 // deceptionURL returns target with cacheDeceptionSuffix appended to the

@@ -1,8 +1,10 @@
-package lua_engine
+package headers
 
 import (
 	"fmt"
 	"strings"
+
+	"github.com/londonmax12/hyperz/internal/lua_engine"
 )
 
 // cspWeakness is one (directive, problem) pair surfaced during analysis.
@@ -11,7 +13,7 @@ import (
 // one report row with seven bullets instead of seven near-duplicate rows.
 type cspWeakness struct {
 	directive string
-	severity  Severity
+	severity  lua_engine.Severity
 	// id is a short stable token used as a per-directive dedupe suffix so
 	// the same weakness on the same host produces the same DedupeKey
 	// across multiple runs and across crawled URLs.
@@ -133,7 +135,7 @@ func analyzeScriptSrc(dirs map[string][]string) []cspWeakness {
 		// directive in CSP, so it gets the strongest flag.
 		return []cspWeakness{{
 			directive: dir,
-			severity:  SeverityHigh,
+			severity:  lua_engine.SeverityHigh,
 			id:        "missing-and-no-default",
 			detail:    "Neither script-src nor default-src is set, so the policy places no restriction on where scripts may load from. Any reflected or stored HTML-injection can pull script content from an attacker-controlled origin. Add an explicit script-src (ideally nonce-based) or at minimum set default-src 'self'.",
 		}}
@@ -151,7 +153,7 @@ func analyzeScriptSrc(dirs map[string][]string) []cspWeakness {
 		// also present, so we only fire when there is no such neutralizer.
 		ws = append(ws, cspWeakness{
 			directive: dir,
-			severity:  SeverityCritical,
+			severity:  lua_engine.SeverityCritical,
 			id:        "unsafe-inline",
 			detail:    "'unsafe-inline' is allowlisted with no neutralizing nonce or hash source, so inline event handlers and inline <script> blocks run unchallenged. This re-opens the exact XSS pathway CSP is meant to close. Replace inline scripts with external files or per-response nonces, then drop 'unsafe-inline'.",
 		})
@@ -160,7 +162,7 @@ func analyzeScriptSrc(dirs map[string][]string) []cspWeakness {
 	if hasKeyword(sources, "'unsafe-eval'") {
 		ws = append(ws, cspWeakness{
 			directive: dir,
-			severity:  SeverityHigh,
+			severity:  lua_engine.SeverityHigh,
 			id:        "unsafe-eval",
 			detail:    "'unsafe-eval' is allowlisted, permitting eval(), Function(), setTimeout(string), and similar string-to-code call sites. An attacker who lands a string into one of those sinks gets script execution under the page's origin. Refactor offending call sites to pass functions instead of strings, then drop 'unsafe-eval'.",
 		})
@@ -169,7 +171,7 @@ func analyzeScriptSrc(dirs map[string][]string) []cspWeakness {
 	if hasKeyword(sources, "'unsafe-hashes'") {
 		ws = append(ws, cspWeakness{
 			directive: dir,
-			severity:  SeverityMedium,
+			severity:  lua_engine.SeverityMedium,
 			id:        "unsafe-hashes",
 			detail:    "'unsafe-hashes' is set, allowing inline event handler attributes (onclick=, onerror=, ...) to execute when their bodies match an explicit hash. Hash-allowlisting individual handlers is brittle and tends to grow into a sprawl of exceptions; migrate handlers to addEventListener in scripts that already satisfy the policy.",
 		})
@@ -178,7 +180,7 @@ func analyzeScriptSrc(dirs map[string][]string) []cspWeakness {
 	if hasBareWildcard(sources) {
 		ws = append(ws, cspWeakness{
 			directive: dir,
-			severity:  SeverityHigh,
+			severity:  lua_engine.SeverityHigh,
 			id:        "wildcard-host",
 			detail:    "Bare \"*\" appears in the script-src source list, allowing scripts to load from any host. Replace with an explicit allowlist of origins you actually trust, or - preferably - a nonce-based policy.",
 		})
@@ -187,7 +189,7 @@ func analyzeScriptSrc(dirs map[string][]string) []cspWeakness {
 	if schemes := schemeOnlySources(sources, dangerousScriptSchemes); len(schemes) > 0 {
 		ws = append(ws, cspWeakness{
 			directive: dir,
-			severity:  SeverityHigh,
+			severity:  lua_engine.SeverityHigh,
 			id:        "scheme-only:" + strings.Join(schemes, ","),
 			detail:    fmt.Sprintf("script-src allows scheme-only source(s) %s, which trust every host that speaks that scheme. \"https:\" alone permits any HTTPS-hosted CDN; \"data:\" / \"blob:\" let an attacker smuggle a script body inline. Replace with concrete origins and/or move to a nonce-based policy.", strings.Join(schemes, ", ")),
 		})
@@ -200,7 +202,7 @@ func analyzeScriptSrc(dirs map[string][]string) []cspWeakness {
 		// silently collapses to a no-op for first-party script.
 		ws = append(ws, cspWeakness{
 			directive: dir,
-			severity:  SeverityMedium,
+			severity:  lua_engine.SeverityMedium,
 			id:        "strict-dynamic-without-nonce",
 			detail:    "'strict-dynamic' is set but no nonce or hash source is provided to bootstrap trust. With nothing trusted to start from, scripts will be blocked entirely in CSP3 browsers (a denial-of-functionality), and in browsers that fall back to the allowlist the host / scheme entries take over instead - hiding the policy author's intent.",
 		})
@@ -212,7 +214,7 @@ func analyzeScriptSrc(dirs map[string][]string) []cspWeakness {
 		// script policy. Worth a low-severity nudge.
 		ws = append(ws, cspWeakness{
 			directive: dir,
-			severity:  SeverityLow,
+			severity:  lua_engine.SeverityLow,
 			id:        "inherited-from-default",
 			detail:    "script-src is not set explicitly and is inheriting from default-src. Any later loosening of default-src will silently loosen script execution too. Set script-src explicitly so its policy is decoupled from the catch-all.",
 		})
@@ -229,7 +231,7 @@ func analyzeStyleSrc(dirs map[string][]string) []cspWeakness {
 		// narrower than for scripts; reported at Low.
 		return []cspWeakness{{
 			directive: dir,
-			severity:  SeverityLow,
+			severity:  lua_engine.SeverityLow,
 			id:        "missing-and-no-default",
 			detail:    "Neither style-src nor default-src is set, so stylesheets and inline styles are unrestricted. CSS injection can be used for data exfiltration via selector-based side channels and for clickjacking-adjacent UI rewrites; set at least default-src 'self' or an explicit style-src.",
 		}}
@@ -239,7 +241,7 @@ func analyzeStyleSrc(dirs map[string][]string) []cspWeakness {
 	if hasKeyword(sources, "'unsafe-inline'") && !hasNonceOrHash(sources) {
 		ws = append(ws, cspWeakness{
 			directive: dir,
-			severity:  SeverityMedium,
+			severity:  lua_engine.SeverityMedium,
 			id:        "unsafe-inline",
 			detail:    "'unsafe-inline' is allowlisted in style-src with no neutralizing nonce or hash. CSS injection can then exfiltrate attribute values via crafted selectors (the \"CSS keylogger\" pattern) and overlay UI elements for clickjacking. Replace inline styles with external files or nonces.",
 		})
@@ -247,7 +249,7 @@ func analyzeStyleSrc(dirs map[string][]string) []cspWeakness {
 	if hasBareWildcard(sources) {
 		ws = append(ws, cspWeakness{
 			directive: dir,
-			severity:  SeverityLow,
+			severity:  lua_engine.SeverityLow,
 			id:        "wildcard-host",
 			detail:    "Bare \"*\" appears in style-src, allowing stylesheets from any host. Narrow this to the specific origins that actually serve your CSS.",
 		})
@@ -258,7 +260,7 @@ func analyzeStyleSrc(dirs map[string][]string) []cspWeakness {
 		// catch-all. Set style-src explicitly so the two stay decoupled.
 		ws = append(ws, cspWeakness{
 			directive: dir,
-			severity:  SeverityLow,
+			severity:  lua_engine.SeverityLow,
 			id:        "inherited-from-default",
 			detail:    "style-src is not set explicitly and is inheriting from default-src. Any later loosening of default-src will silently loosen stylesheet policy too. Set style-src explicitly so its policy is decoupled from the catch-all.",
 		})
@@ -275,7 +277,7 @@ func analyzeObjectSrc(dirs map[string][]string) []cspWeakness {
 	if !present {
 		return []cspWeakness{{
 			directive: dir,
-			severity:  SeverityMedium,
+			severity:  lua_engine.SeverityMedium,
 			id:        "missing-and-no-default",
 			detail:    "Neither object-src nor default-src is set. <object>, <embed>, and (legacy) <applet> can load arbitrary plugin / SVG content that executes script under the page origin. Set object-src 'none' explicitly - it is almost never needed and has no cost.",
 		}}
@@ -288,14 +290,14 @@ func analyzeObjectSrc(dirs map[string][]string) []cspWeakness {
 	if hasBareWildcard(sources) {
 		return []cspWeakness{{
 			directive: dir,
-			severity:  SeverityMedium,
+			severity:  lua_engine.SeverityMedium,
 			id:        "wildcard-host",
 			detail:    "object-src is set to \"*\", allowing <object> / <embed> content to load from anywhere. Set object-src 'none' unless your app actually relies on plugin content.",
 		}}
 	}
 	return []cspWeakness{{
 		directive: dir,
-		severity:  SeverityLow,
+		severity:  lua_engine.SeverityLow,
 		id:        "not-none",
 		detail:    fmt.Sprintf("object-src resolves to %q rather than 'none'. <object> / <embed> are almost never required in modern apps and are a well-known XSS smuggling surface; tightening to 'none' is the recommended default.", strings.Join(sources, " ")),
 	}}
@@ -310,7 +312,7 @@ func analyzeBaseURI(dirs map[string][]string) []cspWeakness {
 	if !present {
 		return []cspWeakness{{
 			directive: dir,
-			severity:  SeverityMedium,
+			severity:  lua_engine.SeverityMedium,
 			id:        "missing",
 			detail:    "base-uri is not set (and unlike most directives it does NOT inherit from default-src). An attacker with HTML injection can inject <base href=\"//evil/\"> to repoint every relative URL on the page - including script and stylesheet src - to a host they control. Set base-uri 'none' (or 'self') so the original document URL stays authoritative.",
 		}}
@@ -318,7 +320,7 @@ func analyzeBaseURI(dirs map[string][]string) []cspWeakness {
 	if hasBareWildcard(v) {
 		return []cspWeakness{{
 			directive: dir,
-			severity:  SeverityMedium,
+			severity:  lua_engine.SeverityMedium,
 			id:        "wildcard-host",
 			detail:    "base-uri is set to \"*\", which permits an injected <base> tag to point relative URLs at any host. Restrict to 'none' or 'self'.",
 		}}
@@ -335,7 +337,7 @@ func analyzeFrameAncestors(dirs map[string][]string) []cspWeakness {
 	if !present {
 		return []cspWeakness{{
 			directive: dir,
-			severity:  SeverityLow,
+			severity:  lua_engine.SeverityLow,
 			id:        "missing",
 			detail:    "frame-ancestors is not set (it does NOT inherit from default-src). The CSP therefore provides no clickjacking defense and the site relies entirely on X-Frame-Options, which is older and less expressive. Add frame-ancestors 'none' (or 'self') to define framing policy in CSP as well.",
 		}}
@@ -343,7 +345,7 @@ func analyzeFrameAncestors(dirs map[string][]string) []cspWeakness {
 	if hasBareWildcard(v) {
 		return []cspWeakness{{
 			directive: dir,
-			severity:  SeverityMedium,
+			severity:  lua_engine.SeverityMedium,
 			id:        "wildcard-host",
 			detail:    "frame-ancestors is set to \"*\", explicitly allowing any site to frame this page. Unless this is an intentional embed widget, restrict to 'none' or 'self' to defend against clickjacking.",
 		}}
@@ -361,7 +363,7 @@ func analyzeFormAction(dirs map[string][]string) []cspWeakness {
 	if !present {
 		return []cspWeakness{{
 			directive: dir,
-			severity:  SeverityLow,
+			severity:  lua_engine.SeverityLow,
 			id:        "missing",
 			detail:    "form-action is not set (it does NOT inherit from default-src), so an injected <form> or a <button formaction=\"...\"> override can post submitted values to any origin. Set form-action 'self' (plus any legitimate off-site POST targets) to bound where form submissions may go.",
 		}}
@@ -369,7 +371,7 @@ func analyzeFormAction(dirs map[string][]string) []cspWeakness {
 	if hasBareWildcard(v) {
 		return []cspWeakness{{
 			directive: dir,
-			severity:  SeverityLow,
+			severity:  lua_engine.SeverityLow,
 			id:        "wildcard-host",
 			detail:    "form-action is set to \"*\", which lets a single HTML injection redirect any form submission off-site. Restrict to 'self' (and the small set of off-site POST targets the app actually uses, if any).",
 		}}

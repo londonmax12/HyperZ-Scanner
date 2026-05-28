@@ -1,4 +1,4 @@
-package lua_engine
+package headers
 
 // This file exposes the hsts-weak check's helpers to the Lua bridge.
 // Sibling to hsts_weak.go: forwards into the package-private

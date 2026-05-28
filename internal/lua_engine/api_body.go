@@ -36,12 +36,6 @@ import (
 //	     exposed separately for ports that need to redact a value
 //	     that did not come from find_secrets (rare).
 //
-//	ctx.body.parse_hsts(value)
-//	  -> { directives = { name = value, ... },
-//	       errors    = [{ id = ..., detail = ... }, ...] }
-//	     Wraps the HSTS-weak directive parser so the port iterates
-//	     over the same parser output the Go check does.
-//
 //	ctx.body.source_map_kind(content_type)
 //	  -> (kind_string, ok_bool) -> ("js"|"css"|"", false|true).
 //
@@ -62,22 +56,10 @@ func buildBodyTable(L *lua.LState) *lua.LTable {
 	t.RawSetString("is_scannable_ct", L.NewFunction(bodyIsScannableCT))
 	t.RawSetString("find_secrets", L.NewFunction(bodyFindSecrets))
 	t.RawSetString("redact_secret", L.NewFunction(bodyRedactSecret))
-	t.RawSetString("parse_hsts", L.NewFunction(bodyParseHSTS))
 	t.RawSetString("source_map_kind", L.NewFunction(bodySourceMapKind))
 	t.RawSetString("find_source_map_ref", L.NewFunction(bodyFindSourceMapRef))
 	t.RawSetString("looks_like_source_map", L.NewFunction(bodyLooksLikeSourceMap))
 	t.RawSetString("scan_known_js_libs", L.NewFunction(bodyScanKnownJSLibs))
-	t.RawSetString("analyze_csp", L.NewFunction(bodyAnalyzeCSP))
-	t.RawSetString("csp_parse_directives", L.NewFunction(bodyCSPParseDirectives))
-	t.RawSetString("csp_nonce_values", L.NewFunction(bodyCSPNonceValues))
-	t.RawSetString("csp_base_uri_hijackable", L.NewFunction(bodyCSPBaseURIHijackable))
-	t.RawSetString("csp_script_src_allows_host", L.NewFunction(bodyCSPScriptSrcAllowsHost))
-	t.RawSetString("csp_confirms_jsonp", L.NewFunction(bodyCSPConfirmsJSONP))
-	t.RawSetString("csp_relative_script_srcs", L.NewFunction(bodyCSPRelativeScriptSrcs))
-	t.RawSetString("csp_bypass_jsonp_probes", L.NewFunction(bodyCSPBypassJSONPProbes))
-	t.RawSetString("csp_bypass_callback_canary", L.NewFunction(bodyCSPBypassCallbackCanary))
-	t.RawSetString("csp_bypass_body_cap", L.NewFunction(bodyCSPBypassBodyCap))
-	t.RawSetString("csp_bypass_jsonp_snippet", L.NewFunction(bodyCSPBypassJSONPSnippet))
 	t.RawSetString("sqli_error_new_matches", L.NewFunction(bodySQLiErrorNewMatches))
 	t.RawSetString("sqli_error_payloads", L.NewFunction(bodySQLiErrorPayloads))
 	t.RawSetString("traversal_new_markers", L.NewFunction(bodyTraversalNewMarkers))
@@ -240,30 +222,6 @@ func bodyRedactSecret(L *lua.LState) int {
 	return 1
 }
 
-// bodyParseHSTS returns { directives = { name = value }, errors = [...] }.
-// directives uses raw values (empty string for flag-only directives);
-// the structural-error array carries the spec-fatal duplicates the Go
-// parser surfaces separately.
-func bodyParseHSTS(L *lua.LState) int {
-	parsed := ParseHSTSHeader(RequireString(L, 1))
-	out := L.NewTable()
-	dirs := L.NewTable()
-	for k, v := range parsed.Directives {
-		dirs.RawSetString(k, lua.LString(v))
-	}
-	out.RawSetString("directives", dirs)
-	errs := L.NewTable()
-	for i, e := range parsed.Errors {
-		entry := L.NewTable()
-		entry.RawSetString("id", lua.LString(e.ID))
-		entry.RawSetString("detail", lua.LString(e.Detail))
-		errs.RawSetInt(i+1, entry)
-	}
-	out.RawSetString("errors", errs)
-	L.Push(out)
-	return 1
-}
-
 func bodySourceMapKind(L *lua.LState) int {
 	kind, ok := SourceMapKind(RequireString(L, 1))
 	L.Push(lua.LString(kind))
@@ -309,168 +267,6 @@ func bodyScanKnownJSLibs(L *lua.LState) int {
 		out.RawSetInt(i+1, entry)
 	}
 	L.Push(out)
-	return 1
-}
-
-// bodyAnalyzeCSP runs the CSP-weak analyzer against the enforcing +
-// report-only header values and returns the deduplicated weakness
-// list. Both arg slots accept either a string (a single header value),
-// a Lua array of strings (multiple headers as http.Header.Values does),
-// or nil (header absent). The result is { is_report_only, multi_count,
-// weaknesses = [{directive, severity, id, detail}, ...] }.
-func bodyAnalyzeCSP(L *lua.LState) int {
-	enforcing := readStringList(L.Get(1))
-	reportOnly := readStringList(L.Get(2))
-	out := L.NewTable()
-	out.RawSetString("is_report_only", lua.LBool(CSPIsReportOnly(enforcing, reportOnly)))
-	out.RawSetString("enforcing_count", lua.LNumber(len(enforcing)))
-	out.RawSetString("report_only_count", lua.LNumber(len(reportOnly)))
-	weaknesses := L.NewTable()
-	for i, w := range AnalyzeCSP(enforcing, reportOnly) {
-		entry := L.NewTable()
-		entry.RawSetString("directive", lua.LString(w.Directive))
-		entry.RawSetString("severity", lua.LString(string(w.Severity)))
-		entry.RawSetString("id", lua.LString(w.ID))
-		entry.RawSetString("detail", lua.LString(w.Detail))
-		weaknesses.RawSetInt(i+1, entry)
-	}
-	out.RawSetString("weaknesses", weaknesses)
-	L.Push(out)
-	return 1
-}
-
-// bodyCSPParseDirectives wraps CSPParseDirectivesLua. Returns
-// a Lua table mapping directive name (lowercased) -> array of source
-// tokens (case preserved). Authors call this to read script-src /
-// style-src / base-uri off a raw CSP header value the same way the
-// csp-bypass Go check does internally.
-func bodyCSPParseDirectives(L *lua.LState) int {
-	dirs := CSPParseDirectivesLua(RequireString(L, 1))
-	out := L.NewTable()
-	for name, sources := range dirs {
-		out.RawSetString(name, PushStringList(L, sources))
-	}
-	L.Push(out)
-	return 1
-}
-
-// readDirectivesArg pulls a {directive = [sources]} Lua table back into
-// the map shape CSPParseDirectivesLua produces. Used by the
-// nonce-reuse / base-uri / script-src-allowlist helpers below so the
-// Lua port hands directives back to Go for analysis without each
-// helper re-parsing the raw header.
-func readDirectivesArg(v lua.LValue) map[string][]string {
-	tbl, ok := v.(*lua.LTable)
-	if !ok {
-		return nil
-	}
-	out := map[string][]string{}
-	tbl.ForEach(func(k, val lua.LValue) {
-		name := LValString(k)
-		if name == "" {
-			return
-		}
-		if arr, ok := val.(*lua.LTable); ok {
-			n := arr.Len()
-			srcs := make([]string, 0, n)
-			for i := 1; i <= n; i++ {
-				srcs = append(srcs, LValString(arr.RawGetInt(i)))
-			}
-			out[name] = srcs
-			return
-		}
-		if s, ok := val.(lua.LString); ok {
-			out[name] = []string{string(s)}
-		}
-	})
-	return out
-}
-
-// bodyCSPNonceValues returns the unique nonce values in script-src /
-// style-src as a flat array, matching nonceValues in Go.
-func bodyCSPNonceValues(L *lua.LState) int {
-	dirs := readDirectivesArg(L.Get(1))
-	L.Push(PushStringList(L, CSPNonceValuesLua(dirs)))
-	return 1
-}
-
-// bodyCSPBaseURIHijackable reports whether base-uri is missing or
-// permissive enough that a <base href> hijack precondition holds.
-func bodyCSPBaseURIHijackable(L *lua.LState) int {
-	dirs := readDirectivesArg(L.Get(1))
-	L.Push(lua.LBool(CSPBaseURIHijackableLua(dirs)))
-	return 1
-}
-
-// bodyCSPScriptSrcAllowsHost takes a sources array and a candidate
-// host; returns (matched_raw_string, ok_bool). Same multi-return shape
-// as the Go signature so Lua authors can `local raw, ok = ...` and
-// quote the matched token in finding detail.
-func bodyCSPScriptSrcAllowsHost(L *lua.LState) int {
-	srcs := readStringList(L.Get(1))
-	host := RequireString(L, 2)
-	matched, ok := CSPScriptSrcAllowsHostLua(srcs, host)
-	L.Push(lua.LString(matched))
-	L.Push(lua.LBool(ok))
-	return 2
-}
-
-// bodyCSPConfirmsJSONP reports whether (content_type, body) constitutes
-// a confirmed JSONP echo of canary. The Go-side rule (JS content type +
-// canary-followed-by-paren) lives in one place so this remains a thin
-// forwarder.
-func bodyCSPConfirmsJSONP(L *lua.LState) int {
-	ct := RequireString(L, 1)
-	body := RequireString(L, 2)
-	canary := RequireString(L, 3)
-	L.Push(lua.LBool(CSPConfirmsJSONPLua(ct, []byte(body), canary)))
-	return 1
-}
-
-// bodyCSPRelativeScriptSrcs returns the unique relative <script src>
-// values found in body, in sorted order. Skips absolute (scheme:) and
-// protocol-relative (//) srcs - those are not affected by base-uri.
-func bodyCSPRelativeScriptSrcs(L *lua.LState) int {
-	L.Push(PushStringList(L, CSPBypassRelativeScriptSrcsLua([]byte(RequireString(L, 1)))))
-	return 1
-}
-
-// bodyCSPBypassJSONPProbes returns the live JSONP-CDN probe catalogue.
-// Reads on every call so a test-time table swap (overrideJSONPProbes)
-// is observed by the Lua port immediately - the same way Go-side tests
-// rely on the swap.
-func bodyCSPBypassJSONPProbes(L *lua.LState) int {
-	out := L.NewTable()
-	for i, p := range CSPBypassJSONPProbesLua() {
-		entry := L.NewTable()
-		entry.RawSetString("host", lua.LString(p.Host))
-		entry.RawSetString("url_tmpl", lua.LString(p.URLTmpl))
-		out.RawSetInt(i+1, entry)
-	}
-	L.Push(out)
-	return 1
-}
-
-// bodyCSPBypassCallbackCanary / bodyCSPBypassBodyCap expose the JSONP
-// canary name and per-probe body cap so the Lua port stamps the same
-// values onto wire requests / evidence the Go check uses.
-func bodyCSPBypassCallbackCanary(L *lua.LState) int {
-	L.Push(lua.LString(CSPBypassCallbackCanaryLua()))
-	return 1
-}
-
-func bodyCSPBypassBodyCap(L *lua.LState) int {
-	L.Push(lua.LNumber(CSPBypassBodyCapLua()))
-	return 1
-}
-
-// bodyCSPBypassJSONPSnippet builds the per-finding evidence snippet
-// (200-byte truncation + cap-reached suffix). Centralised so Go and
-// Lua produce byte-identical Evidence.Snippet on the same probe body.
-func bodyCSPBypassJSONPSnippet(L *lua.LState) int {
-	body := RequireString(L, 1)
-	truncated := lvalBool(L.Get(2))
-	L.Push(lua.LString(JSONPEvidenceSnippetLua([]byte(body), truncated)))
 	return 1
 }
 

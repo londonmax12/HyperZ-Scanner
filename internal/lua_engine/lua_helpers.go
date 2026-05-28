@@ -2,6 +2,7 @@ package lua_engine
 
 import (
 	"bytes"
+	"mime"
 	"net/http"
 	"net/url"
 	"strings"
@@ -30,10 +31,24 @@ import (
 //     HTML-walking ports use to resolve hrefs / srcs without each
 //     re-listing the skip-prefix set.
 
-// IsHTMLContentType reports whether ct names an HTML document. Wrapper
-// over the package-private isHTMLContentType used by every passive
-// check that gates on "only run for HTML responses".
-func IsHTMLContentType(ct string) bool { return isHTMLContentType(ct) }
+// IsHTMLContentType reports whether ct names an HTML document. Parameters
+// such as `; charset=utf-8` are stripped before comparison so a perfectly
+// labeled response is not skipped on a technicality. A missing or
+// unparseable Content-Type returns false: a server that does not declare
+// its body's type is not the audience for browser-rendering headers.
+//
+// Used by every passive check that gates on "only run for HTML responses"
+// and exposed to the Lua bridge so the same rule fires on both sides.
+func IsHTMLContentType(ct string) bool {
+	if ct == "" {
+		return false
+	}
+	mediaType, _, err := mime.ParseMediaType(ct)
+	if err != nil {
+		return false
+	}
+	return mediaType == "text/html" || mediaType == "application/xhtml+xml"
+}
 
 // ParseSetCookies returns the cookies represented by the Set-Cookie
 // headers on h, in the order net/http parses them. Re-uses

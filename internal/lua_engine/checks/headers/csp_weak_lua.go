@@ -1,8 +1,10 @@
-package lua_engine
+package headers
 
 import (
 	"fmt"
 	"sort"
+
+	"github.com/londonmax12/hyperz/internal/lua_engine"
 )
 
 // This file exposes the csp-weak check's helpers to the Lua bridge.
@@ -14,7 +16,7 @@ import (
 // suffix so the same weakness on the same host re-emits the same key.
 type CSPWeakness struct {
 	Directive string
-	Severity  Severity
+	Severity  lua_engine.Severity
 	ID        string
 	Detail    string
 }
@@ -51,7 +53,7 @@ func AnalyzeCSP(enforcing, reportOnly []string) []CSPWeakness {
 	if isReportOnly {
 		weaknesses = append(weaknesses, cspWeakness{
 			directive: "<policy>",
-			severity:  SeverityMedium,
+			severity:  lua_engine.SeverityMedium,
 			id:        "report-only-only",
 			detail:    "Only Content-Security-Policy-Report-Only is set; the browser collects violation reports but does not block any of the policy's would-be denials. Until the policy is delivered via Content-Security-Policy as well, none of the CSP-based XSS / framing defenses below are actually enforced.",
 		})
@@ -59,7 +61,7 @@ func AnalyzeCSP(enforcing, reportOnly []string) []CSPWeakness {
 	if len(enforcing) > 1 {
 		weaknesses = append(weaknesses, cspWeakness{
 			directive: "<policy>",
-			severity:  SeverityLow,
+			severity:  lua_engine.SeverityLow,
 			id:        "multiple-csp-headers",
 			detail:    fmt.Sprintf("Response carries %d Content-Security-Policy headers. Browsers intersect them, so the effective policy is the most restrictive of all directives across the headers - which is rarely what authors intend and tends to mask which directive is doing the blocking. Consolidate to a single CSP header.", len(enforcing)),
 		})
