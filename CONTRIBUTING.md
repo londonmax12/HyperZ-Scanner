@@ -37,8 +37,13 @@ The repo follows standard Go conventions. A few project-specific rules on top:
 
 - **Format with `gofmt`** (or `goimports`). CI-equivalent: `gofmt -l . ` must
   print nothing.
-- **One check per file** under [internal/checks/](internal/checks/), with a
-  matching `_test.go` next to it.
+- **One check per file** under [internal/checks/](internal/checks/),
+  organized by vulnerability family (`injection/`, `xss/`, `headers/`,
+  ...) plus `platform/<middleware>/` for protocol- and CMS-specific
+  rules (`platform/openapi/`, `platform/wordpress/`, ...). The matching
+  `_test.go` lives next to the Go bridge in
+  [internal/lua_engine/](internal/lua_engine/), not next to the .lua
+  file.
 - **Package layout**: shared types live in [internal/checks/check.go](internal/checks/check.go);
   HTTP plumbing in [internal/httpclient/](internal/httpclient/); the
   orchestrator in [internal/scanner/](internal/scanner/). Don't add new

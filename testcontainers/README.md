@@ -59,7 +59,9 @@ chromedp); add a Chromium-enabled runner if you need it in CI.
    `vuln-static`, active webapp probe => `vuln-app`, etc.).
 2. Add the minimum vulnerable shape (route / header / page) that
    makes the check fire. Document the trigger inline; the .lua check
-   under `internal/checks/<name>.lua` is the canonical spec.
+   under `internal/checks/<family>/<name>.lua` (or
+   `internal/checks/platform/<middleware>/<name>.lua` for a
+   protocol/CMS-specific rule) is the canonical spec.
 3. Append the check name to the relevant `assertChecksFired` call in
    `integration_test.go`.
 

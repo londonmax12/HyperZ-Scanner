@@ -399,8 +399,11 @@ internal/scanner/     orchestrator that runs checks against a target
 internal/core/        Check interface, Finding / Evidence / Exchange types,
                       severity / level / scope, context plumbing for OOB,
                       browser pool, fingerprint, per-check budget
-internal/checks/      one .lua file per check, embedded into the binary at
-                      build time; detection logic lives here
+internal/checks/      one .lua file per check, organized by vulnerability
+                      family (injection/, xss/, headers/, ...) plus
+                      platform/<middleware>/ for protocol- and CMS-
+                      specific rules (platform/openapi, platform/wordpress,
+                      ...); embedded into the binary at build time
 internal/lua_engine/  embedded Lua VM, Go-side helper bridges (HTTP, cookies,
                       OOB, browser, scope, payloads, ...) and per-check Go
                       shims for operations Lua can't do directly
@@ -422,7 +425,10 @@ internal/report/      text / JSON / JSONL / CSV / SARIF / Markdown / PDF
 ## 🛠️ Adding a check
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the full guide. The short version:
-drop a new `internal/checks/<name>.lua` file. The Lua VM picks it up via
+drop a new `internal/checks/<family>/<name>.lua` file (e.g.
+`internal/checks/injection/my_check.lua`, or
+`internal/checks/platform/<middleware>/my_check.lua` for a
+protocol- or CMS-specific rule). The Lua VM picks it up via
 [internal/checks/embed.go](internal/checks/embed.go) on the next build and
 the catalog command (`hyperz checks list`) reflects it automatically.
 

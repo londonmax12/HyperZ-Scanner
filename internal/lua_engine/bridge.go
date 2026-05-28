@@ -9,7 +9,7 @@
 //
 // A Lua check is a table-style module:
 //
-//	-- internal/checks/server_leak.lua
+//	-- internal/checks/headers/server_leak.lua
 //	local check = {
 //	  name        = "server-leak",
 //	  level       = "passive",

@@ -11,8 +11,10 @@ import (
 )
 
 // registry returns every check shipped with hyperz. Detection logic
-// lives in pure Lua under internal/checks/*.lua; this binary embeds
-// the catalog and instantiates each rule through internal/lua_engine.
+// lives in pure Lua under internal/checks/<family>/*.lua (plus
+// internal/checks/platform/<middleware>/*.lua for protocol- and CMS-
+// specific rules); this binary embeds the catalog and instantiates
+// each rule through internal/lua_engine.
 //
 // pollute gates the disruptive subset (state-mutating or noisy
 // probes that declared `pollute = true` in their module table). When

@@ -825,7 +825,7 @@ func matchedHeaderHits(headers http.Header, provider *takeoverProvider) []Subdom
 // buildFindingFromFacts is the Go-side Finding composer. It dispatches
 // on facts.Detection to pick the CNAME-confirmed (High severity) or
 // fingerprint-only (Medium severity) finding shape. The Lua port lives
-// in internal/checks/subdomain_takeover.lua and composes its own
+// in internal/checks/discovery/subdomain_takeover.lua and composes its own
 // finding directly from the same facts struct, surfaced via the Lua
 // bridge in internal/lua_engine/api_takeover.go.
 func buildFindingFromFacts(facts *SubdomainTakeoverFacts, currentPageURL string) *Finding {

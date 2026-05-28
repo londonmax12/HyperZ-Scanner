@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path"
 	"strings"
 	"sync"
 	"testing"
@@ -23,11 +24,32 @@ import (
 // returns the loaded LuaCheck. Useful for end-to-end tests that want
 // to exercise a real ship-with-the-binary check rather than a hand-
 // rolled inline module.
+//
+// filename is the basename of the .lua file (e.g. wp_rest_user_enum.lua);
+// the catalog FS is walked to locate it so tests stay decoupled from
+// the per-family subdirectory layout under internal/checks/.
 func loadCatalogCheck(t *testing.T, filename string) *LuaCheck {
 	t.Helper()
-	src, err := fs.ReadFile(checks.Sources, filename)
+	var found string
+	err := fs.WalkDir(checks.Sources, ".", func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		if path.Base(p) == filename {
+			found = p
+			return fs.SkipAll
+		}
+		return nil
+	})
 	if err != nil {
-		t.Fatalf("read %s: %v", filename, err)
+		t.Fatalf("walk catalog for %s: %v", filename, err)
+	}
+	if found == "" {
+		t.Fatalf("catalog has no %s", filename)
+	}
+	src, err := fs.ReadFile(checks.Sources, found)
+	if err != nil {
+		t.Fatalf("read %s: %v", found, err)
 	}
 	c, err := Load(filename, src)
 	if err != nil {
