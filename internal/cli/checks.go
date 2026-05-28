@@ -23,6 +23,7 @@ import (
 	_ "github.com/londonmax12/hyperz/internal/lua_engine/checks/platform/sse"
 	_ "github.com/londonmax12/hyperz/internal/lua_engine/checks/platform/websocket"
 	_ "github.com/londonmax12/hyperz/internal/lua_engine/checks/smuggling"
+	_ "github.com/londonmax12/hyperz/internal/lua_engine/checks/supply_chain"
 	_ "github.com/londonmax12/hyperz/internal/lua_engine/checks/xss"
 )
 

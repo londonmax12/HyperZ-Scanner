@@ -22,7 +22,7 @@ function check.run(ctx)
   end
   if snap.body == "" then return nil end
 
-  local hits = ctx.body.scan_known_js_libs(snap.body)
+  local hits = ctx.supply_chain.scan_known_js_libs(snap.body)
   if #hits == 0 then return nil end
 
   local evidence = ctx.evidence.build {

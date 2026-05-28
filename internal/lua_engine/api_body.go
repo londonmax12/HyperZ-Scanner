@@ -4,8 +4,6 @@ import (
 	"net/http"
 
 	lua "github.com/yuin/gopher-lua"
-
-	"github.com/londonmax12/hyperz/internal/lua_engine/checks/supply_chain"
 )
 
 // buildBodyTable returns the ctx.body helper namespace. These are
@@ -49,7 +47,6 @@ import (
 func buildBodyTable(L *lua.LState) *lua.LTable {
 	t := L.NewTable()
 	t.RawSetString("is_html_ct", L.NewFunction(bodyIsHTMLCT))
-	t.RawSetString("scan_known_js_libs", L.NewFunction(bodyScanKnownJSLibs))
 	t.RawSetString("sqli_error_new_matches", L.NewFunction(bodySQLiErrorNewMatches))
 	t.RawSetString("sqli_error_payloads", L.NewFunction(bodySQLiErrorPayloads))
 	t.RawSetString("traversal_new_markers", L.NewFunction(bodyTraversalNewMarkers))
@@ -161,26 +158,6 @@ func bodyCmdInjectionMargin(L *lua.LState) int {
 
 func bodyIsHTMLCT(L *lua.LState) int {
 	L.Push(lua.LBool(IsHTMLContentType(RequireString(L, 1))))
-	return 1
-}
-
-// bodyScanKnownJSLibs returns the JS-library hits detected in an HTML
-// body as an array of { name, version, vulnerabilities = [...] }.
-// vulnerabilities is an empty array when the library was identified
-// but no vulnerable version row matched; the Lua port discriminates
-// info vs medium severity on `#vulnerabilities == 0`.
-func bodyScanKnownJSLibs(L *lua.LState) int {
-	body := RequireString(L, 1)
-	hits := supply_chain.ScanScriptTagsForKnownJSLibraries([]byte(body))
-	out := L.NewTable()
-	for i, h := range hits {
-		entry := L.NewTable()
-		entry.RawSetString("name", lua.LString(h.Name))
-		entry.RawSetString("version", lua.LString(h.Version))
-		entry.RawSetString("vulnerabilities", PushStringList(L, h.Vulnerabilities))
-		out.RawSetInt(i+1, entry)
-	}
-	L.Push(out)
 	return 1
 }
 
