@@ -116,3 +116,7 @@ func hostClaimOnce(L *lua.LState) int {
 	L.Push(lua.LBool(true))
 	return 1
 }
+
+func init() {
+	registerHelperTable("host", buildHostTable)
+}

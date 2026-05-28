@@ -186,3 +186,7 @@ func discoveryBodyCap(L *lua.LState) int {
 	return 1
 }
 
+
+func init() {
+	registerHelperTable("discovery", buildDiscoveryTable)
+}

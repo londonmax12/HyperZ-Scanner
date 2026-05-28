@@ -203,3 +203,7 @@ func evidenceFromArg(v lua.LValue) *Evidence {
 		Snippet:    lvalString(tbl.RawGetString("snippet")),
 	}
 }
+
+func init() {
+	registerHelperTable("evidence", buildEvidenceTable)
+}

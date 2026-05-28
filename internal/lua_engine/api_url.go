@@ -260,3 +260,7 @@ func urlQuery(L *lua.LState) int {
 	L.Push(t)
 	return 1
 }
+
+func init() {
+	registerHelperTable("url", buildURLTable)
+}

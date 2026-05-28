@@ -311,3 +311,7 @@ func payloadsRender(L *lua.LState) int {
 	L.Push(lua.LString(out))
 	return 1
 }
+
+func init() {
+	registerHelperTable("payloads", buildPayloadsTable)
+}

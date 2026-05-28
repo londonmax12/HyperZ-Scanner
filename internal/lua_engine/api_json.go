@@ -187,3 +187,7 @@ func stringer(v any) string {
 	}
 	return string(b)
 }
+
+func init() {
+	registerHelperTable("json", buildJSONTable)
+}

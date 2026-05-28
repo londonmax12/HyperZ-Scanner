@@ -798,3 +798,7 @@ func readStringList(v lua.LValue) []string {
 	}
 	return nil
 }
+
+func init() {
+	registerHelperTable("body", buildBodyTable)
+}

@@ -51,65 +51,40 @@ func currentEnv(L *lua.LState) *runEnv {
 }
 
 // staticHelpersKey names the registry slot where the static helper
-// tables (severity, scopes, evidence, dedupe, url, body) live. Those
-// tables are built once at VM creation and re-attached to each
-// per-Run ctx by buildCtxUserdata - storing them centrally lets the
-// per-Run path snap the references in without rebuilding every helper
-// for every check invocation.
+// tables (evidence, dedupe, url, body, ...) live. Those tables are
+// built once at VM creation and re-attached to each per-Run ctx by
+// buildCtxUserdata - storing them centrally lets the per-Run path
+// snap the references in without rebuilding every helper for every
+// check invocation.
 const staticHelpersKey = "__hyperz_static"
 
-// staticHelpers is the bag of pre-built helper tables snapped onto
-// the per-Run ctx. Each field is a *lua.LTable that the per-Run path
-// assigns to ctx as-is; the tables are immutable from Lua (no setter
-// API is exposed) but we still re-share the same instance across
-// every Run since gopher-lua tables are not subject to GC pressure
-// during a single VM's lifetime.
+// staticHelpers maps each registered Lua-side namespace name (e.g.
+// "evidence", "stored_xss") to the *lua.LTable produced by that
+// namespace's builder. The per-Run path reads tables by name and
+// assigns them as-is to ctx; the tables are immutable from Lua (no
+// setter API is exposed) but we still re-share the same instance
+// across every Run since gopher-lua tables are not subject to GC
+// pressure during a single VM's lifetime.
 //
 // Pure-constant vocabularies (severity, scopes, levels, locs, cms,
 // methods, ...) are NOT here - they live in Lua globals installed by
 // installConstGlobals so meta-table fields (applies_to, patched_in,
 // tier, level, scope, consumes) can reference them at module-load
 // time, before any ctx exists.
-type staticHelpers struct {
-	evidence  *lua.LTable
-	dedupe    *lua.LTable
-	url       *lua.LTable
-	body      *lua.LTable
-	sinks     *lua.LTable
-	html      *lua.LTable
-	cookies   *lua.LTable
-	takeover  *lua.LTable
-	payloads  *lua.LTable
-	oracle    *lua.LTable
-	json      *lua.LTable
-	oauth     *lua.LTable
-	openapi   *lua.LTable
-	deserial  *lua.LTable
-	discovery *lua.LTable
-	host      *lua.LTable
-	xxe       *lua.LTable
-	browser   *lua.LTable
-	tls       *lua.LTable
-	ws        *lua.LTable
-	idor      *lua.LTable
-	storedXSS *lua.LTable
-	jwt       *lua.LTable
-	race      *lua.LTable
-	smuggling *lua.LTable
-}
+type staticHelpers map[string]*lua.LTable
 
-func storeStaticHelpers(L *lua.LState, h *staticHelpers) {
+func storeStaticHelpers(L *lua.LState, h staticHelpers) {
 	ud := L.NewUserData()
 	ud.Value = h
 	L.G.Registry.RawSetString(staticHelpersKey, ud)
 }
 
-func staticFor(L *lua.LState) *staticHelpers {
+func staticFor(L *lua.LState) staticHelpers {
 	v := L.G.Registry.RawGetString(staticHelpersKey)
 	ud, ok := v.(*lua.LUserData)
 	if !ok || ud == nil {
 		return nil
 	}
-	h, _ := ud.Value.(*staticHelpers)
+	h, _ := ud.Value.(staticHelpers)
 	return h
 }

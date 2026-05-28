@@ -146,3 +146,7 @@ func browserVisit(L *lua.LState) int {
 	L.Push(lua.LNil)
 	return 2
 }
+
+func init() {
+	registerHelperTable("browser", buildBrowserTable)
+}

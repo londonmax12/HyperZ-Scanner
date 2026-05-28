@@ -73,3 +73,7 @@ func oauthDiscover(L *lua.LState) int {
 	L.Push(out)
 	return 1
 }
+
+func init() {
+	registerHelperTable("oauth", buildOAuthTable)
+}

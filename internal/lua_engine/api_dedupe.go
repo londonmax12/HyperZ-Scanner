@@ -60,3 +60,7 @@ func dedupeHostScope(L *lua.LState) int {
 	L.Push(lua.LString(HostScope(raw)))
 	return 1
 }
+
+func init() {
+	registerHelperTable("dedupe", buildDedupeTable)
+}

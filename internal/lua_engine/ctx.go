@@ -43,32 +43,8 @@ func buildCtxUserdata(L *lua.LState, env *runEnv) *lua.LTable {
 	// nil-not-equal-string.
 	t.RawSetString("level", lua.LString(LevelFrom(env.ctx).String()))
 
-	if helpers := staticFor(L); helpers != nil {
-		t.RawSetString("evidence", helpers.evidence)
-		t.RawSetString("dedupe", helpers.dedupe)
-		t.RawSetString("url", helpers.url)
-		t.RawSetString("body", helpers.body)
-		t.RawSetString("sinks", helpers.sinks)
-		t.RawSetString("html", helpers.html)
-		t.RawSetString("cookies", helpers.cookies)
-		t.RawSetString("takeover", helpers.takeover)
-		t.RawSetString("payloads", helpers.payloads)
-		t.RawSetString("oracle", helpers.oracle)
-		t.RawSetString("json", helpers.json)
-		t.RawSetString("oauth", helpers.oauth)
-		t.RawSetString("openapi", helpers.openapi)
-		t.RawSetString("deserial", helpers.deserial)
-		t.RawSetString("discovery", helpers.discovery)
-		t.RawSetString("host", helpers.host)
-		t.RawSetString("xxe", helpers.xxe)
-		t.RawSetString("browser", helpers.browser)
-		t.RawSetString("tls", helpers.tls)
-		t.RawSetString("ws", helpers.ws)
-		t.RawSetString("idor", helpers.idor)
-		t.RawSetString("stored_xss", helpers.storedXSS)
-		t.RawSetString("jwt", helpers.jwt)
-		t.RawSetString("race", helpers.race)
-		t.RawSetString("smuggling", helpers.smuggling)
+	for name, tbl := range staticFor(L) {
+		t.RawSetString(name, tbl)
 	}
 	t.RawSetString("oob", pushOOBServer(L, env))
 	// config carries the operator-supplied per-check settings bag

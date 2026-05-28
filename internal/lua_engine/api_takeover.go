@@ -101,3 +101,7 @@ func takeoverEvaluate(L *lua.LState) int {
 	L.Push(out)
 	return 1
 }
+
+func init() {
+	registerHelperTable("takeover", buildTakeoverTable)
+}

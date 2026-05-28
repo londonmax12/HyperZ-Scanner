@@ -15,40 +15,22 @@ import (
 // compose an evidence value). Per-Run state (page, client, scope)
 // flows in through the dynamic fields buildCtxUserdata sets on the
 // ctx table for each invocation.
+//
+// The helper set is open: each api_*.go registers its builder under a
+// Lua-side namespace name in init(); this function only iterates the
+// registry. To add a new namespace, drop a new api_*.go with a build
+// function and an init() that calls registerHelperTable.
 func bindHyperzAPI(L *lua.LState) {
 	// Constant vocabularies (cms, framework, methods, severity, ...)
 	// live in Lua globals so meta-table fields evaluated at module-load
 	// time (applies_to, patched_in, tier, level, ...) can reference
 	// them. Pure-helper namespaces with functions on them stay on ctx,
-	// installed via the staticHelpers below.
+	// installed via the staticHelpers map below.
 	installConstGlobals(L)
 
-	h := &staticHelpers{
-		evidence:  buildEvidenceTable(L),
-		dedupe:    buildDedupeTable(L),
-		url:       buildURLTable(L),
-		body:      buildBodyTable(L),
-		sinks:     buildSinksTable(L),
-		html:      buildHTMLTable(L),
-		cookies:   buildCookiesTable(L),
-		takeover:  buildTakeoverTable(L),
-		payloads:  buildPayloadsTable(L),
-		oracle:    buildOracleTable(L),
-		json:      buildJSONTable(L),
-		oauth:     buildOAuthTable(L),
-		openapi:   buildOpenAPITable(L),
-		deserial:  buildDeserialTable(L),
-		discovery: buildDiscoveryTable(L),
-		host:      buildHostTable(L),
-		xxe:       buildXXETable(L),
-		browser:   buildBrowserTable(L),
-		tls:       buildTLSTable(L),
-		ws:        buildWSTable(L),
-		idor:      buildIDORTable(L),
-		storedXSS: buildStoredXSSTable(L),
-		jwt:       buildJWTTable(L),
-		race:      buildRaceTable(L),
-		smuggling: buildSmugglingTable(L),
+	h := make(staticHelpers, len(helperTableBuilders))
+	for name, build := range helperTableBuilders {
+		h[name] = build(L)
 	}
 	storeStaticHelpers(L, h)
 }

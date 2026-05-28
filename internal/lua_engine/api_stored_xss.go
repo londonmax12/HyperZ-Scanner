@@ -427,3 +427,7 @@ func storedXSSStateFindCanaries(L *lua.LState) int {
 	L.Push(pushStringList(L, canaryRe.FindAllString(body, -1)))
 	return 1
 }
+
+func init() {
+	registerHelperTable("stored_xss", buildStoredXSSTable)
+}

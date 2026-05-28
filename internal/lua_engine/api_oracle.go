@@ -109,3 +109,7 @@ func lvalNumber(v lua.LValue) float64 {
 	}
 	return 0
 }
+
+func init() {
+	registerHelperTable("oracle", buildOracleTable)
+}

@@ -96,3 +96,7 @@ func wsMaxEndpointsPerPageFn(L *lua.LState) int {
 	L.Push(lua.LNumber(WSAuditMaxEndpointsPerPageLua()))
 	return 1
 }
+
+func init() {
+	registerHelperTable("ws", buildWSTable)
+}

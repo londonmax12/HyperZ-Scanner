@@ -97,3 +97,7 @@ func smugglingFactToLua(L *lua.LState, hostFact *SmugglingHostFact) *lua.LTable 
 	out.RawSetString("variants", variants)
 	return out
 }
+
+func init() {
+	registerHelperTable("smuggling", buildSmugglingTable)
+}

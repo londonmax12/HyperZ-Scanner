@@ -234,3 +234,7 @@ func sinkMutateRequest(L *lua.LState) int {
 	L.Push(pushRequest(L, req, nil, false))
 	return 1
 }
+
+func init() {
+	registerHelperTable("sinks", buildSinksTable)
+}

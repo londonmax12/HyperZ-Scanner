@@ -348,3 +348,7 @@ func intToStr(i int) string {
 	}
 	return string(b[pos:])
 }
+
+func init() {
+	registerHelperTable("idor", buildIDORTable)
+}

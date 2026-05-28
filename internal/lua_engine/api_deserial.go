@@ -94,3 +94,7 @@ func deserialBodyMarker(L *lua.LState) int {
 	L.Push(lua.LString(DeserialBodyMarkerLua([]byte(requireString(L, 1)))))
 	return 1
 }
+
+func init() {
+	registerHelperTable("deserial", buildDeserialTable)
+}

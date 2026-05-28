@@ -132,3 +132,7 @@ func htmlResolveRef(L *lua.LState) int {
 	L.Push(lua.LBool(true))
 	return 2
 }
+
+func init() {
+	registerHelperTable("html", buildHTMLTable)
+}

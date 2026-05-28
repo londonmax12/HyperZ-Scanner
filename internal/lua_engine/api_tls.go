@@ -241,3 +241,7 @@ func tlsCertVerifiesHostname(L *lua.LState) int {
 	L.Push(lua.LBool(TLSAuditCertVerifyHostname(c, host)))
 	return 1
 }
+
+func init() {
+	registerHelperTable("tls", buildTLSTable)
+}
