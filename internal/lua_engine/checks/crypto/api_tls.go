@@ -1,4 +1,4 @@
-package lua_engine
+package crypto
 
 import (
 	"crypto/x509"
@@ -6,6 +6,8 @@ import (
 	"time"
 
 	lua "github.com/yuin/gopher-lua"
+
+	"github.com/londonmax12/hyperz/internal/lua_engine"
 )
 
 // timeUnixRFC3339UTC mirrors time.Unix(ts, 0).UTC().Format(time.RFC3339)
@@ -87,14 +89,14 @@ func tlsFormatUnixRFC3339UTC(L *lua.LState) int {
 // tlsAuditDial indirection the Go check uses, so a test that swaps
 // the dial sees both implementations route through the override.
 func tlsHandshake(L *lua.LState) int {
-	env := CurrentEnv(L)
+	env := lua_engine.CurrentEnv(L)
 	if env == nil {
 		L.Push(lua.LNil)
 		L.Push(lua.LString("ctx.tls.handshake called outside a check run"))
 		return 2
 	}
-	addr := RequireString(L, 1)
-	serverName := OptString(L, 2, "")
+	addr := lua_engine.RequireString(L, 1)
+	serverName := lua_engine.OptString(L, 2, "")
 	if serverName == "" {
 		host, _, err := net.SplitHostPort(addr)
 		if err == nil {
@@ -225,7 +227,7 @@ func tlsCertDNSNames(L *lua.LState) int {
 		L.Push(L.NewTable())
 		return 1
 	}
-	L.Push(PushStringList(L, c.DNSNames))
+	L.Push(lua_engine.PushStringList(L, c.DNSNames))
 	return 1
 }
 
@@ -237,11 +239,11 @@ func tlsCertHasEmbeddedSCT(L *lua.LState) int {
 
 func tlsCertVerifiesHostname(L *lua.LState) int {
 	c := tlsCertFromArg(L).c
-	host := RequireString(L, 2)
+	host := lua_engine.RequireString(L, 2)
 	L.Push(lua.LBool(TLSAuditCertVerifyHostname(c, host)))
 	return 1
 }
 
 func init() {
-	RegisterHelperTable("tls", buildTLSTable)
+	lua_engine.RegisterHelperTable("tls", buildTLSTable)
 }

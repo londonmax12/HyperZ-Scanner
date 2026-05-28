@@ -107,8 +107,6 @@ func buildBodyTable(L *lua.LState) *lua.LTable {
 	t.RawSetString("cmd_injection_sleep_seconds", L.NewFunction(bodyCmdInjectionSleepSeconds))
 	t.RawSetString("cmd_injection_margin", L.NewFunction(bodyCmdInjectionMargin))
 	t.RawSetString("ssrf_matches_error", L.NewFunction(bodySSRFMatchesError))
-	t.RawSetString("is_event_stream", L.NewFunction(bodyIsEventStream))
-	t.RawSetString("find_event_source_literals", L.NewFunction(bodyFindEventSourceLiterals))
 	t.RawSetString("status_text", L.NewFunction(bodyStatusText))
 	t.RawSetString("is_json_response", L.NewFunction(bodyIsJSONResponse))
 	t.RawSetString("json_indent_width", L.NewFunction(bodyJSONIndentWidth))
@@ -158,25 +156,6 @@ func bodyXXEBase64Markers(L *lua.LState) int {
 // unrecognized codes (matches the Go API verbatim).
 func bodyStatusText(L *lua.LState) int {
 	L.Push(lua.LString(http.StatusText(L.CheckInt(1))))
-	return 1
-}
-
-// bodyIsEventStream reports whether ct names a Server-Sent Events
-// stream. Wraps IsEventStreamContentType so the Lua port and
-// the Go check gate on the exact same content-type rule (parameter-
-// stripping + case-insensitive compare against text/event-stream).
-func bodyIsEventStream(L *lua.LState) int {
-	L.Push(lua.LBool(IsEventStreamContentType(RequireString(L, 1))))
-	return 1
-}
-
-// bodyFindEventSourceLiterals returns the URL captures from any
-// `new EventSource(...)` constructions in body, in document order. The
-// regex (three quote styles, optional whitespace) stays in Go because
-// gopher-lua's pattern library cannot express it; the Lua port resolves
-// each capture against a base URL and dedupes/sorts itself.
-func bodyFindEventSourceLiterals(L *lua.LState) int {
-	L.Push(PushStringList(L, FindEventSourceLiteralsLua([]byte(RequireString(L, 1)))))
 	return 1
 }
 

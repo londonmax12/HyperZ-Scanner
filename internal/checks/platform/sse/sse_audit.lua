@@ -51,14 +51,14 @@ local function discover_sse_endpoints(ctx, page_url)
 
   -- Track 1: the page IS the SSE endpoint.
   local headers = ctx.page.headers
-  if headers ~= nil and ctx.body.is_event_stream(headers:get("Content-Type")) then
+  if headers ~= nil and ctx.sse.is_event_stream(headers:get("Content-Type")) then
     add(ctx.page.url)
   end
 
   -- Track 2: EventSource literals in the body.
   local body = ctx.page.body
   if body ~= nil and body ~= "" then
-    for _, raw in ipairs(ctx.body.find_event_source_literals(body)) do
+    for _, raw in ipairs(ctx.sse.find_event_source_literals(body)) do
       add(raw)
     end
   end
@@ -183,7 +183,7 @@ local function probe_endpoint(ctx, target)
   if do_err then return nil, do_err end
 
   local ct = resp:headers():get("Content-Type")
-  if not ctx.body.is_event_stream(ct) then return nil end
+  if not ctx.sse.is_event_stream(ct) then return nil end
 
   local acao_raw = resp:headers():get("Access-Control-Allow-Origin")
   local acao = acao_raw:gsub("^%s+", ""):gsub("%s+$", "")

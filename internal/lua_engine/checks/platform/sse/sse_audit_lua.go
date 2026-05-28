@@ -1,4 +1,4 @@
-package lua_engine
+package sse
 
 // This file exposes the sse-audit check's helpers to the Lua bridge.
 // Sibling to sse_audit.go: forwards into the package-private content-
