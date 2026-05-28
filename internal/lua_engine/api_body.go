@@ -59,15 +59,6 @@ func buildBodyTable(L *lua.LState) *lua.LTable {
 	t.RawSetString("ldapi_sink_probable", L.NewFunction(bodyLDAPiSinkProbable))
 	t.RawSetString("nosqli_sink_probable", L.NewFunction(bodyNoSQLiSinkProbable))
 	t.RawSetString("nosqli_build_operator_request", L.NewFunction(bodyNoSQLiBuildOperatorRequest))
-	t.RawSetString("cache_poison_has_cache_hint", L.NewFunction(bodyCachePoisonHasCacheHint))
-	t.RawSetString("cache_poison_find_reflection", L.NewFunction(bodyCachePoisonFindReflection))
-	t.RawSetString("cache_poison_response_diverged", L.NewFunction(bodyCachePoisonResponseDiverged))
-	t.RawSetString("cache_poison_bodies_match", L.NewFunction(bodyCachePoisonBodiesMatch))
-	t.RawSetString("cache_poison_cc_forbids_storage", L.NewFunction(bodyCachePoisonCCForbidsStorage))
-	t.RawSetString("cache_poison_is_auth_likely_path", L.NewFunction(bodyCachePoisonIsAuthLikelyPath))
-	t.RawSetString("cache_poison_deception_url", L.NewFunction(bodyCachePoisonDeceptionURL))
-	t.RawSetString("cache_poison_parse_vary", L.NewFunction(bodyCachePoisonParseVary))
-	t.RawSetString("cache_poison_probe_url", L.NewFunction(bodyCachePoisonProbeURL))
 	t.RawSetString("sqli_time_sleep_seconds", L.NewFunction(bodySQLiTimeSleepSeconds))
 	t.RawSetString("sqli_time_margin", L.NewFunction(bodySQLiTimeMargin))
 	t.RawSetString("cmd_injection_sleep_seconds", L.NewFunction(bodyCmdInjectionSleepSeconds))
@@ -301,102 +292,6 @@ func bodyNoSQLiBuildOperatorRequest(L *lua.LState) int {
 		return 2
 	}
 	L.Push(pushRequest(L, req, nil, false))
-	return 1
-}
-
-// bodyCachePoisonHasCacheHint forwards the cache-poisoning gate so
-// the Lua port skips the unkeyed-header arm on pages whose baseline
-// response carries no cache hint. Argument is a headers userdata.
-func bodyCachePoisonHasCacheHint(L *lua.LState) int {
-	var h http.Header
-	if ud, ok := L.Get(1).(*lua.LUserData); ok && ud != nil {
-		if hu, ok := ud.Value.(*headersUserData); ok {
-			h = hu.h
-		}
-	}
-	L.Push(lua.LBool(CachePoisonHasCacheHint(h)))
-	return 1
-}
-
-// bodyCachePoisonFindReflection runs the canary lookup against the
-// probe response (headers + body) with baseline-body subtraction. Args
-// are needle, headers userdata, body string, baseline body string;
-// returns (location_string, ok_bool).
-func bodyCachePoisonFindReflection(L *lua.LState) int {
-	needle := RequireString(L, 1)
-	var headers http.Header
-	if ud, ok := L.Get(2).(*lua.LUserData); ok && ud != nil {
-		if hu, ok := ud.Value.(*headersUserData); ok {
-			headers = hu.h
-		}
-	}
-	body := RequireString(L, 3)
-	baseline := OptString(L, 4, "")
-	where, ok := CachePoisonFindReflection(needle, headers, []byte(body), []byte(baseline))
-	L.Push(lua.LString(where))
-	L.Push(lua.LBool(ok))
-	return 2
-}
-
-// bodyCachePoisonResponseDiverged returns true when the probe shape
-// differs meaningfully from baseline (different status, or > 25%
-// length divergence).
-func bodyCachePoisonResponseDiverged(L *lua.LState) int {
-	status := L.CheckInt(1)
-	body := RequireString(L, 2)
-	baseStatus := L.CheckInt(3)
-	baseBody := OptString(L, 4, "")
-	L.Push(lua.LBool(CachePoisonResponseDiverged(status, []byte(body), baseStatus, []byte(baseBody))))
-	return 1
-}
-
-func bodyCachePoisonBodiesMatch(L *lua.LState) int {
-	deceived := RequireString(L, 1)
-	baseline := RequireString(L, 2)
-	L.Push(lua.LBool(CachePoisonBodiesMatch([]byte(deceived), []byte(baseline))))
-	return 1
-}
-
-func bodyCachePoisonCCForbidsStorage(L *lua.LState) int {
-	L.Push(lua.LBool(CachePoisonCacheControlForbidsStorage(RequireString(L, 1))))
-	return 1
-}
-
-func bodyCachePoisonIsAuthLikelyPath(L *lua.LState) int {
-	L.Push(lua.LBool(CachePoisonIsAuthLikelyPath(RequireString(L, 1))))
-	return 1
-}
-
-func bodyCachePoisonDeceptionURL(L *lua.LState) int {
-	deceived, err := CachePoisonDeceptionURL(RequireString(L, 1))
-	if err != nil {
-		L.Push(lua.LString(""))
-		L.Push(lua.LString(err.Error()))
-		return 2
-	}
-	L.Push(lua.LString(deceived))
-	return 1
-}
-
-func bodyCachePoisonParseVary(L *lua.LState) int {
-	L.Push(PushStringList(L, CachePoisonParseVary(RequireString(L, 1))))
-	return 1
-}
-
-// bodyCachePoisonProbeURL forwards CachePoisonProbeURL so the
-// Lua port routes every unkeyed-header probe through the same random
-// cachebuster the Go check uses. Returns (probe_url, err_string) - the
-// helper can only fail when target is unparseable, which the caller
-// will already have rejected via url.parse, so the err return is a
-// belt-and-braces signal rather than an expected branch.
-func bodyCachePoisonProbeURL(L *lua.LState) int {
-	out, err := CachePoisonProbeURL(RequireString(L, 1))
-	if err != nil {
-		L.Push(lua.LString(""))
-		L.Push(lua.LString(err.Error()))
-		return 2
-	}
-	L.Push(lua.LString(out))
 	return 1
 }
 

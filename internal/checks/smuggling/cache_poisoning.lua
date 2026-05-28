@@ -41,7 +41,7 @@ local function probe_unkeyed_header(ctx, target, probe, base_status, base_body, 
   -- organic request will reach. Without it, firing the probe at the
   -- canonical (method, path, query) would poison the exact key real
   -- users hit.
-  local probe_target, ptu_err = ctx.body.cache_poison_probe_url(target)
+  local probe_target, ptu_err = ctx.cache_poisoning.probe_url(target)
   if ptu_err then return nil, ptu_err end
 
   local req, mut_err = ctx.client:new_request{
@@ -57,9 +57,9 @@ local function probe_unkeyed_header(ctx, target, probe, base_status, base_body, 
   if rerr then return nil, rerr end
 
   local headers = resp:headers()
-  local where, ok = ctx.body.cache_poison_find_reflection(probe.canary, headers, body, base_body)
+  local where, ok = ctx.cache_poisoning.find_reflection(probe.canary, headers, body, base_body)
   if not ok and probe.kind == "reflection-or-diverged" then
-    if ctx.body.cache_poison_response_diverged(resp:status(), body, base_status, base_body) then
+    if ctx.cache_poisoning.response_diverged(resp:status(), body, base_status, base_body) then
       where = "response shape changed vs. baseline"
       ok = true
     end
@@ -94,7 +94,7 @@ end
 local function probe_cache_deception(ctx, target, base_status, base_body, base_content_type)
   if not ctx.body.is_html_ct(base_content_type) then return nil end
 
-  local deceived, durl_err = ctx.body.cache_poison_deception_url(target)
+  local deceived, durl_err = ctx.cache_poisoning.deception_url(target)
   if durl_err then return nil, durl_err end
   if deceived == "" then return nil end
 
@@ -110,14 +110,14 @@ local function probe_cache_deception(ctx, target, base_status, base_body, base_c
   local body, truncated, rerr = resp:read_body_capped(BODY_CAP)
   if rerr then return nil, rerr end
 
-  if not ctx.body.cache_poison_bodies_match(body, base_body) then return nil end
+  if not ctx.cache_poisoning.bodies_match(body, base_body) then return nil end
 
   local sev = severity.high
-  if ctx.body.cache_poison_cc_forbids_storage(resp_headers:get("Cache-Control")) then
+  if ctx.cache_poisoning.cc_forbids_storage(resp_headers:get("Cache-Control")) then
     sev = severity.medium
   end
 
-  local suffix = ctx.payloads.cache_poison_deception_suffix()
+  local suffix = ctx.cache_poisoning.deception_suffix()
   local u = ctx.url.parse(target)
   local base_path = (u and u.path) or "/"
   return {
@@ -157,10 +157,10 @@ function check.run(ctx)
   -- markers. Without an intermediary cache the worst case is per-
   -- request reflection (covered by host-header-injection), not a
   -- stored poison hitting every later victim.
-  if ctx.body.cache_poison_has_cache_hint(snap.headers) then
+  if ctx.cache_poisoning.has_cache_hint(snap.headers) then
     local vary_header = snap.headers:get("Vary")
-    local vary_set = ctx.body.cache_poison_parse_vary(vary_header)
-    for _, probe in ipairs(ctx.payloads.cache_poison_header_probes()) do
+    local vary_set = ctx.cache_poisoning.parse_vary(vary_header)
+    for _, probe in ipairs(ctx.cache_poisoning.header_probes()) do
       local f, err = probe_unkeyed_header(ctx, ctx.page.url, probe, snap.status, snap.body, vary_header, vary_set)
       if err then
         ctx:report("cache-poisoning header " .. probe.header .. ": " .. err)
@@ -176,7 +176,7 @@ function check.run(ctx)
   -- so absence of a cache hint on the baseline does not disprove
   -- exploitability; a downstream CDN with extension-based rules
   -- will still store the response.
-  if ctx.body.cache_poison_is_auth_likely_path(u.path) or ctx:level_at_least("aggressive") then
+  if ctx.cache_poisoning.is_auth_likely_path(u.path) or ctx:level_at_least("aggressive") then
     local f, err = probe_cache_deception(ctx, ctx.page.url, snap.status, snap.body, snap.headers:get("Content-Type"))
     if err then
       ctx:report("cache-deception probe: " .. err)

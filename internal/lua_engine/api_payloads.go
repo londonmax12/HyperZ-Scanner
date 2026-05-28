@@ -66,10 +66,6 @@ func buildPayloadsTable(L *lua.LState) *lua.LTable {
 	t.RawSetString("ssti_confirm_probe", L.NewFunction(payloadsSSTIConfirmProbe))
 	t.RawSetString("ssti_error_payloads", L.NewFunction(payloadsSSTIErrorPayloads))
 
-	t.RawSetString("cache_poison_header_probes", L.NewFunction(payloadsCachePoisonHeaders))
-	t.RawSetString("cache_poison_deception_suffix", L.NewFunction(payloadsCachePoisonDeceptionSuffix))
-	t.RawSetString("cache_poison_canary_host", L.NewFunction(payloadsCachePoisonCanaryHost))
-	t.RawSetString("cache_poison_canary_path", L.NewFunction(payloadsCachePoisonCanaryPath))
 
 	t.RawSetString("cmd_injection_filler_value", L.NewFunction(payloadsCmdInjectionFiller))
 	t.RawSetString("cmd_injection_blind_oob", L.NewFunction(payloadsCmdInjectionBlindOOB))
@@ -260,37 +256,6 @@ func payloadsSSTIConfirmProbe(L *lua.LState) int {
 
 func payloadsSSTIErrorPayloads(L *lua.LState) int {
 	L.Push(PushStringList(L, SSTIErrorPayloadsLua()))
-	return 1
-}
-
-func payloadsCachePoisonHeaders(L *lua.LState) int {
-	src := CachePoisonHeaderProbesLua()
-	out := L.NewTable()
-	for i, h := range src {
-		entry := L.NewTable()
-		entry.RawSetString("header", lua.LString(h.Header))
-		entry.RawSetString("value", lua.LString(h.Value))
-		entry.RawSetString("canary", lua.LString(h.Canary))
-		entry.RawSetString("kind", lua.LString(h.Kind))
-		entry.RawSetString("deception_message", lua.LString(h.DeceptionMessage))
-		out.RawSetInt(i+1, entry)
-	}
-	L.Push(out)
-	return 1
-}
-
-func payloadsCachePoisonDeceptionSuffix(L *lua.LState) int {
-	L.Push(lua.LString(CachePoisonDeceptionSuffix()))
-	return 1
-}
-
-func payloadsCachePoisonCanaryHost(L *lua.LState) int {
-	L.Push(lua.LString(CachePoisonCanaryHost()))
-	return 1
-}
-
-func payloadsCachePoisonCanaryPath(L *lua.LState) int {
-	L.Push(lua.LString(CachePoisonCanaryPath()))
 	return 1
 }
 
