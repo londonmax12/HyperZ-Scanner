@@ -114,6 +114,67 @@ type targetSpec struct {
 	startupWait time.Duration
 }
 
+// requireBrowser preflights for a Chrome / Chromium binary the same way
+// chromedp's findExecPath would, and skips the subtest with a precise
+// reason when none is reachable. Used by suites whose hyperz.yaml opts
+// into `js: { enabled: true }` (e.g. dom-xss). A missing browser is an
+// environment gap, not a scanner regression, so the suite should skip
+// rather than fail.
+//
+// The candidate list mirrors github.com/chromedp/chromedp/allocate.go's
+// findExecPath - keep it in sync if chromedp adds new platforms.
+// CHROMEDP_EXEC_PATH overrides chromedp's lookup at runtime; honor it
+// here too so a custom binary makes the preflight pass.
+func requireBrowser(t *testing.T) {
+	t.Helper()
+	if p := os.Getenv("CHROMEDP_EXEC_PATH"); p != "" {
+		if _, err := os.Stat(p); err == nil {
+			return
+		}
+		t.Skipf("CHROMEDP_EXEC_PATH=%q does not exist; skipping browser-dependent suite", p)
+	}
+	var candidates []string
+	switch runtime.GOOS {
+	case "darwin":
+		candidates = []string{
+			"/Applications/Chromium.app/Contents/MacOS/Chromium",
+			"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+		}
+	case "windows":
+		candidates = []string{
+			"chrome",
+			"chrome.exe",
+			`C:\Program Files (x86)\Google\Chrome\Application\chrome.exe`,
+			`C:\Program Files\Google\Chrome\Application\chrome.exe`,
+			filepath.Join(os.Getenv("USERPROFILE"), `AppData\Local\Google\Chrome\Application\chrome.exe`),
+			filepath.Join(os.Getenv("USERPROFILE"), `AppData\Local\Chromium\Application\chrome.exe`),
+		}
+	default:
+		candidates = []string{
+			"headless_shell", "headless-shell",
+			"chromium", "chromium-browser",
+			"google-chrome", "google-chrome-stable",
+			"google-chrome-beta", "google-chrome-unstable",
+			"/usr/bin/google-chrome", "/usr/local/bin/chrome",
+			"/snap/bin/chromium", "chrome",
+		}
+	}
+	for _, c := range candidates {
+		if strings.ContainsAny(c, `/\`) {
+			if _, err := os.Stat(c); err == nil {
+				return
+			}
+			continue
+		}
+		if _, err := exec.LookPath(c); err == nil {
+			return
+		}
+	}
+	t.Skipf("no Chrome/Chromium binary found - skipping browser-dependent suite. "+
+		"Install Chrome or Chromium, or set CHROMEDP_EXEC_PATH to a binary. "+
+		"Searched: %v", candidates)
+}
+
 // ensureDockerReachable preflights the Docker daemon before testcontainers
 // gets a chance to fall through its rootless-socket probe and panic on
 // Windows. We also default DOCKER_HOST to the standard Windows named pipe

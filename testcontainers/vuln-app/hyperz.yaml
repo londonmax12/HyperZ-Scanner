@@ -5,6 +5,14 @@ mode: aggressive
 crawl:
   enabled: true
 
+# dom-xss is the only check in the catalog that requires a headless
+# browser; opting in here keeps the dependency cost isolated to the
+# one container that exercises a DOM sink. The harness preflights for
+# a Chrome/Chromium binary and skips the subtest cleanly when none is
+# reachable (see requireBrowser in harness.go).
+js:
+  enabled: true
+
 url:
   - "${ORIGIN_HTTP}/"
 
@@ -33,3 +41,4 @@ checks:
     - jwt-vulns
     - graphql-audit
     - sse-audit
+    - dom-xss

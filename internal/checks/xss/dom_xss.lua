@@ -106,10 +106,29 @@ local function build_finding(ctx, target, probe_url, source, param, token, paylo
   }
 end
 
--- visit runs one probe through the browser pool. Reports navigation
--- errors via ctx.report so a flaky page still leaves breadcrumbs but
--- the scan continues; returns nil on a clean miss or an error path,
--- the finding table on a binding-confirmed hit.
+-- benign_visit_err matches navigation errors that mean "this probe
+-- can't run on this browser" rather than "the scanner is broken":
+--   * net::ERR_ABORTED: Chrome refuses to navigate to javascript: /
+--     data: URLs as a top-level Location (correct, standards-compliant
+--     defence-in-depth). Open-redirect-to-XSS probes deliberately mint
+--     such URLs to test the server, then visit() the result; the
+--     refusal is a clean miss, not a failure to report.
+--   * net::ERR_INVALID_URL: malformed probe URL. Equivalent outcome -
+--     no execution, no signal, no point pinging the operator.
+-- Adding patterns is a deliberate decision: only add an error shape
+-- here when the corresponding navigation failure can never carry XSS
+-- signal, regardless of target. Surface everything else so a real
+-- browser-process or page-load bug still leaves breadcrumbs.
+local function benign_visit_err(err)
+  return string.find(err, "net::ERR_ABORTED", 1, true) ~= nil
+      or string.find(err, "net::ERR_INVALID_URL", 1, true) ~= nil
+end
+
+-- visit runs one probe through the browser pool. Reports unexpected
+-- navigation errors via ctx:report so a flaky page still leaves
+-- breadcrumbs but the scan continues; returns nil on a clean miss,
+-- on a benign-error path (see benign_visit_err), or on a reported
+-- error; the finding table on a binding-confirmed hit.
 local function visit(ctx, target, probe_url, source, param, token, payload, sink_hint)
   local fired, err = ctx.browser:visit {
     url       = probe_url,
@@ -117,7 +136,9 @@ local function visit(ctx, target, probe_url, source, param, token, payload, sink
     settle_ms = DOM_XSS_SETTLE_MS,
   }
   if err then
-    ctx.report("dom-xss visit " .. probe_url .. ": " .. err)
+    if not benign_visit_err(err) then
+      ctx:report("dom-xss visit " .. probe_url .. ": " .. err)
+    end
     return nil
   end
   if not fired then return nil end

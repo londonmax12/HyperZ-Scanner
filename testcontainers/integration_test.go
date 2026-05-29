@@ -52,8 +52,15 @@ import (
 // container is up and may return scanOpts overrides (e.g. --ca-file
 // for HTTPS-only containers). A nil prepareScan means the default
 // scanOpts{} is used.
+//
+// requires is an optional preflight that runs before the (slow)
+// container build/start; it may call t.Skip to bail when an external
+// dependency the suite needs is missing (e.g. requireBrowser for
+// suites whose YAML opts into js.enabled). Skipping here keeps the
+// Docker image from being built only to throw away the scan.
 type vulnCase struct {
 	spec        targetSpec
+	requires    func(t *testing.T)
 	prepareScan func(t *testing.T, tgt *target) scanOpts
 	notes       string // one-line description, surfaced in t.Logf for context
 }
@@ -91,8 +98,13 @@ var vulnSuites = []vulnCase{
 	{
 		// Every active web-app probe in one container. Mode /
 		// crawl / pollute / enable all come from the YAML.
-		spec:  targetSpec{dir: "vuln-app", exposedPort: 8080},
-		notes: "active web-app probes",
+		// vuln-app's hyperz.yaml opts into js.enabled so dom-xss
+		// fires against /dom-xss; requireBrowser skips the whole
+		// subtest when no Chrome/Chromium binary is reachable
+		// rather than letting the scan fail mid-flight.
+		spec:     targetSpec{dir: "vuln-app", exposedPort: 8080},
+		requires: requireBrowser,
+		notes:    "active web-app probes (+ dom-xss via headless browser)",
 	},
 	{
 		// ws-audit against a Node ws server that accepts any
@@ -228,6 +240,12 @@ func TestVuln(t *testing.T) {
 		t.Run(tc.spec.dir, func(t *testing.T) {
 			if tc.notes != "" {
 				t.Logf("[%s] %s", tc.spec.dir, tc.notes)
+			}
+			// requires runs before the slow image build / container
+			// start so a missing dependency surfaces as a clean
+			// t.Skip instead of an opaque mid-scan error.
+			if tc.requires != nil {
+				tc.requires(t)
 			}
 			tgt := startTarget(t, tc.spec)
 			var opts scanOpts

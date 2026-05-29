@@ -70,9 +70,6 @@ func NewChromedp(maxConcurrent int) (Pool, error) {
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.Flag("headless", true),
 		chromedp.Flag("disable-gpu", true),
-		// No persistence; every tab starts with a fresh profile so a
-		// payload that sets a cookie can't bleed into the next probe.
-		chromedp.Flag("incognito", true),
 		// The page is hostile by definition - don't let it hold the
 		// process open with a beforeunload prompt.
 		chromedp.Flag("disable-prompt-on-repost", true),
@@ -85,6 +82,18 @@ func NewChromedp(maxConcurrent int) (Pool, error) {
 		chromedp.NoSandbox,
 		chromedp.Flag("disable-dev-shm-usage", true),
 	)
+	// NOTE: we deliberately do NOT pass --incognito. The whole-browser
+	// incognito flag breaks chromedp's Target.createTarget path on
+	// recent Chrome builds ("Failed to open new tab - no browser is
+	// open"), and CDP's per-tab WithNewBrowserContext is unsupported on
+	// the same builds, so neither variant of "per-tab fresh profile"
+	// actually works. Per-tab cookie isolation also isn't load-bearing
+	// for DOM XSS: each probe issues a new canary token via
+	// ctx.browser.new_canary() and the binding listener matches on
+	// token equality, so a stale binding fire from one tab can never
+	// be misattributed to the next tab's payload. Tabs share the
+	// default browser context's cookie jar - acceptable for the
+	// runtime-execution checks we ship today.
 	allocCtx, cancelAlloc := chromedp.NewExecAllocator(context.Background(), opts...)
 	browserCtx, cancelBrowser := chromedp.NewContext(allocCtx)
 	if err := chromedp.Run(browserCtx); err != nil {
