@@ -56,7 +56,7 @@ end
 -- sink_probable: query / form / json are the only locs whose values
 -- reach a bracket-expanding parser. Header / cookie / path values are
 -- taken as opaque strings by every common framework.
-local function sink_probable(sink, locs)
+local function sink_probable(sink)
   return sink.loc == locs.query or sink.loc == locs.form or sink.loc == locs.json
 end
 
@@ -321,7 +321,7 @@ function check.run(ctx)
   local first_err
   local probed_any = false
   for _, sink in ipairs(sinks) do
-    if sink_probable(sink, ctx.locs) and ctx.scope:allows(sink.url) then
+    if sink_probable(sink) and ctx.scope:allows(sink.url) then
       local f, err = probe(ctx, ctx.page.url, sink, base_obs)
       if err then
         ctx:report(string.format("proto-pollution %s %s=%s: %s",

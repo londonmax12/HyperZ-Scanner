@@ -2,10 +2,19 @@
 // __proto__ keys in a POST body pollute Object.prototype. The
 // scanner's proto-pollution check posts a payload of shape
 //   {"__proto__":{"json spaces":7,"status":510}}
-// then GETs the observer and confirms the pollution surfaced (either
-// via `res.json` re-indenting to 7 spaces, since Express reads the
-// `json spaces` app setting from Object.prototype on a polluted
-// object, or via the new `status` becoming the default response code).
+// then GETs the observer (the same /merge URL the openapi spec
+// declares). The observer renders its response through a fresh
+// `const opts = {}` defaults pattern, so a polluted prototype's
+// `status` and `json spaces` keys surface as own properties of opts
+// via the prototype chain - HTTP 510 and a 7-space-indented body
+// are what the check witnesses.
+//
+// Note that Express's app.set/get walker (see express 4.x
+// application.js) explicitly stops at Object.prototype, so
+// res.json() does NOT honor the polluted "json spaces" setting on
+// its own; the observable gadget has to be a code path the fixture
+// owns. The `opts || {}` defaults pattern below is the canonical
+// CVE-style consumer of a polluted prototype.
 
 const express = require("express");
 const bodyParser = require("body-parser");
@@ -13,25 +22,9 @@ const bodyParser = require("body-parser");
 const app = express();
 app.use(bodyParser.json({ type: "*/*", limit: "256kb" }));
 
-function vulnerableMerge(target, source) {
-  for (const key of Object.keys(source)) {
-    if (
-      typeof source[key] === "object" &&
-      source[key] !== null &&
-      typeof target[key] === "object" &&
-      target[key] !== null
-    ) {
-      vulnerableMerge(target[key], source[key]);
-    } else {
-      target[key] = source[key];
-    }
-  }
-  return target;
-}
-
-// In CVE-style merges, the target object itself is dereferenced to
-// __proto__ when the source key is "__proto__". We mirror that
-// vulnerability by NOT skipping the dunder key.
+// In CVE-style merges, target[key] for key="__proto__" dereferences
+// to target's prototype rather than an own property, so the recursion
+// walks into Object.prototype and assigns the inner keys there.
 function reallyVulnerableMerge(target, source) {
   for (const key of Object.keys(source)) {
     const src = source[key];
@@ -43,6 +36,25 @@ function reallyVulnerableMerge(target, source) {
     }
   }
   return target;
+}
+
+// respondWithGadgets renders payload through response options pulled
+// off a fresh `{}` default - the classic post-pollution gadget
+// surface. After a successful pollution, opts.status reads
+// Object.prototype["status"] = 510 and opts["json spaces"] reads
+// Object.prototype["json spaces"] = 7. The for-in walk echoes any
+// other polluted key (the scanner's per-probe canary) as an extra
+// field on the response so the canary-echo gadget can fire too.
+function respondWithGadgets(res, payload) {
+  const opts = {};
+  const status = opts.status || 200;
+  const spaces = opts["json spaces"] || 0;
+  const out = Object.assign({}, payload);
+  for (const k in opts) {
+    if (k === "status" || k === "json spaces") continue;
+    out[k] = opts[k];
+  }
+  res.status(status).type("application/json").send(JSON.stringify(out, null, spaces));
 }
 
 app.get("/", (_req, res) => {
@@ -84,23 +96,20 @@ app.get("/openapi.json", (_req, res) => {
 app.post("/merge", (req, res) => {
   const settings = {};
   reallyVulnerableMerge(settings, req.body || {});
-  res.json({ ok: true, settings });
+  respondWithGadgets(res, { ok: true });
 });
 
-// GET on the sink URL exists so proto-pollution's clean observer (which
-// re-fetches the page URL via GET) lands on a res.json() response. The
-// polluted Object.prototype["json spaces"] then leaks through the
-// observer's indentation, which is what the check witnesses.
+// GET on the sink URL is the observer the proto-pollution check
+// re-fetches between its baseline and post-pollution probe.
 app.get("/merge", (_req, res) => {
-  res.json({ hint: "POST __proto__ keys here" });
+  respondWithGadgets(res, { hint: "POST __proto__ keys here" });
 });
 
-// Observer endpoint: any JSON write here uses res.json, which honors
-// the polluted "json spaces" setting and the polluted default status
-// code. A clean process returns 200 + compact JSON; a polluted process
-// returns whatever the attacker injected.
-app.get("/state", (req, res) => {
-  res.json({ user: "alice", role: "guest" });
+// Sibling observer for symmetry with the openapi-declared sink. Same
+// gadget surface, useful if the check's page-emission heuristics
+// shift to a non-sink URL.
+app.get("/state", (_req, res) => {
+  respondWithGadgets(res, { user: "alice", role: "guest" });
 });
 
 app.listen(8082, "0.0.0.0", () => {
