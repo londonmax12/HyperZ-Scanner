@@ -708,6 +708,16 @@ func runScan(ctx context.Context, cfg *scanConfig, level core.Level) int {
 		if errors.Is(err, httpclient.ErrBudgetExhausted) {
 			return
 		}
+		// Context cancel / per-check deadline expiry is another planned
+		// ceiling: the scanner intentionally caps per-check runtime
+		// (scanner.checkBudget), and a check that ran to that cap is
+		// not malfunctioning. The lua_engine check runner surfaces
+		// ctx.Err() through the wrapped error chain so this matches
+		// regardless of whether the cancel landed inside Go code, an
+		// in-flight HTTP request, or mid-execution Lua bytecode.
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return
+		}
 		checkErrors.Add(1)
 		log.Warn("check error", "check", check, "target", target, "err", err)
 	}))

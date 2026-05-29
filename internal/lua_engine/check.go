@@ -549,7 +549,14 @@ func (c *LuaCheck) Drain(ctx context.Context) []Finding {
 	L.Push(ctxUD)
 	if err := L.PCall(1, 1, nil); err != nil {
 		keepVM = false
-		Report(ctx, fmt.Errorf("%s: drain: %w", c.name, err))
+		// See the matching note on Run's PCall: recover the typed
+		// ctx.Err() so the scanner's error handler can treat a
+		// drain-time deadline as a planned ceiling, not a malfunction.
+		if cerr := ctx.Err(); cerr != nil {
+			Report(ctx, fmt.Errorf("%s: drain: %w", c.name, cerr))
+		} else {
+			Report(ctx, fmt.Errorf("%s: drain: %w", c.name, err))
+		}
 		return nil
 	}
 	defer L.SetTop(0)
@@ -653,6 +660,16 @@ func (c *LuaCheck) Run(ctx context.Context, client *httpclient.Client, sc *scope
 	L.Push(ctxUD)
 	if err := L.PCall(1, 2, nil); err != nil {
 		keepVM = false
+		// gopher-lua's SetContext check aborts the Lua VM with a plain
+		// string error when ctx expires mid-execution; the original
+		// typed ctx.Err() is lost in the lua wrapping. Recover it here
+		// so the scanner's error handler can errors.Is(err, context.*)
+		// and treat the planned per-check deadline as a quiet ceiling
+		// rather than a check malfunction (same shape as the
+		// budget-exhausted exemption in scan.go).
+		if cerr := ctx.Err(); cerr != nil {
+			return nil, fmt.Errorf("%s: %w", c.name, cerr)
+		}
 		return nil, fmt.Errorf("%s: %w", c.name, err)
 	}
 	defer L.SetTop(0)
