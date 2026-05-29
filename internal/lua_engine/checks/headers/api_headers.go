@@ -32,6 +32,7 @@ import (
 //	ctx.headers.csp_bypass_callback_canary() -> string
 //	ctx.headers.csp_bypass_body_cap() -> int
 //	ctx.headers.csp_bypass_jsonp_snippet(body, truncated) -> string
+//	ctx.headers.csp_bypass_err_is_unreachable(err) -> bool
 //
 //	ctx.headers.parse_hsts(value)
 //	  -> { directives = { name = value, ... },
@@ -52,6 +53,7 @@ func buildHeadersTable(L *lua.LState) *lua.LTable {
 	t.RawSetString("csp_bypass_callback_canary", L.NewFunction(headersCSPBypassCallbackCanary))
 	t.RawSetString("csp_bypass_body_cap", L.NewFunction(headersCSPBypassBodyCap))
 	t.RawSetString("csp_bypass_jsonp_snippet", L.NewFunction(headersCSPBypassJSONPSnippet))
+	t.RawSetString("csp_bypass_err_is_unreachable", L.NewFunction(headersCSPBypassErrIsUnreachable))
 	t.RawSetString("parse_hsts", L.NewFunction(headersParseHSTS))
 	t.RawSetString("is_absolute_or_protocol_relative", L.NewFunction(headersIsAbsoluteOrProtocolRelative))
 	t.RawSetString("append_query_param", L.NewFunction(headersAppendQueryParam))
@@ -239,6 +241,15 @@ func headersCSPBypassJSONPSnippet(L *lua.LState) int {
 	body := lua_engine.RequireString(L, 1)
 	truncated := lvalBool(L.Get(2))
 	L.Push(lua.LString(JSONPEvidenceSnippetLua([]byte(body), truncated)))
+	return 1
+}
+
+// headersCSPBypassErrIsUnreachable classifies a transport-error string
+// returned from the JSONP probe arm. True means the external CDN host
+// was unreachable from this environment (no signal about the target's
+// CSP), and the Lua probe should silently skip rather than escalate.
+func headersCSPBypassErrIsUnreachable(L *lua.LState) int {
+	L.Push(lua.LBool(CSPBypassErrIsUnreachableLua(lua_engine.RequireString(L, 1))))
 	return 1
 }
 

@@ -5,6 +5,47 @@ import (
 	"strings"
 )
 
+// cspBypassUnreachableMarkers are substrings that uniquely identify a
+// network-unreachable transport failure in a Go stdlib / httpclient
+// error string. The JSONP probe arm uses this to distinguish "the
+// external CDN cannot be reached from this environment" (informational,
+// silently skip - the probe has nothing to verify against) from a real
+// transport bug worth surfacing as a scanner check error.
+//
+// Kept tight on purpose: the goal is to catch DNS-lookup failures and
+// connect-time refusals/timeouts against the curated JSONP probe hosts,
+// not to absorb every plausible transport error. A truncated body or
+// TLS handshake glitch is still a real failure the operator should see.
+var cspBypassUnreachableMarkers = []string{
+	"no such host",                  // *net.DNSError NXDOMAIN / NODATA
+	"server misbehaving",            // *net.DNSError SERVFAIL
+	"connection refused",            // POSIX ECONNREFUSED
+	"network is unreachable",        // POSIX ENETUNREACH
+	"no route to host",              // POSIX EHOSTUNREACH
+	"i/o timeout",                   // *net.OpError dial timeout
+	"connectex: a connection attempt failed", // Windows ETIMEDOUT
+	"actively refused it",           // Windows WSAECONNREFUSED phrasing
+}
+
+// CSPBypassErrIsUnreachableLua reports whether err (the error string the
+// JSONP probe got back from client:do or client:new_request) describes
+// a network-unreachable condition against the external CDN host. Used by
+// the Lua probe arm to soft-skip probes against hosts the test/scan
+// environment cannot egress to: such errors carry no signal about the
+// target site's CSP and are not scanner malfunctions.
+func CSPBypassErrIsUnreachableLua(err string) bool {
+	if err == "" {
+		return false
+	}
+	low := strings.ToLower(err)
+	for _, marker := range cspBypassUnreachableMarkers {
+		if strings.Contains(low, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 // This file exposes the csp-bypass check's helpers to the Lua bridge.
 // Sibling to csp_bypass.go: forwards into the package-private nonce /
 // host-allow / JSONP-probe helpers so the Lua port consumes the same

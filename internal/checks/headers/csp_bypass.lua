@@ -175,22 +175,32 @@ function probe_jsonp_whitelist(ctx, dirs)
   local body_cap = ctx.headers.csp_bypass_body_cap()
   local target = ctx.page.url
 
+  -- record_err captures the first non-unreachable transport error so
+  -- the check can surface it when no findings come out. Unreachable
+  -- errors (DNS NXDOMAIN, connection refused, etc.) against the
+  -- external CDN host carry no signal about the target's CSP - the
+  -- probe just can't egress in this environment - so they are logged
+  -- and dropped rather than escalated to a scanner check error.
   local findings, first_err = {}, nil
+  local function record_err(err)
+    if ctx.headers.csp_bypass_err_is_unreachable(err) then return end
+    if not first_err then first_err = err end
+  end
   for _, probe in ipairs(ctx.headers.csp_bypass_jsonp_probes()) do
     local matched, ok = ctx.headers.csp_script_src_allows_host(script_srcs, probe.host)
     if ok then
       local probe_url = probe.url_tmpl .. canary
       local req, nerr = ctx.client:new_request { method = methods.get, url = probe_url }
       if nerr then
-        if not first_err then first_err = nerr end
+        record_err(nerr)
       else
         local resp, derr = ctx.client["do"](ctx.client, req)
         if derr then
-          if not first_err then first_err = derr end
+          record_err(derr)
         else
           local body, truncated, rerr = resp:read_body_capped(body_cap)
           if rerr then
-            if not first_err then first_err = rerr end
+            record_err(rerr)
           elseif ctx.headers.csp_confirms_jsonp(resp:headers():get("Content-Type"), body, canary) then
             findings[#findings + 1] = {
               target      = target,
