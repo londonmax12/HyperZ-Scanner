@@ -1,0 +1,13 @@
+# Scan profile for the vuln-nosqli integration container.
+# See vuln-static/hyperz.yaml for the enable-vs-assertion contract
+# and the ${ORIGIN_HTTP} placeholder convention.
+mode: aggressive
+crawl:
+  enabled: true
+
+url:
+  - "${ORIGIN_HTTP}/"
+
+checks:
+  enable:
+    - nosqli

@@ -10,14 +10,11 @@ are documented inline above each handler and were derived from the
 .lua check sources in internal/checks/.
 """
 
-import json
 import os
 import pickle
 import socket
 import subprocess
-import time
 import urllib.request
-import urllib.error
 from base64 import b64decode
 
 import jwt
@@ -47,17 +44,22 @@ def index():
 <body>
 <h1>vuln-app discovery</h1>
 
-<!-- crawler enqueues each href -->
+<!-- crawler enqueues each href. The open-redirect seed value points
+     at a same-origin path on purpose: the open-redirect check
+     overrides ?u= with its own evil.example canary and uses
+     do_no_follow, so the seed value is irrelevant to detection. But
+     redirect-following checks (host-header-injection, cmd-injection,
+     cmd-injection-blind, dom-xss in headless Chrome) hit this URL
+     too, follow the 302, and if u= points off-host they all DNS-fail
+     and the scan exits with check errors. -->
 <ul>
-  <li><a href="/redirect?u=https://example.com/next">open-redirect</a></li>
+  <li><a href="/redirect?u=/host">open-redirect</a></li>
   <li><a href="/host">host-header reflect</a></li>
   <li><a href="/poison">cache-poison candidate</a></li>
   <li><a href="/crlf?next=ok">crlf</a></li>
   <li><a href="/fetch?url=http://example.com">ssrf</a></li>
-  <li><a href="/search?q=hello">reflected-xss + sqli</a></li>
+  <li><a href="/search?q=hello">reflected-xss</a></li>
   <li><a href="/dom-xss">dom-xss</a></li>
-  <li><a href="/find?q=alice">nosqli</a></li>
-  <li><a href="/dir?cn=admin">ldap injection</a></li>
   <li><a href="/file?name=hello.txt">path traversal</a></li>
   <li><a href="/run?ip=127.0.0.1">cmd injection (in-band)</a></li>
   <li><a href="/ping?host=example.com">cmd-injection blind</a></li>
@@ -65,7 +67,6 @@ def index():
   <li><a href="/user/1">idor</a></li>
   <li><a href="/jwt-login">jwt issue</a></li>
   <li><a href="/jwt-me">jwt validate</a></li>
-  <li><a href="/graphql">graphql endpoint</a></li>
   <li><a href="/sse">sse stream</a></li>
   <li><a href="/comments">stored-xss surface</a></li>
   <li><a href="/xml-form">xxe form</a></li>
@@ -157,44 +158,14 @@ def ssrf():
         return f"fetch error for {target}: {e}", 502
 
 
-# --- reflected-xss + sqli (error/boolean/time) -----------------------------
-# Trigger: ?q= is reflected unescaped (xss) AND is appended to a fake
-# SQL string used for the response shape. We simulate:
-#   - quote in q -> SQL syntax error in body (sqli-error)
-#   - "' OR 1=1--" -> long list (sqli-boolean truthy)
-#   - "' AND 1=2--" -> empty list (sqli-boolean falsy)
-#   - contains SLEEP() -> sleeps before responding (sqli-time)
+# --- reflected-xss ---------------------------------------------------------
+# Trigger: ?q= is reflected unescaped into the response body. The SQLi
+# arms previously hosted here moved out to vuln-sqli when the check
+# graduated to a real SQLite backend with a SLEEP UDF.
 @app.route("/search")
 def search():
     q = request.args.get("q", "")
-    body = [f"<p>You searched for: {q}</p>"]  # reflected-xss
-
-    qlow = q.lower()
-    if "sleep(" in qlow:
-        # time-based: hyperz looks for response latency clearly above
-        # baseline. 6s is well above the default 2s threshold.
-        time.sleep(6)
-    if "'" in q and " or " not in qlow and " and " not in qlow:
-        # error-based: emit an unmistakable MySQL syntax error
-        # (sqli-error matches a curated list of driver signatures).
-        body.append("<pre>You have an error in your SQL syntax; "
-                    "check the manual that corresponds to your MySQL "
-                    "server version for the right syntax to use near "
-                    f"'{q}' at line 1</pre>")
-        return Response("".join(body), status=500)
-    # Boolean-SQLi oracle expects truthy ~ baseline and falsy != baseline.
-    # AND 1=1 leaves the original predicate intact, so emit the same
-    # "match for {q}" shape as the no-injection branch; after the
-    # check's strip_all removes the literal " AND 1=1" from the body,
-    # truthy collapses onto the baseline. AND 1=2 wipes the result set,
-    # so falsy returns an empty list and diverges from baseline.
-    if "1=1" in qlow:
-        body.append(f"<ul><li>match for {q}</li></ul>")
-    elif "1=2" in qlow:
-        body.append("<ul></ul>")
-    else:
-        body.append(f"<ul><li>match for {q}</li></ul>")
-    return "".join(body)
+    return f"<p>You searched for: {q}</p>"
 
 
 # --- dom-xss ---------------------------------------------------------------
@@ -212,45 +183,8 @@ def dom_xss():
 </body></html>"""
 
 
-# --- nosqli ----------------------------------------------------------------
-# Trigger: param accepts mongo-style operator dicts. Hyperz rewrites
-# q -> q[$eq]=... (LocQuery) or JSON body to {"q":{"$eq":...}} and
-# looks for boolean divergence between truthy (sink.value) and falsy
-# (canary) probes. The oracle wants truthy ~ baseline and falsy !=
-# baseline, so the operator branch must match the actual probed value
-# rather than collapsing every $ to the same answer.
-@app.route("/find")
-def nosql():
-    op_val = None
-    for key, val in request.args.items():
-        if key.startswith("q[$"):
-            op_val = val
-            break
-    if op_val is not None:
-        if op_val == "alice":
-            return jsonify({"users": [{"name": "alice"}]})
-        return jsonify({"users": []})
-    q = request.args.get("q", "")
-    if q == "alice":
-        return jsonify({"users": [{"name": "alice"}]})
-    return jsonify({"users": []})
-
-
-# --- ldap-injection --------------------------------------------------------
-# Same shape as nosqli's boolean oracle: truthy *) payload collapses
-# to "all users"; falsy returns "no match".
-@app.route("/dir")
-def ldap_dir():
-    cn = request.args.get("cn", "")
-    if "*)" in cn or "*)" in request.query_string.decode("latin1"):
-        return jsonify({"matched": ["admin", "alice", "bob", "carol"]})
-    # Trigger a recognized LDAP driver error on quote injection so
-    # ldap-injection's error-signature path also fires.
-    if "(" in cn and ")" not in cn:
-        return "ldap_search_ext: Bad search filter (87)", 500
-    if cn == "admin":
-        return jsonify({"matched": ["admin"]})
-    return jsonify({"matched": []})
+# nosqli moved out to vuln-nosqli (mongomock-backed real operator dict).
+# ldap-injection moved out to vuln-ldap (ldap3 MOCK_SYNC real filter parser).
 
 
 # --- path-traversal --------------------------------------------------------
@@ -366,44 +300,9 @@ def jwt_me():
     return jsonify(claims)
 
 
-# --- graphql-audit ---------------------------------------------------------
-# Trigger: /graphql endpoint that supports introspection, batched
-# queries, deep nesting, and "Did you mean" suggestion leakage.
-SCHEMA_INTROSPECTION = {
-    "data": {
-        "__schema": {
-            "queryType": {"name": "Query"},
-            "types": [
-                {"name": "Query", "fields": [{"name": "user"}, {"name": "secret"}]},
-                {"name": "User",  "fields": [{"name": "id"}, {"name": "email"}, {"name": "password"}]},
-            ],
-        }
-    }
-}
-
-
-@app.route("/graphql", methods=["GET", "POST"])
-def graphql():
-    if request.method == "GET":
-        # Surface the playground keyword so graphql-audit's body
-        # fingerprint identifies this endpoint as a GraphQL surface.
-        return ("<!doctype html><body>"
-                "<title>GraphiQL Playground</title>"
-                "<p>Apollo Sandbox / graphql-yoga</p>"
-                "</body>")
-    try:
-        payload = request.get_json(force=True, silent=True) or {}
-    except Exception:
-        payload = {}
-    # batching: an array of operations
-    if isinstance(payload, list):
-        return jsonify([{"data": {"ok": True}} for _ in payload])
-    q = (payload.get("query") or "").lower()
-    if "__schema" in q or "__type" in q:
-        return jsonify(SCHEMA_INTROSPECTION)
-    if "useer" in q or "passwordd" in q:
-        return jsonify({"errors": [{"message": "Cannot query field. Did you mean \"user\" or \"password\"?"}]})
-    return jsonify({"data": {"__typename": "Query"}})
+# graphql-audit moved out to vuln-graphql (real graphene schema with
+# mutation/Query resolvers, batching at the Flask layer, native
+# introspection + "Did you mean" suggestions from graphql-core).
 
 
 # --- sse-audit -------------------------------------------------------------

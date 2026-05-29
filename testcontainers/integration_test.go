@@ -16,7 +16,13 @@
 // Gated behind `-tags integration` so a plain `go test ./...` stays
 // fast and Docker-free. Run via:
 //
-//	go test -tags integration -timeout 15m ./testcontainers/...
+//	go test -tags integration -timeout 30m ./testcontainers/...
+//
+// 30m is sized for a warm Docker layer cache: ~14 suites, four of
+// which (vuln-sqli/nosqli/ldap/graphql) do a pip install on first
+// build, and vuln-wordpress + vuln-drupal each carry a 5-minute
+// startupWait for their DB + install steps. A cold run on a fresh
+// machine can spill past 30m; rerun once images are cached.
 //
 // To run a single suite, filter the subtest by its directory name:
 //
@@ -96,15 +102,80 @@ var vulnSuites = []vulnCase{
 		notes: "subdomain-takeover fingerprint",
 	},
 	{
-		// Every active web-app probe in one container. Mode /
-		// crawl / pollute / enable all come from the YAML.
-		// vuln-app's hyperz.yaml opts into js.enabled so dom-xss
-		// fires against /dom-xss; requireBrowser skips the whole
-		// subtest when no Chrome/Chromium binary is reachable
-		// rather than letting the scan fail mid-flight.
+		// Active web-app probes that don't need a dedicated
+		// backend (open-redirect, host-header, cache-poison,
+		// CRLF, SSRF, reflected-xss, traversal, cmd-inject,
+		// SSTI, IDOR, JWT, stored-xss, XXE, deserialization,
+		// SSE, dom-xss). Mode / crawl / pollute / enable all
+		// come from the YAML. vuln-app's hyperz.yaml opts into
+		// js.enabled so dom-xss fires against /dom-xss;
+		// requireBrowser skips the whole subtest when no
+		// Chrome/Chromium binary is reachable rather than
+		// letting the scan fail mid-flight.
+		//
+		// Checks that previously lived here against hand-crafted
+		// oracles (sqli-error/boolean/time, nosqli, ldapi,
+		// graphql-audit) graduated to dedicated containers with
+		// real backends - see vuln-sqli, vuln-nosqli, vuln-ldap,
+		// vuln-graphql.
 		spec:     targetSpec{dir: "vuln-app", exposedPort: 8080},
 		requires: requireBrowser,
 		notes:    "active web-app probes (+ dom-xss via headless browser)",
+	},
+	{
+		// Real SQLite-backed search endpoint with `name` field
+		// concatenated into a SELECT. SLEEP is registered as a
+		// UDF so the scanner's `' AND SLEEP({{SLEEP}})-- -`
+		// time-based payload resolves through SQLite's
+		// expression evaluator. Anchor value `alice` matches a
+		// row so the per-row AND short-circuit still lets
+		// SLEEP fire on at least one row.
+		spec: targetSpec{
+			dir:         "vuln-sqli",
+			exposedPort: 8093,
+		},
+		notes: "sqli-error / sqli-boolean / sqli-time (real SQLite + SLEEP UDF)",
+	},
+	{
+		// mongomock-backed find endpoint that deserialises the
+		// scanner's `q[$eq]=v` / `q[$in][0]=v` bracket-form
+		// query string into a real Mongo-style operator dict
+		// and hands it to coll.find unchanged. Boolean
+		// divergence is produced by real $eq / $in semantics,
+		// not a hand-rolled if/else.
+		spec: targetSpec{
+			dir:         "vuln-nosqli",
+			exposedPort: 8091,
+		},
+		notes: "nosqli (real mongomock $op-dict evaluation)",
+	},
+	{
+		// ldap3 MOCK_SYNC directory with cn concatenated into
+		// an `(&(cn={cn})(objectClass=person))` filter. The
+		// surrounding AND template lets the scanner's truthy
+		// `)(|(objectClass=*` reshape the matched set to the
+		// baseline entry while the falsy `)(&(objectClass=
+		// <canary>` collapses it to nothing - real RFC 4515
+		// filter parsing decides both, not a substring branch.
+		spec: targetSpec{
+			dir:         "vuln-ldap",
+			exposedPort: 8092,
+		},
+		notes: "ldapi (real ldap3 MOCK_SYNC filter parser)",
+	},
+	{
+		// graphene-backed GraphQL endpoint with introspection,
+		// suggestions, batching, alias amplification, and a
+		// login mutation that returns success without
+		// consulting any credential store - so alias-based
+		// auth-bypass and batched-mutations both observe N
+		// resolves per HTTP request. Depth probe resolves
+		// through the native introspection ofType chain.
+		spec: targetSpec{
+			dir:         "vuln-graphql",
+			exposedPort: 8090,
+		},
+		notes: "graphql-audit (real graphene schema, batching, native suggestions)",
 	},
 	{
 		// ws-audit against a Node ws server that accepts any

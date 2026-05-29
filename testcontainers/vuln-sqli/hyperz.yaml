@@ -1,0 +1,15 @@
+# Scan profile for the vuln-sqli integration container.
+# See vuln-static/hyperz.yaml for the enable-vs-assertion contract
+# and the ${ORIGIN_HTTP} placeholder convention.
+mode: aggressive
+crawl:
+  enabled: true
+
+url:
+  - "${ORIGIN_HTTP}/"
+
+checks:
+  enable:
+    - sqli-error
+    - sqli-boolean
+    - sqli-time

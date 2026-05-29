@@ -18,6 +18,12 @@ url:
 
 checks:
   pollute: true
+  # sqli-error / sqli-boolean / sqli-time moved out to vuln-sqli
+  # (SQLite + SLEEP UDF). nosqli moved out to vuln-nosqli (mongomock).
+  # ldapi moved out to vuln-ldap (ldap3 MOCK_SYNC). graphql-audit
+  # moved out to vuln-graphql (graphene). Each got its own container
+  # so the oracle exercises a real parser / evaluator rather than a
+  # hand-crafted response.
   enable:
     - open-redirect
     - host-header-injection
@@ -25,11 +31,6 @@ checks:
     - crlf-injection
     - ssrf
     - reflected-xss
-    - sqli-error
-    - sqli-boolean
-    - sqli-time
-    - nosqli
-    - ldapi
     - path-traversal
     - cmd-injection
     - cmd-injection-blind
@@ -39,6 +40,5 @@ checks:
     - idor
     - stored-xss
     - jwt-vulns
-    - graphql-audit
     - sse-audit
     - dom-xss
