@@ -34,6 +34,24 @@ func setVersion(s *Stack, field, value string) {
 	s.Versions[field] = value
 }
 
+// setReactIfUnknown pins Framework=react only when no more specific
+// framework has already claimed the slot. React sits underneath
+// Next.js, Remix, Gatsby, and a long tail of other meta-frameworks
+// that themselves emit a load-bearing detection signal earlier in the
+// body-rule pass; overwriting them with the bare "react" label would
+// hide the more useful identity. Language defaults to node for the
+// same reason - React itself is a Node-ecosystem library, but a more
+// specific rule (a php X-Powered-By, a Java Server header) is left
+// alone.
+func setReactIfUnknown(s *Stack) {
+	if s.Framework == "" {
+		s.Framework = "react"
+	}
+	if s.Language == "" {
+		s.Language = "node"
+	}
+}
+
 func (r headerRule) label() string {
 	if r.needle != "" {
 		return r.needle
@@ -285,12 +303,66 @@ var bodyRules = []bodyRule{
 		},
 	},
 	{
+		// Next.js 13+ App Router streams Server Components via a
+		// `self.__next_f.push(...)` flight payload instead of the
+		// Pages Router's __NEXT_DATA__ blob. Matching both covers
+		// every shipping major.
+		label: "next-flight",
+		re:    regexp.MustCompile(`self\.__next_f`),
+		set: func(s *Stack) {
+			s.Language = "node"
+			s.Framework = "nextjs"
+		},
+	},
+	{
+		// /_next/static/ is the Next.js build output prefix. Used as a
+		// fallback signal for builds that strip both __NEXT_DATA__ and
+		// the flight payload (e.g. fully static export with no hydration).
+		label: "next-static-asset",
+		re:    regexp.MustCompile(`/_next/static/`),
+		set: func(s *Stack) {
+			s.Language = "node"
+			s.Framework = "nextjs"
+		},
+	},
+	{
 		label: "nuxt-data",
 		re:    regexp.MustCompile(`__NUXT__`),
 		set: func(s *Stack) {
 			s.Language = "node"
 			s.Framework = "nuxt"
 		},
+	},
+	{
+		// React SSR marker present on the root element in React 16+
+		// server-rendered output. Only weakly hints at React because
+		// Next.js / Remix / Gatsby all sit on top of React; the set
+		// function defers to any framework already pinned by a more
+		// specific rule (next-data, nuxt-data, etc.).
+		label: "react-ssr-root",
+		re:    regexp.MustCompile(`data-reactroot`),
+		set:   setReactIfUnknown,
+	},
+	{
+		// react-dom bundle reference inside a <script src="...">. The
+		// match is scoped to a script tag's src attribute so a blog post
+		// or documentation page that merely mentions "react-dom" in
+		// prose does not trip the rule. Covers both production
+		// (react-dom.production.min.js) and development
+		// (react-dom.development.js) builds via the bare library name.
+		label: "react-dom-bundle",
+		re:    regexp.MustCompile(`(?i)<script[^>]*src=["'][^"']*react-dom`),
+		set:   setReactIfUnknown,
+	},
+	{
+		// React DevTools global, injected into every react-dom bundle
+		// regardless of build mode. A page that hosts this string almost
+		// certainly runs React; we still defer to a previously pinned
+		// framework so a Next.js page (which also carries the hook)
+		// stays classified as nextjs.
+		label: "react-devtools-hook",
+		re:    regexp.MustCompile(`__REACT_DEVTOOLS_GLOBAL_HOOK__`),
+		set:   setReactIfUnknown,
 	},
 	{
 		label: "csrf-meta",

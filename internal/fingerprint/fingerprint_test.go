@@ -382,6 +382,95 @@ func TestDetectExtractsVersionsFromHeaders(t *testing.T) {
 	}
 }
 
+func TestDetectReactFromDataReactRoot(t *testing.T) {
+	// Plain React SSR (no Next.js, no Nuxt). data-reactroot on the
+	// rendered root element is a stable React 16+ marker that pins the
+	// framework axis without overwriting the language slot when the
+	// server has already declared one.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(`<!doctype html><html><body><div data-reactroot=""><h1>hi</h1></div></body></html>`))
+	}))
+	defer srv.Close()
+
+	stack, err := New(newTestClient(t)).Detect(context.Background(), page.FromURL(srv.URL))
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if stack.Framework != "react" {
+		t.Errorf("Framework = %q, want react", stack.Framework)
+	}
+	if stack.Language != "node" {
+		t.Errorf("Language = %q, want node", stack.Language)
+	}
+}
+
+func TestDetectReactDoesNotOverwriteNextJS(t *testing.T) {
+	// A Next.js page carries both __NEXT_DATA__ and a react-dom script
+	// tag. The Next.js rule fires first and pins Framework=nextjs; the
+	// React rules that match afterwards must NOT overwrite that, because
+	// nextjs is the more useful identifier for downstream checks.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(`<!doctype html><html><body>
+<div data-reactroot=""></div>
+<script src="/_next/static/chunks/react-dom.production.min.js"></script>
+<script id="__NEXT_DATA__" type="application/json">{}</script>
+</body></html>`))
+	}))
+	defer srv.Close()
+
+	stack, err := New(newTestClient(t)).Detect(context.Background(), page.FromURL(srv.URL))
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if stack.Framework != "nextjs" {
+		t.Errorf("Framework = %q, want nextjs (more specific signal must win)", stack.Framework)
+	}
+}
+
+func TestDetectNextJSAppRouterFromFlightPayload(t *testing.T) {
+	// Next.js 13+ App Router output: no __NEXT_DATA__ blob, but the
+	// streaming Server Components flight payload pushes onto
+	// self.__next_f. The new fingerprint rule must catch that case.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(`<!doctype html><html><body>
+<script>self.__next_f=self.__next_f||[];self.__next_f.push([0,"..."])</script>
+</body></html>`))
+	}))
+	defer srv.Close()
+
+	stack, err := New(newTestClient(t)).Detect(context.Background(), page.FromURL(srv.URL))
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if stack.Framework != "nextjs" {
+		t.Errorf("Framework = %q, want nextjs (app-router flight payload)", stack.Framework)
+	}
+}
+
+func TestDetectReactDOMBundleRequiresScriptTagContext(t *testing.T) {
+	// A blog post that merely mentions "react-dom" in prose must NOT
+	// classify the host as react. The tightened rule requires the
+	// substring inside a <script src=...> attribute.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(`<!doctype html><html><body>
+<p>This article discusses how react-dom works internally.</p>
+</body></html>`))
+	}))
+	defer srv.Close()
+
+	stack, err := New(newTestClient(t)).Detect(context.Background(), page.FromURL(srv.URL))
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if stack.Framework == "react" {
+		t.Errorf("Framework = react from prose mention; want unset (script-tag context required)")
+	}
+}
+
 func TestDetectExtractsVersionFromMetaGenerator(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
