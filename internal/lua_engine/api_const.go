@@ -98,6 +98,7 @@ func buildConstGlobals() []constTable {
 			{"express", constStr("express")},
 			{"nextjs", constStr("nextjs")},
 			{"nuxt", constStr("nuxt")},
+			{"react", constStr("react")},
 			{"django", constStr("django")},
 			{"rails", constStr("rails")},
 		}},
