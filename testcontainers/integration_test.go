@@ -235,6 +235,138 @@ var vulnSuites = []vulnCase{
 		notes: "wp-rest-user-enum + wp-xmlrpc-enabled (real WordPress install)",
 	},
 	{
+		// React development build shipped to production: a tiny
+		// Express server that serves the real React + ReactDOM
+		// development UMD bundles out of the npm-installed packages,
+		// with the seed HTML referencing both via <script src=...>.
+		// Exercises the react-dev-build-in-prod check's
+		// filename-pattern detection path - the canonical real-world
+		// shape: a developer who left the dev CDN URL or
+		// NODE_ENV=development in production. The script-tag context
+		// also pins framework=react via the fingerprinter's
+		// react-dom-bundle rule, satisfying applies_to.
+		//
+		// prepareScan asserts a real React dev bundle is actually
+		// served at the script-src URL - not a 404 or stub. The
+		// scanner check itself only inspects the seed HTML body, but
+		// the integrity assertion ensures the fixture is
+		// observationally indistinguishable from a real misconfigured
+		// production deployment, not just an HTML page that lies
+		// about loading bundles.
+		//
+		// vuln-react-inline (below) covers the banner-fallback
+		// detection path the check uses when the bundler renamed the
+		// chunk and there's no .development. path component on the
+		// wire.
+		spec: targetSpec{
+			dir:         "vuln-react",
+			exposedPort: 8083,
+			waitLog:     "vuln-react listening on :8083",
+		},
+		prepareScan: func(t *testing.T, tgt *target) scanOpts {
+			// ReactDebugCurrentFrame is the dev-only stack-trace
+			// symbol present in every shipping react-dom UMD dev
+			// build (16/17/18) and stripped from the production
+			// minified bundle. Asserting it on the served URL proves
+			// the fixture is genuinely shipping the unminified dev
+			// bundle - not a 404 or a production stub.
+			assertServesBody(t,
+				tgt.URL("/static/react-dom/react-dom.development.js"),
+				"ReactDebugCurrentFrame")
+			return scanOpts{}
+		},
+		notes: "react-dev-build-in-prod via script-src filename (real React 18 UMD, fixture-integrity asserted)",
+	},
+	{
+		// React development build shipped to production via an
+		// inlined bundle: server reads the real React + ReactDOM dev
+		// UMD source out of the npm-installed packages, strips the
+		// leading @license header and the trailing sourceMappingURL
+		// pragma (the only places the .development.js filename
+		// literally appears in the bundle), and inlines the
+		// remaining source into the seed HTML between
+		// <script>...</script> tags.
+		//
+		// Exercises the react-dev-build-in-prod check's
+		// fallback-marker path: with the filename literals scrubbed
+		// and no <script src> reference to react-dom present, the
+		// check can only fire via the in-body ReactDebugCurrentFrame
+		// dev-only symbol React's internal stack-trace machinery
+		// emits unconditionally in any dev bundle (stripped from the
+		// production minified output). The
+		// __REACT_DEVTOOLS_GLOBAL_HOOK__ reference embedded in the
+		// inlined source is what pins framework=react via the
+		// fingerprinter's react-devtools-hook rule, since there's
+		// no react-dom script-src for the bundle rule to match.
+		//
+		// prepareScan asserts the served HTML contains the dev
+		// marker so a packaging regression (e.g. a future React
+		// version removing the symbol) surfaces as a fixture failure
+		// rather than a silently-skipped check.
+		spec: targetSpec{
+			dir:         "vuln-react-inline",
+			exposedPort: 8086,
+			waitLog:     "vuln-react-inline listening on :8086",
+		},
+		prepareScan: func(t *testing.T, tgt *target) scanOpts {
+			assertServesBody(t,
+				tgt.URL("/"),
+				"ReactDebugCurrentFrame")
+			return scanOpts{}
+		},
+		notes: "react-dev-build-in-prod via in-body dev marker (real React dev bundle inlined, filename pragmas stripped)",
+	},
+	{
+		// Real Next.js 14.2.24 (one minor below the 14.2.25
+		// CVE-2025-29927 patch) exercises two checks end-to-end:
+		//
+		//   * nextjs-middleware-bypass: middleware.js
+		//     unconditionally redirects /dashboard, /admin,
+		//     /account, /api/me to /login. The
+		//     x-middleware-subrequest depth-saturation header
+		//     causes the runtime to skip middleware entirely, so
+		//     baseline 307 -> /login becomes 200 on /dashboard -
+		//     the status-class change the check uses as its
+		//     load-bearing oracle.
+		//
+		//   * nextjs-image-ssrf: next.config.js opens
+		//     remotePatterns to "**" so /_next/image fetches any
+		//     attacker-supplied URL. prepareScan picks a free port,
+		//     wires the scanner's built-in OOB listener onto it,
+		//     and advertises host.docker.internal:<port> as the
+		//     canary host (the HostConfigModifier in startTarget
+		//     adds the alias so Linux CI works too - Mac/Windows
+		//     Docker Desktop already wires it). The in-container
+		//     Next.js runtime fetches the canary, the listener
+		//     records the hit, the check's Drain phase emits the
+		//     finding.
+		//
+		// `next build` runs at image-build time so subsequent
+		// container starts are sub-second.
+		spec: targetSpec{
+			dir:         "vuln-nextjs",
+			exposedPort: 8085,
+			waitLog:     "Ready in",
+			startupWait: 3 * time.Minute,
+		},
+		prepareScan: func(t *testing.T, _ *target) scanOpts {
+			port := pickFreePort(t)
+			return scanOpts{
+				OOBListenIP:   "0.0.0.0",
+				OOBListenPort: port,
+				OOBHost:       fmt.Sprintf("host.docker.internal:%d", port),
+				// Next.js image-optimizer fetches are
+				// synchronous and complete inside the same
+				// request the check makes, so a tight drain
+				// window is fine. Bumped above the default 10s
+				// only to absorb a cold-cache JIT spike on the
+				// optimizer's first invocation.
+				OOBWait: 15 * time.Second,
+			}
+		},
+		notes: "nextjs-middleware-bypass + nextjs-image-ssrf (real Next.js 14.2.24, CVE-2025-29927 unpatched, open remotePatterns; OOB listener via host.docker.internal)",
+	},
+	{
 		// Real Drupal 7 (Apache + MariaDB co-hosted, installed via
 		// drush 8.4.12 on first boot) so drupal-changelog-disclosure
 		// exercises the live /CHANGELOG.txt surface a real D7 install

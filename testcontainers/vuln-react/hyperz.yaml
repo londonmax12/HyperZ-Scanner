@@ -1,0 +1,13 @@
+# Scan profile for the vuln-react integration container.
+# See vuln-static/hyperz.yaml for the enable-vs-assertion contract
+# and the ${ORIGIN_HTTP} placeholder convention.
+mode: default
+crawl:
+  enabled: true
+
+url:
+  - "${ORIGIN_HTTP}/"
+
+checks:
+  enable:
+    - react-dev-build-in-prod

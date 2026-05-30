@@ -24,15 +24,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/docker/docker/api/types/container"
 	"github.com/docker/go-connections/nat"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -235,6 +239,18 @@ func startTarget(t *testing.T, spec targetSpec) *target {
 		},
 		ExposedPorts: exposedSpec,
 		WaitingFor:   strategy,
+		// host.docker.internal -> host-gateway lets a container at
+		// the other end of a probe URL reach an HTTP listener bound
+		// on the test host (used by the OOB-driven suites like
+		// nextjs-image-ssrf, where the target fetches a canary URL
+		// the scanner is listening on). Mac / Windows Docker
+		// Desktop wires this alias automatically; on Linux it has
+		// to be passed explicitly. Setting it unconditionally is a
+		// no-op on the desktop variants and the only way Linux CI
+		// hosts ever reach the listener at all.
+		HostConfigModifier: func(hc *container.HostConfig) {
+			hc.ExtraHosts = append(hc.ExtraHosts, "host.docker.internal:host-gateway")
+		},
 	}
 
 	t.Logf("[%s] building image + starting container (context=%s)", spec.dir, buildContext)
@@ -302,8 +318,65 @@ type finding struct {
 // the in-process scan trust a custom CA bundle when scanning HTTPS
 // targets with self-signed certs - threaded into the scanner as
 // --ca-file so the trust is wired into the actual http.Transport.
+//
+// OOBListenPort > 0 enables the in-process OOB callback backbone:
+// the scanner binds a listener on OOBListenIP:OOBListenPort and
+// canary URLs handed to targets advertise OOBHost (which must be
+// reachable from inside the target container - typically
+// host.docker.internal:<port> with the host-gateway alias the
+// startTarget hook wires in). OOBWait bounds how long the scanner
+// waits for callbacks after the active phase before draining. The
+// fields map directly to --oob / --oob-listen / --oob-host /
+// --oob-wait on the scanner CLI.
 type scanOpts struct {
-	CAFile string
+	CAFile        string
+	OOBListenIP   string
+	OOBListenPort int
+	OOBHost       string
+	OOBWait       time.Duration
+}
+
+// pickFreePort asks the kernel for a free TCP port on the loopback,
+// closes the listener, and returns the port number. There's a brief
+// TOCTOU between close and the scanner's subsequent bind, but for an
+// integration suite that doesn't fan-out parallel subtests it's
+// tighter than a hardcoded port that would collide with whatever the
+// developer happens to have running on :7777.
+func pickFreePort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("pick free port: %v", err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	_ = ln.Close()
+	return port
+}
+
+// assertServesBody fetches url and fails the test unless the response
+// is 200 and the body contains needle. Used by prepareScan hooks to
+// prove a fixture is genuinely serving the artifact a check will
+// later flag - so a regression that turns a real bundle into a 404 or
+// a stub is caught at the integrity gate rather than masquerading as
+// "scanner check passed" because the in-band HTML string match still
+// happens to match a script-src reference.
+func assertServesBody(t *testing.T, url, needle string) {
+	t.Helper()
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatalf("fetch %s: %v", url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("fetch %s: status %d, want 200", url, resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read %s: %v", url, err)
+	}
+	if !strings.Contains(string(body), needle) {
+		t.Fatalf("%s does not contain %q (body length=%d)", url, needle, len(body))
+	}
 }
 
 // extractCAFromContainer reads a CA cert out of a running container
@@ -373,6 +446,24 @@ func runScanImpl(t *testing.T, opts scanOpts, extra ...string) []finding {
 	}
 	if opts.CAFile != "" {
 		args = append(args, "--ca-file", opts.CAFile)
+	}
+	if opts.OOBListenPort > 0 {
+		if opts.OOBHost == "" {
+			t.Fatalf("scanOpts.OOBListenPort set without OOBHost; the scanner needs " +
+				"both the bind address and the target-facing host:port for canary URLs")
+		}
+		listenIP := opts.OOBListenIP
+		if listenIP == "" {
+			listenIP = "0.0.0.0"
+		}
+		args = append(args,
+			"--oob",
+			"--oob-listen", net.JoinHostPort(listenIP, strconv.Itoa(opts.OOBListenPort)),
+			"--oob-host", opts.OOBHost,
+		)
+		if opts.OOBWait > 0 {
+			args = append(args, "--oob-wait", opts.OOBWait.String())
+		}
 	}
 	args = append(args, extra...)
 

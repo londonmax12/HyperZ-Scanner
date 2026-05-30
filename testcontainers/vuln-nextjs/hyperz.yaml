@@ -1,0 +1,31 @@
+# Scan profile for the vuln-nextjs integration container.
+# See vuln-static/hyperz.yaml for the enable-vs-assertion contract
+# and the ${ORIGIN_HTTP} placeholder convention.
+#
+# Exercises two distinct Next.js vulnerabilities end-to-end against a
+# real unpatched runtime (14.2.24):
+#
+#   * nextjs-middleware-bypass: middleware.js redirects /dashboard;
+#     the x-middleware-subrequest depth-saturation header from
+#     CVE-2025-29927 makes Next skip middleware entirely so the
+#     request lands on the page handler with a 200.
+#
+#   * nextjs-image-ssrf: next.config.js opens remotePatterns to
+#     "**", so the image optimizer fetches whatever the `url=`
+#     parameter names. The harness's prepareScan attaches the
+#     scanner's built-in OOB listener and threads the
+#     host.docker.internal:<port> canary host through; the in-
+#     container Next.js runtime resolves that alias via the
+#     HostConfigModifier in startTarget and the fetch lands on the
+#     listener, producing the finding.
+mode: aggressive
+crawl:
+  enabled: true
+
+url:
+  - "${ORIGIN_HTTP}/"
+
+checks:
+  enable:
+    - nextjs-middleware-bypass
+    - nextjs-image-ssrf
